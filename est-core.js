@@ -236,7 +236,7 @@ class TrailApp {
     // moving the rider re-sorts Nearby, the itinerary, and every distance on screen.
     // On by default so nothing changes for anyone who hasn't gone looking for it.
     this.tapToSet=true;
-    this.showTrip=false; this.screen='map';
+    this.showTrip=false; this.screen='map'; this.panelSnap='peek';
     // Absolute stretch of trail to list, independent of the rider. The mileage band
     // above it asks "how far from me", which needs a location and moves as you ride;
     // this asks "what's between mile X and Y", which answers the map-shaped question
@@ -267,8 +267,11 @@ class TrailApp {
     this.applyTripTab();
     this.wireControls();
     this.wireTabAutohide();
+    this.wirePanelDrag();
     this.initMap();
     this.renderAll();
+    // Peek is measured off the rendered stats, so it can only be set once they exist.
+    requestAnimationFrame(()=>this.setPanelSnap(this.panelSnap));
   }
 
   /* ---------- persisted prefs ----------
@@ -282,6 +285,7 @@ class TrailApp {
     this.showPassed=!!p.showPassed;
     if('tapToSet' in p) this.tapToSet=!!p.tapToSet;
     this.showTrip=!!p.showTrip;
+    if(p.panelSnap==='peek'||p.panelSnap==='half'||p.panelSnap==='full') this.panelSnap=p.panelSnap;
     if(p.myLL && isFinite(p.myLL.lat) && isFinite(p.myLL.lng)){
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
@@ -307,7 +311,7 @@ class TrailApp {
     const fl=this.$('poiFilters'); if(fl) fl.open=this.filtersOpen;
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,myLL:this.myLL,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
       catOrder:this.catOrder,catHidden:[...this.catHidden],
       filtersOpen:this.filtersOpen})); }catch(e){}
@@ -362,14 +366,73 @@ class TrailApp {
       },{passive:true});
     });
   }
+  /* Three heights rather than a drawer that is either open or shut: peek is the
+     stats alone, half puts map and list on screen together — the point of the thing —
+     and full hands the list most of the screen with the map still visible above it.
+     Peek is measured rather than guessed: the stats block changes height depending on
+     whether there's a next stop and whether its name wrapped. */
+  peekHeight(){
+    const g=this.$('panelGrab'), st=this.$('mapSheet');
+    return (g?g.offsetHeight:0) + (st && !st.hidden ? st.offsetHeight : 0);
+  }
+  setPanelSnap(snap){
+    const p=this.$('mapPanel'); if(!p) return;
+    this.panelSnap=snap;
+    p.dataset.snap=snap;
+    p.style.height = snap==='peek' ? this.peekHeight()+'px'
+      : snap==='full' ? '86%' : '52%';
+    const hint=this.$('panelHint');
+    if(hint) hint.textContent = snap==='peek' ? (this.POIS.length?'Pull up for the list':'') : '';
+    this.savePrefs();
+    // Leaflet has to be told the viewport changed, and only once the height settles.
+    if(this.map) setTimeout(()=>this.map.invalidateSize(),260);
+  }
+  cyclePanel(){
+    this.setPanelSnap(this.panelSnap==='peek'?'half':this.panelSnap==='half'?'full':'peek');
+  }
+  /* Drag beats a three-way tap for reaching a height directly, but the tap has to keep
+     working — so anything under 6px of travel is treated as a tap, not a stalled drag. */
+  wirePanelDrag(){
+    const grab=this.$('panelGrab'), p=this.$('mapPanel');
+    if(!grab||!p) return;
+    let y0=0, h0=0, moved=false, id=null;
+    grab.addEventListener('pointerdown',e=>{
+      id=e.pointerId; y0=e.clientY; h0=p.getBoundingClientRect().height; moved=false;
+      p.classList.add('is-dragging'); grab.setPointerCapture(id);
+    });
+    grab.addEventListener('pointermove',e=>{
+      if(id==null) return;
+      const dy=y0-e.clientY;
+      if(abs(dy)>6) moved=true;
+      const max=p.parentElement.clientHeight*0.86;
+      p.style.height=Math.max(this.peekHeight(), Math.min(max, h0+dy))+'px';
+    });
+    const end=()=>{
+      if(id==null) return;
+      p.classList.remove('is-dragging');
+      id=null;
+      if(!moved){ this.cyclePanel(); return; }
+      // Snap to whichever height the release landed nearest.
+      const avail=p.parentElement.clientHeight, frac=p.getBoundingClientRect().height/avail;
+      const peekFrac=this.peekHeight()/avail;
+      const d=[['peek',peekFrac],['half',.52],['full',.86]]
+        .sort((a,b)=>abs(frac-a[1])-abs(frac-b[1]));
+      this.setPanelSnap(d[0][0]);
+    };
+    grab.addEventListener('pointerup',end);
+    grab.addEventListener('pointercancel',end);
+  }
   /* Tapping a list row throws you onto the map, which was a one-way trip: the way
      back was the tab bar, and a 264-row list reopened at the top, nowhere near the
      row you'd been reading. Remember the screen and its scroll offset instead. */
   markReturn(el){
     const sc=el.closest('[data-screen]');
     if(!sc || sc.dataset.screen==='map') return;
+    // Read the accessible name, not the text: the tabs are icon-only now, so
+    // textContent is empty and the pill rendered a bare "Back to".
     const tab=this.tabs.find(b=>b.dataset.tab===sc.dataset.screen);
-    this.ret={screen:sc.dataset.screen, top:sc.scrollTop, label:(tab?tab.textContent.trim():'the list')};
+    const label=tab ? (tab.getAttribute('aria-label')||tab.title||tab.textContent.trim()) : '';
+    this.ret={screen:sc.dataset.screen, top:sc.scrollTop, label:label||'the list'};
     this.renderReturn();
   }
   clearReturn(){ if(this.ret){ this.ret=null; this.renderReturn(); } }
@@ -409,6 +472,7 @@ class TrailApp {
     document.addEventListener('click',e=>{
       const el=e.target.closest('[data-lat]'); if(!el || e.target.closest('a')) return;
       this.markReturn(el);
+      if(el.closest('#panelList') && this.panelSnap==='full') this.setPanelSnap('half');
       this.zoomTo(+el.dataset.lat, +el.dataset.lng, +el.dataset.z||13, el.dataset.town);
     });
     const mb=this.$('mapBack'); if(mb) mb.addEventListener('click',()=>this.goBack());
@@ -566,7 +630,7 @@ class TrailApp {
     // With no location the sheet had nothing to report and said so in three lines of
     // prose, over the map, permanently. It now collapses entirely — the Locate FAB is
     // right there and states the same thing by being the only lit control.
-    if(this.myMile==null){ el.innerHTML=''; el.hidden=true; return; }
+    if(this.myMile==null){ el.innerHTML=''; el.hidden=true; if(this.panelSnap==='peek') requestAnimationFrame(()=>this.setPanelSnap('peek')); return; }
     el.hidden=false;
     const ahead=this.travelOrder().filter(t=>this.isAhead(t));
     const nx=ahead[0];
@@ -700,7 +764,11 @@ class TrailApp {
     return true;
   }
   renderNearby(){
-    const list=this.$('poiList'); if(!list) return;
+    // Two mounts, one list: the Nearby tab and the map panel show the same thing, so
+    // a filter or a category toggle lands in both without either owning the state.
+    const mounts=[this.$('poiList'), this.$('panelList')].filter(Boolean);
+    if(!mounts.length) return;
+    const list={ set innerHTML(v){ mounts.forEach(m=>{ m.innerHTML=v; }); } };
     if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
     // The two controls are orthogonal: the chips decide which groups appear and in
     // what order, the band filters the items inside each one.
@@ -845,8 +913,11 @@ class TrailApp {
     const d=this.aheadMi(p), tot=this.rideMi(p);
     if(tot!=null){
       const s=this.spurMi(p), back=d<-0.3;
-      h+='<br><b>~'+fmtMi(abs(tot))+' mi to ride'+(back?' — back the way you came':'')+'</b>';
-      if(s) h+='<br><span style="opacity:.65">'+fmtMi(abs(d))+' mi along the trail + '+fmtMi(s)+' mi off it, straight-line</span>';
+      // "straight-line" was the honest caveat stated as jargon. The spur is measured
+      // direct from the route, so the real pedal up whatever side road serves it is
+      // longer — which "at least", and the + on the total, say without the vocabulary.
+      h+='<br><b>~'+fmtMi(abs(tot))+(s?'+':'')+' mi to ride'+(back?' — back the way you came':'')+'</b>';
+      if(s) h+='<br><span style="opacity:.65">'+fmtMi(abs(d))+' mi along the trail, then at least '+fmtMi(s)+' mi off it</span>';
     } else {
       const off=offTrailTxt(p.off);
       if(off) h+='<br><span style="opacity:.65">'+esc(off.replace(/^ · /,''))+'</span>';
