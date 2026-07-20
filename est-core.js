@@ -562,8 +562,8 @@ const CATCFG={
   'Fuel':{icon:'fuel',label:'Fuel / gas',grp:'osm'}
 };
 const CAT_GRP={
-  trail:{label:'On the trail', src:'New York State'},
-  osm:{label:'In town',       src:'OpenStreetMap'}
+  trail:{label:'On the trail', src:'New York State', toc:'Trail POIs'},
+  osm:{label:'In town',       src:'OpenStreetMap', toc:'OSM POIs'}
 };
 const GRP_ORDER=['trail','osm'];
 // An asset type the service invented and we don't hardcode is trail data — that
@@ -627,9 +627,12 @@ class TrailApp {
        to read about. Seeded from CAT_DEFAULT so the map doesn't open under 700 pins. */
     this.catOrder=[...CAT_ORDER];
     this.catHidden=new Set(CAT_ORDER.filter(c=>!CAT_DEFAULT[c]));
-    // Which parent groups are folded shut. Both open — a collapsed group with pins
-    // on the map would be a control the rider can't find.
+    // Which parent groups are folded shut in the Nearby chip tree. Both open — a
+    // collapsed group with pins on the map would be a control the rider can't find.
     this.grpShut=new Set();
+    // Same, but for the map's layers control (the TOC), where the POI categories
+    // nest under a "Trail POIs" / "OSM POIs" parent. Independent of the chip fold.
+    this.lyrGrpShut=new Set();
   }
   $(id){ return document.getElementById(id); }
   destName(){ return this.dir==='B2NYC' ? 'NYC' : 'Buffalo'; }
@@ -707,6 +710,7 @@ class TrailApp {
     // layer on at once — 700-odd pins on the first load after upgrading.
     if(p.catCoupled && Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     if(Array.isArray(p.grpShut)) this.grpShut=new Set(p.grpShut.filter(c=>typeof c==='string'));
+    if(Array.isArray(p.lyrGrpShut)) this.lyrGrpShut=new Set(p.lyrGrpShut.filter(c=>typeof c==='string'));
     this.renderDirLabels();
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
@@ -726,7 +730,7 @@ class TrailApp {
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
-      grpShut:[...this.grpShut]})); }catch(e){}
+      grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut]})); }catch(e){}
   }
   /* While following, the two boxes are an output, not an input — say so rather than
      leaving a rider typing into fields the next pan silently overwrites. */
@@ -2082,6 +2086,14 @@ class TrailApp {
     const ctl=this.layersCtl;
     const box=ctl && ctl._container ? ctl._container.querySelector('.leaflet-control-layers-overlays') : null;
     if(!box) return;
+    // 0. Make this idempotent. Leaflet resets the box to bare labels before the calls
+    //    that come through addOverlay, but a fold or a re-decorate calls us directly
+    //    with our OWN previous output still in place. Pull every label back to the top
+    //    and drop the empty wrappers, so step 1 always starts from bare labels.
+    [].slice.call(box.querySelectorAll('.lyr-row > label')).forEach(l=>box.appendChild(l));
+    [].slice.call(box.querySelectorAll('.lyr-group, .lyr-row')).forEach(n=>n.remove());
+    // 1. Wrap each bare Leaflet label in a draggable row. Leaflet rebuilds this list
+    //    from scratch on every layer change, so this runs fresh each time.
     [].slice.call(box.children).forEach(node=>{
       if(node.tagName!=='LABEL') return;
       const inp=node.querySelector('input');
@@ -2093,16 +2105,71 @@ class TrailApp {
       grip.className='lyr-grip'; grip.title='Drag to reorder'; grip.setAttribute('aria-hidden','true');
       box.insertBefore(row,node);
       row.appendChild(grip); row.appendChild(node);
-      this.wireDrag(row, box, '.lyr-row', '.lyr-grip', 'y', ()=>{
-        this.lyrOrder=[].slice.call(box.querySelectorAll('.lyr-row')).map(r=>r.dataset.lyr);
-        this.savePrefs(); this.applyLyrOrder();
-      });
     });
+    // 2. Global draw order, applied while everything is still flat.
     this.lyrOrderList().forEach(k=>{
       const r=box.querySelector('.lyr-row[data-lyr="'+k+'"]');
       if(r) box.appendChild(r);
     });
+    // 3. Collapse each POI source into one parent you can fold, toggle and reorder as
+    //    a unit — the "OSM POIs" group the rider asked for, and its trail counterpart.
+    this.groupLayerRows(box);
+    // 4. Wire drags on the final structure: a child reorders inside its group, a
+    //    top-level row inside the box; either way the flat order is read from the DOM.
+    const commit=()=>{
+      this.lyrOrder=[].slice.call(box.querySelectorAll('.lyr-row')).map(r=>r.dataset.lyr);
+      this.savePrefs(); this.applyLyrOrder();
+    };
+    [].slice.call(box.querySelectorAll('.lyr-row')).forEach(row=>{
+      this.wireDrag(row, row.parentElement, '.lyr-row', '.lyr-grip', 'y', commit);
+    });
     this.applyLyrOrder();
+  }
+  /* The POI rows for one source, folded under a header carrying a group on/off box
+     (indeterminate when only some children are lit) and a caret. The children keep
+     their own Leaflet checkboxes and grips, so a source can be switched whole or a
+     row at a time, and dragged within the group. */
+  groupLayerRows(box){
+    GRP_ORDER.forEach(grp=>{
+      const gc=CAT_GRP[grp];
+      const rows=[].slice.call(box.children).filter(r=>{
+        if(!r.classList||!r.classList.contains('lyr-row')) return false;
+        const k=r.dataset.lyr||'';
+        return k.indexOf('poi:')===0 && catGrp(k.slice(4))===grp;
+      });
+      if(!rows.length) return;
+      const shut=this.lyrGrpShut.has(grp);
+      const lit=rows.filter(r=>{ const i=r.querySelector('input'); return i&&i.checked; }).length;
+      const wrap=document.createElement('div');
+      wrap.className='lyr-group'+(shut?' shut':''); wrap.dataset.lgrp=grp;
+      box.insertBefore(wrap, rows[0]);
+      wrap.innerHTML='<div class="lyr-gh">'
+        +'<button type="button" class="lyr-fold" aria-expanded="'+(shut?'false':'true')+'" title="'+(shut?'Show':'Hide')+' these layers"></button>'
+        +'<label class="lyr-gtog"><input type="checkbox"'+(lit?' checked':'')+'>'
+        +'<span class="lyr-gnm">'+esc(gc.toc)+'</span></label>'
+        +'<span class="lyr-ct">'+lit+'/'+rows.length+'</span></div>'
+        +'<div class="lyr-gkids"></div>';
+      const pbox=wrap.querySelector('.lyr-gh input');
+      pbox.indeterminate = lit>0 && lit<rows.length;
+      pbox.addEventListener('change',e=>this.setGrpVisible(grp, e.target.checked));
+      wrap.querySelector('.lyr-fold').addEventListener('click',()=>this.toggleLyrGrp(grp));
+      const kids=wrap.querySelector('.lyr-gkids');
+      rows.forEach(r=>kids.appendChild(r));
+    });
+  }
+  toggleLyrGrp(grp){
+    if(this.lyrGrpShut.has(grp)) this.lyrGrpShut.delete(grp); else this.lyrGrpShut.add(grp);
+    this.savePrefs(); this.decorateLayers();
+  }
+  /* A toggle from a Nearby chip adds or removes a map layer, which makes Leaflet
+     rebuild the control from scratch — wiping the grouping and grips. Re-decorate,
+     but on the next frame: the wipe happens synchronously inside Leaflet's own click
+     handling, and rebuilding the DOM out from under it mid-handler breaks its loop. */
+  scheduleDecorate(){
+    if(!this.layersCtl || this._decorPending) return;
+    this._decorPending=true;
+    const run=()=>{ this._decorPending=false; this.decorateLayers(); };
+    if(typeof requestAnimationFrame==='function') requestAnimationFrame(run); else setTimeout(run,0);
   }
   /* Top of the list gets the highest pane, so it draws over everything below it —
      pins as well as lines, which is the whole point. The band runs under the "you
@@ -3076,7 +3143,9 @@ class TrailApp {
       if(!key || key.indexOf('poi:')!==0) return;
       const cat=key.slice(4);
       if(e.type==='overlayadd') this.catHidden.delete(cat); else this.catHidden.add(cat);
-      this.savePrefs(); this.renderCategories(); this.renderNearby();
+      // A child toggled from the control's own box leaves its parent header's count
+      // and half-lit state stale — refresh the grouping too, not just the chips.
+      this.savePrefs(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
     });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
@@ -3248,8 +3317,8 @@ class TrailApp {
   setCatVisible(cat, on){
     this.applyCatVis(cat, on);
     // The parent's own box and counts are derived from its children, so a child
-    // toggle has to redraw the header above it.
-    this.savePrefs(); this.renderCategories(); this.renderNearby();
+    // toggle has to redraw the header above it — the chip tree and the TOC group.
+    this.savePrefs(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
   }
   /* A whole source at once. Turning OpenStreetMap's fifteen hundred pins off is the
      common case, and doing it six chips at a time was the reason to group them. */
@@ -3257,7 +3326,7 @@ class TrailApp {
     const byCat=this.poisByCat();
     Object.keys(byCat).filter(c=>catGrp(c)===grp && byCat[c].length)
       .forEach(c=>this.applyCatVis(c, on));
-    this.savePrefs(); this.renderCategories(); this.renderNearby();
+    this.savePrefs(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
   }
   // Folding only hides the chips. It deliberately does NOT hide the pins: a group
   // you collapsed is one whose controls you put away, not one you switched off.
