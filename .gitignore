@@ -1,0 +1,10 @@
+# Claude Code worktrees are full nested checkouts of this repo — committing one
+# would embed the repo inside itself. Session-local, never shared.
+.claude/worktrees/
+
+# Machine-specific editor settings. .claude/settings.json is deliberately NOT
+# ignored, so shared project config can still be committed if it's ever added.
+.claude/settings.local.json
+
+# macOS
+.DS_Store
