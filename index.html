@@ -243,7 +243,6 @@
   .wxp th{text-align:left;padding:1px 10px 1px 0;font-weight:400;
     color:var(--color-neutral-600);white-space:nowrap}
   .wxp td{padding:1px 0}
-  .wxp-s{font-size:11px;color:var(--color-neutral-600)}
   .wx-when{display:inline-flex;align-items:center;gap:3px;padding:1px 5px;
     font-size:9.5px;font-weight:600;line-height:1.5;white-space:nowrap;
     color:var(--color-neutral-700);background:var(--color-bg);
@@ -254,12 +253,12 @@
   .wx-cross{color:var(--color-neutral-700)}
   .sheet-wx{margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-700);
     font-variant-numeric:tabular-nums}
+  /* One line, because the map is what the screen is for. */
+  .sheet-line{font-size:12px;line-height:1.5;color:var(--color-neutral-700);
+    font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sheet-line b{color:var(--color-text);font-size:13px}
+  .sheet-dot{color:var(--color-neutral-400)}
   /* Outlook */
-  .wx-dest{margin:var(--space-2) 0}
-  .wx-dest label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)}
-  .wx-dest select{flex:1;min-width:0;font-family:inherit;font-size:12px;padding:6px 8px;
-    background:var(--color-surface);color:var(--color-text);
-    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
   .wx-out{display:flex;flex-direction:column;gap:var(--space-3);margin-top:var(--space-3)}
   .wx-day{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
   .wx-day-h{display:flex;align-items:baseline;gap:7px}
@@ -271,11 +270,16 @@
   .wx-night{margin-top:5px;padding:5px 8px;font-size:12px;color:var(--color-neutral-700);
     background:var(--color-neutral-100);border-radius:var(--radius-md)}
   .wx-night b{color:var(--color-text)}
-  .wx-day-w{font-size:13px;margin-top:5px}
+  /* Sky, temperature and rain are what you decide a day on; wind is a detail you
+     read after. It used to be the other way round on the page. */
+  .wx-day-w{font-size:16px;font-weight:600;color:var(--color-text);margin-top:6px;line-height:1.4}
   .wx-none{font-size:12px;color:var(--color-neutral-500);margin-top:5px}
-  .wx-wind{display:flex;align-items:center;gap:5px;margin-top:4px;font-size:13px;font-weight:600}
+  .wx-wind{display:flex;align-items:center;gap:5px;margin-top:3px;font-size:12px;font-weight:400}
   .wx-wind .ic{flex:none}
   .wx-asof{font-size:11px;color:var(--color-neutral-500);border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
+  /* Zoom is one control in two halves, so it sits tighter than the gap between the
+     independent FABs above it. */
+  .fab-pair{display:flex;flex-direction:column;gap:4px}
   .fab{width:46px;height:46px;display:grid;place-items:center;cursor:pointer;
     background:var(--color-bg);color:var(--color-accent);border:1px solid var(--color-divider);
     border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
@@ -285,18 +289,7 @@
     padding:0 calc(var(--space-4) + env(safe-area-inset-right)) var(--space-3) calc(var(--space-4) + env(safe-area-inset-left))}
   .map-sheet[hidden]{display:none}
   .sheet-empty{font-size:13px;color:var(--color-neutral-700);line-height:1.5}
-  .sheet-row{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-3)}
-  .sheet-k{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent)}
-  .sheet-v{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:23px;line-height:1.05}
-  .sheet-of{font-size:12px;color:var(--color-neutral-600);font-family:var(--font-body);font-weight:400}
-  .sheet-r{text-align:right}
-  .sheet-next{margin-top:var(--space-3);width:100%;display:flex;align-items:center;gap:var(--space-2);cursor:pointer;
-    background:var(--color-surface);border:1px solid var(--color-divider);border-radius:var(--radius-md);
-    padding:var(--space-2) var(--space-3);text-align:left;color:var(--color-text)}
-  .sheet-next .ic{margin-left:auto;color:var(--color-accent)}
-  .sheet-next:hover{border-color:var(--color-accent)}
-  .sheet-next .sheet-k{display:block}
-  .sheet-nm{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:14px}
+  .sheet-of{font-size:12px;color:var(--color-neutral-600);font-weight:400}
 
   /* ---- next up ---- */
   .hero{margin-bottom:var(--space-4)}
@@ -354,6 +347,25 @@
   .poi-stat{font-size:11.5px;color:var(--color-neutral-700);margin-bottom:var(--space-3);line-height:1.5}
   .feat-list-lbl,.set-lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);margin:var(--space-3) 0 var(--space-2);font-weight:600}
   .feat-list{display:flex;flex-wrap:wrap;gap:6px}
+  /* ---- categories, grouped under the source they came from ----
+     The parent box switches its whole source at once and goes half-lit when only
+     some children are on; the caret folds the chips away without touching a pin. */
+  .feat-tree{display:flex;flex-direction:column;gap:var(--space-3)}
+  .feat-grp{border-left:2px solid var(--color-divider);padding-left:var(--space-3)}
+  .fg-h{display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:wrap}
+  .fg-fold{flex:none;width:16px;height:16px;padding:0;background:none;border:0;
+    cursor:pointer;color:var(--color-neutral-600);position:relative}
+  .fg-fold::before{content:"";position:absolute;left:4px;top:3px;width:6px;height:6px;
+    border-right:2px solid currentColor;border-bottom:2px solid currentColor;
+    transform:rotate(45deg);transition:transform .15s ease}
+  .feat-grp.shut .fg-fold::before{transform:rotate(-45deg);top:6px}
+  .feat-grp.shut .feat-list{display:none}
+  @media (prefers-reduced-motion:reduce){.fg-fold::before{transition:none}}
+  .fg-tog{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+  .fg-tog input{accent-color:var(--color-accent);width:14px;height:14px;margin:0}
+  .fg-nm{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:13px}
+  .fg-src{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-500)}
+  .fg-ct{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
   .feat{display:inline-flex;align-items:center;gap:5px;user-select:none;font-size:12px;
     background:var(--color-surface);border:1px solid var(--color-divider);border-radius:999px;padding:5px 11px 5px 6px}
   .feat-tog{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
@@ -382,6 +394,13 @@
     font-variant-numeric:tabular-nums}
   .aadt-ln{cursor:pointer}
   .poi-list{display:flex;flex-direction:column;gap:var(--space-3)}
+  /* The same parent, over the run of groups it owns in the list below. */
+  .poi-src{display:flex;align-items:baseline;gap:8px;margin:var(--space-4) 0 var(--space-2);
+    padding-bottom:4px;border-bottom:1px solid var(--color-divider);
+    font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:13px}
+  .poi-src:first-child{margin-top:0}
+  .poi-src-s{font-family:var(--font-body);font-weight:400;font-size:10px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--color-neutral-500)}
   .poi-h{display:flex;align-items:center;gap:7px;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px;margin-bottom:6px}
   .poi-h .ic{color:var(--color-accent)}
   .poi-ct{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-family:var(--font-body);font-weight:400;font-variant-numeric:tabular-nums}
@@ -428,6 +447,18 @@
     color:var(--color-neutral-500);background:transparent}
   .poi-page.is-off:hover{border-color:var(--color-divider);background:transparent}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
+  /* Shops/fuel/beds loader, on the Nearby screen where you look for them. A tinted
+     card so it reads as an action, not another filter, and it stays until loaded. */
+  .osm-band{background:var(--color-accent-100);border:1px solid var(--color-accent-200);
+    border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3)}
+  .osm-band-h{display:flex;align-items:center;gap:6px;font-family:var(--font-heading);
+    font-weight:var(--font-heading-weight);font-size:14px}
+  .osm-band-h .ic{color:var(--color-accent)}
+  .osm-band-note{font-size:11px;color:var(--color-neutral-700);line-height:1.5;margin:5px 0 var(--space-2)}
+  .osm-band .poi-band-view{margin-top:0;background:var(--color-bg)}
+  /* Loaded, the card goes quiet — it's a refresh now, not the headline of the screen. */
+  .osm-band.loaded{background:var(--color-surface);border-color:var(--color-divider)}
+  .osm-band.loaded .osm-band-note{display:none}
   /* Collapsible filter block. Closed by default so the list starts near the top;
      the summary carries a live state line so a filter can't be silently on. */
   .pop-zoom{font-family:inherit;font-size:inherit;font-weight:600;cursor:pointer;
@@ -448,6 +479,13 @@
   /* ---- more / settings ---- */
   .switch{display:flex;align-items:center;gap:var(--space-2);cursor:pointer;font-size:13.5px;margin:var(--space-2) 0}
   .switch input{width:18px;height:18px;accent-color:var(--color-accent);margin:0}
+  .switch-sm{font-size:12px;margin:var(--space-2) 0 0}
+  .switch-sm input{width:15px;height:15px}
+  /* While the map drives the range the boxes are readouts — flatten them so they
+     don't invite a tap that the next pan would undo. */
+  input.is-auto{background:transparent;border-style:dashed;color:var(--color-neutral-600)}
+  .poi-band-view:disabled,.poi-band-clear:disabled{opacity:.4;cursor:default}
+  .poi-band-view:disabled:hover{border-color:var(--color-divider);background:transparent}
   .test-list{display:flex;flex-direction:column;gap:6px}
   .test-row{display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;width:100%;cursor:pointer;color:var(--color-text);
     background:var(--color-surface);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:9px var(--space-3)}
@@ -549,6 +587,50 @@
   .poi-pin{display:grid;place-items:center;width:28px;height:28px;color:#fff;background:var(--color-accent);
     border:2px solid #fff;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.45)}
   .poi-pin .ic{color:#fff;stroke-width:2.2}
+  /* ---- borrowed pins ----
+     OpenStreetMap's are a smaller hollow square against the State layer's filled
+     circles. Shape and weight rather than colour alone: it reads in sunlight, it
+     survives a colourblind rider, and at nine hundred food pins the lighter mark is
+     what keeps the curated ones legible underneath. */
+  .poi-pin.is-osm{width:22px;height:22px;border-radius:var(--radius-sm);
+    background:var(--color-bg);color:var(--color-accent-700);
+    border:1.5px solid var(--color-accent-700);box-shadow:0 1px 3px rgba(0,0,0,.35)}
+  .poi-pin.is-osm .ic{color:var(--color-accent-700);stroke-width:2}
+  .poi-chip.is-osm{border-style:dashed}
+  /* ---- pin labels ----
+     Off by default, on once the map is zoomed past POI_LABEL_Z, and always on for
+     whichever pin the cursor is over — which is the desktop stand-in for the tap a
+     phone would need. Never intercepts pointer events: the pin stays the target. */
+  .poi-ic{overflow:visible}
+  .poi-lbl{position:absolute;left:34px;top:50%;transform:translateY(-50%);
+    display:none;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:11px;font-weight:600;line-height:1.5;color:var(--color-text);pointer-events:none;
+    background:color-mix(in srgb,var(--color-bg) 90%,transparent);
+    padding:1px 6px;border-radius:var(--radius-sm);box-shadow:var(--shadow-sm)}
+  .poi-chip-ic .poi-lbl{left:50%;top:12px;transform:translateX(-50%)}
+  .osm-ic .poi-lbl{left:28px}   /* clears the narrower pin */
+  .is-labeled .poi-lbl{display:block}
+  .leaflet-marker-icon:hover .poi-lbl{display:block;z-index:2}
+  .poi-pin:hover{transform:scale(1.12)}
+  /* ---- hovering a list row lights its pin ----
+     Magenta is the app's rare second accent, so a lit pin reads as the one you are
+     pointing at even in a field of forty cyan ones. Label comes on with it at any
+     zoom: the ring says where, the name says which. */
+  /* No z-index here on purpose. Leaflet writes each marker's z-index inline from its
+     y position, and an !important rule here beat its own setZIndexOffset — pinning the
+     lit marker at 1000 while its neighbours climbed past 30000. The offset does it. */
+  .is-hi .poi-lbl{display:block;color:var(--color-bg);background:var(--color-accent-2)}
+  .is-hi .poi-pin{background:var(--color-accent-2);transform:scale(1.35);
+    box-shadow:0 0 0 5px color-mix(in srgb,var(--color-accent-2) 30%,transparent),0 2px 6px rgba(0,0,0,.5)}
+  /* Lit, a borrowed pin fills like any other — the hollow mark says "which layer",
+     the magenta says "this one", and the second has to win while you're pointing. */
+  .is-hi .poi-pin.is-osm{border-color:var(--color-accent-2)}
+  .is-hi .poi-pin.is-osm .ic{color:#fff}
+  .is-hi .poi-chip{border-color:var(--color-accent-2) !important;color:var(--color-accent-2) !important;
+    transform:translate(-50%,-50%) scale(1.2);
+    box-shadow:0 0 0 4px color-mix(in srgb,var(--color-accent-2) 28%,transparent),var(--shadow-md)}
+  /* The row itself, so the link reads in both directions. */
+  .poi-item:hover{background:var(--color-accent-100)}
   /* circleMarker dots: lift them off the map tiles */
   .map-dot{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
   /* You: the blue dot, with the soft halo every phone map gives it. */
@@ -573,6 +655,10 @@
           <button id="findBtn" type="button" class="fab" title="Find a place" aria-label="Find a place"><span data-ic="search"></span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
+          <div class="fab-pair">
+            <button id="zoomInBtn" type="button" class="fab" title="Zoom in" aria-label="Zoom in"><span data-ic="plus"></span></button>
+            <button id="zoomOutBtn" type="button" class="fab" title="Zoom out" aria-label="Zoom out"><span data-ic="minus"></span></button>
+          </div>
         </div>
         <button id="panelGrab" type="button" class="panel-grab" aria-label="Resize the list panel"><span class="panel-bar"></span><span id="panelHint" class="panel-hint"></span></button>
         <div id="mapSheet" class="map-sheet"></div>
@@ -609,6 +695,15 @@
       <div class="screen-pad">
         <h1 class="screen-title">Nearby</h1>
         <div id="poiStat" class="poi-stat"></div>
+        <!-- Shops, fuel and beds live one tap away, right here rather than buried in
+             More — this is the screen you are on when you want them. Its label flips
+             to "Refresh …" once loaded, and the button carries the state line. -->
+        <div class="osm-band">
+          <div class="osm-band-h"><span data-ic="cart"></span><span>Shops, fuel &amp; beds</span></div>
+          <p class="osm-band-note">The State’s pins are a trail layer — lock campsites and the canal museum, almost nothing about where you buy food. Pull the supermarkets, restaurants, convenience and dollar/big-box stores, gas and hotels within 5 mi of the route, 25 mi either side of you, from OpenStreetMap. A few seconds on a shared service.</p>
+          <button id="osmBtn" type="button" class="poi-band-view">Load them from OpenStreetMap</button>
+          <div id="osmStat" class="ul-stat"></div>
+        </div>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
         <details id="poiFilters" class="filters">
@@ -618,8 +713,8 @@
             <span id="filtersState" class="filters-state"></span>
           </summary>
           <div class="feat-list-lbl">Categories</div>
-          <div id="features" class="feat-list"></div>
-          <p class="feat-hint">Drag to reorder · uncheck to hide from this list. Map pins are separate — toggle those from the layers control in the top-right of the map.</p>
+          <div id="features" class="feat-tree"></div>
+          <p class="feat-hint">Grouped by where the data comes from. The parent box switches a whole source at once; the caret just folds the chips away. Drag to reorder within a group · uncheck to hide. Hiding a category takes its pins off the map too, so what you can see is always what this list can show. OpenStreetMap’s pins are drawn as small hollow squares to tell them from the State’s.</p>
           <div class="feat-list-lbl">Trail miles ahead</div>
           <div class="poi-band">
             <label>Min <input id="miMin" type="number" step="5" inputmode="numeric" placeholder="0"></label>
@@ -633,6 +728,7 @@
             <label>To <input id="mpTo" type="number" min="0" step="5" inputmode="numeric" placeholder="end"></label>
             <button id="mpClear" type="button" class="poi-band-clear">Clear</button>
           </div>
+          <label class="switch switch-sm"><input type="checkbox" id="mpFollow" checked> Follow the map view</label>
           <button id="mpFromMap" type="button" class="poi-band-view">Use the stretch shown on the map</button>
           <p class="poi-band-note"><b>TM</b> is trail mile — the fixed milepost a place sits at, measured along the route from the NYC end. Unlike the band above it, this is absolute rather than relative to you, so it works without your location.</p>
         </details>
@@ -645,12 +741,10 @@
         <h1 class="screen-title">Outlook</h1>
         <div class="poi-band">
           <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
-          <label>Days <input id="wxDays" type="number" min="1" max="6" step="1" inputmode="numeric" placeholder="4"></label>
         </div>
-        <div class="wx-dest"><label>Riding to <select id="wxDest"><option value="">nowhere in particular — just ride</option></select></label></div>
         <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
         <div id="wxOut" class="wx-out"></div>
-        <p class="poi-band-note">Forecast from the US National Weather Service (api.weather.gov), read where you’d be at <b id="wxSpeedEcho">12</b> mph rather than where you are now. Wind is split into the part you ride into and the part crossing you. NWS hourly runs about six days out, which is the ceiling on days here.</p>
+        <p class="poi-band-note">Forecast from the US National Weather Service (api.weather.gov), read where you’d be at <b id="wxSpeedEcho">12</b> mph rather than where you are now. NWS hourly runs about six days out, so you get all six.</p>
       </div>
     </section>
 
@@ -672,10 +766,6 @@
         <select id="simSel" class="input"><option value="">Choose a place…</option></select>
         <div class="set-lbl">Test locations</div>
         <div id="testRows" class="test-list"></div>
-        <div class="set-lbl">Shops, fuel and beds</div>
-        <button id="osmBtn" type="button" class="poi-band-view">Load them from OpenStreetMap</button>
-        <div id="osmStat" class="ul-stat"></div>
-        <p class="poi-band-note">The state’s own layer is a trail layer — it knows the lock campsites and the canal museum, and next to nothing about where you buy food. This asks OpenStreetMap for the supermarkets, restaurants and cafes, convenience stores, dollar and big-box shops, gas stations and hotels within 5 miles of the route, 25 miles either side of you, and folds them into Nearby and the map with everything else. Overpass is a shared public service and can take a few seconds.</p>
         <div class="set-lbl">Your own layers</div>
         <div class="poi-band">
           <label class="ul-lbl">ArcGIS layer URL

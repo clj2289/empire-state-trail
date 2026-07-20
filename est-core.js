@@ -93,6 +93,19 @@ const EST_SRC='https://empiretrail.ny.gov/import-instructions';
    so nothing can cover it: not a road line, not forty lodging pins, not a milepost.
    Below the popup pane, though — a popup you cannot read is worse. */
 const ME_BLUE='#1a73e8', ME_PANE='mePane';
+/* Past this far from the route you are not on the trail, you are planning a trip to
+   it. Generous on purpose: a rider detouring to a motel, a diner or an airport is
+   still riding this trail, and only a genuinely different-state fix should trip it. */
+const OFF_TRAIL_MI=60;
+// Zoom at which pins start showing their names beside them.
+const POI_LABEL_Z=13;
+/* Above every pane Leaflet ships (popups are the highest at 700) and every pane the
+   layer registry makes at 600, so a hovered pin is never behind anything. */
+const HI_PANE_Z='1200';
+// Beats any z-index Leaflet derives from a marker's y position within the same pane.
+const HI_Z_OFFSET=100000;
+// How far the NWS hourly grid actually runs, and therefore how many days we show.
+const WX_MAX_DAYS=6;
 
 /* ---- NYSDOT traffic counts -------------------------------------------------
    The AADT layer behind the state's Traffic Data Viewer: annual average daily
@@ -182,6 +195,7 @@ const safeUrl = u => /^https?:\/\//i.test(String(u||'')) ? esc(u) : '';
 const P = {
   map:'M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z|c12 10 3',
   next:'M13 5l7 7-7 7|M5 5l7 7-7 7',
+  plus:'M12 5v14|M5 12h14', minus:'M5 12h14',
   list:'M8 6h13|M8 12h13|M8 18h13|M3.5 6h.01|M3.5 12h.01|M3.5 18h.01',
   near:'c12 12 9|c12 12 3|M12 3v3|M12 18v3|M3 12h3|M18 12h3',
   gear:'M4 6h10|M18 6h2|M4 12h2|M10 12h10|M4 18h6|M14 18h6|c14 6 2|c8 12 2|c12 18 2',
@@ -505,7 +519,10 @@ async function fetchSource(src){
 const OSM_EPS=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
 const OSM_WIN=25;                 // miles either way along the route
 const OSM_TAGS=[
-  ['tourism','^(hotel|motel|guest_house|hostel)$','Lodging'],
+  // Its own category rather than folded into the State's Lodging: that list is
+  // curated and trail-facing, this one is every motel a surveyor ever tagged, and
+  // a rider picking a bed deserves to know which of the two they are reading.
+  ['tourism','^(hotel|motel|guest_house|hostel)$','Hotels & motels'],
   ['shop','^(supermarket|grocery|greengrocer)$','Groceries'],
   ['shop','^(convenience|general)$','Convenience'],
   ['shop','^(variety_store|department_store|wholesale)$','General store'],
@@ -525,25 +542,41 @@ function osmAddr(t){
   const line=[t['addr:housenumber'],t['addr:street']].filter(Boolean).join(' ');
   return [line, t['addr:city'], t['addr:state'], t['addr:postcode']].filter(Boolean).join(', ');
 }
+/* grp is the parent each category hangs under. The split is by source, because
+   that is the thing a rider actually needs to weigh: the State knows the lock
+   campsites and nothing about where you buy food, OpenStreetMap knows every
+   filling station and is only as current as whoever last surveyed it. */
 const CATCFG={
-  'Lock camping':{icon:'lock',label:'Lock camping'},
-  'Campground':{icon:'tent',label:'Campgrounds'},
-  'Lodging':{icon:'bed',label:'Lodging'},
-  'Attraction':{icon:'star',label:'Attractions'},
-  'Train Station':{icon:'train',label:'Train stations'},
-  'Groceries':{icon:'cart',label:'Groceries'},
-  'Food':{icon:'food',label:'Food'},
-  'Convenience':{icon:'store',label:'Convenience'},
-  'General store':{icon:'store',label:'Dollar / big box'},
-  'Fuel':{icon:'fuel',label:'Fuel / gas'},
-  'Restroom':{icon:'drop',label:'Restrooms / water'},
-  'Parking Area':{icon:'park',label:'Parking'}
+  'Lock camping':{icon:'lock',label:'Lock camping',grp:'trail'},
+  'Campground':{icon:'tent',label:'Campgrounds',grp:'trail'},
+  'Lodging':{icon:'bed',label:'Lodging',grp:'trail'},
+  'Attraction':{icon:'star',label:'Attractions',grp:'trail'},
+  'Train Station':{icon:'train',label:'Train stations',grp:'trail'},
+  'Restroom':{icon:'drop',label:'Restrooms / water',grp:'trail'},
+  'Parking Area':{icon:'park',label:'Parking',grp:'trail'},
+  'Hotels & motels':{icon:'bed',label:'Hotels & motels',grp:'osm'},
+  'Groceries':{icon:'cart',label:'Groceries',grp:'osm'},
+  'Food':{icon:'food',label:'Food',grp:'osm'},
+  'Convenience':{icon:'store',label:'Convenience',grp:'osm'},
+  'General store':{icon:'store',label:'Dollar / big box',grp:'osm'},
+  'Fuel':{icon:'fuel',label:'Fuel / gas',grp:'osm'}
 };
+const CAT_GRP={
+  trail:{label:'On the trail', src:'New York State'},
+  osm:{label:'In town',       src:'OpenStreetMap'}
+};
+const GRP_ORDER=['trail','osm'];
+// An asset type the service invented and we don't hardcode is trail data — that
+// is the only place unknown categories can come from.
+const catGrp=a=>(CATCFG[a]&&CATCFG[a].grp)||'trail';
+// Both of these are somewhere to sleep, so both get the chain wordmark treatment.
+const LODGE_CATS={'Lodging':1,'Hotels & motels':1};
 const CAT_DEFAULT={'Lock camping':true,'Campground':true,'Lodging':true};
 /* Fallback order for the Nearby groups — a rider who hasn't dragged anything yet
-   gets sleeping options first, sightseeing after, logistics last. */
-const CAT_ORDER=['Lock camping','Campground','Lodging','Food','Groceries','Convenience','General store','Fuel',
-                 'Attraction','Train Station','Restroom','Parking Area'];
+   gets sleeping options first, sightseeing after, logistics last. Grouped in the
+   same order the parents render in, so a fresh install reads top to bottom. */
+const CAT_ORDER=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area',
+                 'Hotels & motels','Food','Groceries','Convenience','General store','Fuel'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
 
@@ -562,13 +595,20 @@ class TrailApp {
     this.tapToSet=true;
     this.showTrip=false; this.screen='map'; this.panelSnap='shut';
     this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
-    this.showWx=true; this.wxPerDay=60; this.wxDays=4; this.wxPlan=null; this.wxBusy=false;
+    this.showWx=true; this.wxPerDay=60; this.wxPlan=null; this.wxBusy=false;
     this.prices={}; this.poiMarker={};
+    // Planning mode: no usable trail position, so distances run from the start of the
+    // trip. offTrail records how far a real fix was, for the note that explains it.
+    this.planning=false; this.offTrail=0;
     // Absolute stretch of trail to list, independent of the rider. The mileage band
     // above it asks "how far from me", which needs a location and moves as you ride;
     // this asks "what's between mile X and Y", which answers the map-shaped question
     // — that cluster around Syracuse, what is it — and works with no GPS at all.
     this.mpFrom=null; this.mpTo=null;
+    // On by default: panning the map is the most direct way to ask "what's over
+    // there", so the range tracks the view until the rider takes the wheel by
+    // typing a bound themselves.
+    this.followMap=true;
     // Nearby list: optional day-planning band (trail miles ahead) + per-category
     // expansion. Filters start collapsed — the list is the reason you opened the tab.
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
@@ -581,12 +621,28 @@ class TrailApp {
     this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
-    // Nearby-list shape only. Map pin visibility is the layers control's job.
-    this.catOrder=[...CAT_ORDER]; this.catHidden=new Set();
+    /* One switch per category, driving the list AND the pins together. They were
+       briefly independent, which meant the map could show a pin whose row the list
+       had filtered away — and a place you can see is a place you expect to be able
+       to read about. Seeded from CAT_DEFAULT so the map doesn't open under 700 pins. */
+    this.catOrder=[...CAT_ORDER];
+    this.catHidden=new Set(CAT_ORDER.filter(c=>!CAT_DEFAULT[c]));
+    // Which parent groups are folded shut. Both open — a collapsed group with pins
+    // on the map would be a control the rider can't find.
+    this.grpShut=new Set();
   }
   $(id){ return document.getElementById(id); }
   destName(){ return this.dir==='B2NYC' ? 'NYC' : 'Buffalo'; }
   travelOrder(){ return [...TOWNS].sort((a,b)=> this.dir==='B2NYC' ? b.mi-a.mi : a.mi-b.mi); }
+  /* Where the trip starts in the current direction of travel — Buffalo heading east,
+     Manhattan heading west. Planning from out of state anchors here, so the app is
+     useful before you fly in without ever pretending the anchor is a GPS fix. */
+  anchorTown(){ return this.travelOrder()[0]; }
+  anchorName(){ const t=this.anchorTown(); return t ? t.n.replace(/ *\/.*$/,'') : 'Buffalo'; }
+  applyAnchor(){
+    const t=this.anchorTown(); if(!t) return;
+    this.planning=true; this.myMile=t.mi;
+  }
   isAhead(t){ return this.dir==='B2NYC' ? t.mi < this.myMile-0.3 : t.mi > this.myMile+0.3; }
   visibleStops(){
     if(this.myMile==null || this.showPassed) return this.travelOrder();
@@ -605,7 +661,6 @@ class TrailApp {
     this.wireControls();
     this.wireTabAutohide();
     this.wirePanelDrag();
-    this.buildWxDest();
     this.initMap();
     this.renderAll();
     // Peek is measured off the rendered stats, so it can only be set once they exist.
@@ -626,12 +681,18 @@ class TrailApp {
     if(['shut','peek','half','full'].indexOf(p.panelSnap)>=0) this.panelSnap=p.panelSnap;
     if(p.myLL && isFinite(p.myLL.lat) && isFinite(p.myLL.lng)){
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
-      this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
+      const pr=projectRoute(this.myLL.lat,this.myLL.lng);
+      // Same guard the live fix gets — a stored out-of-state position must not come
+      // back from localStorage as a trail mile either.
+      if(pr.off>OFF_TRAIL_MI){ this.offTrail=Math.round(pr.off); this.applyAnchor(); }
+      else this.myMile=pr.mile;
     }
+    // Nothing usable stored: plan from the start of the trip rather than opening on a
+    // whole-state view with every distance blank.
+    if(this.myMile==null) this.applyAnchor();
     if(isFinite(p.avgSpeed)&&p.avgSpeed>0) this.avgSpeed=p.avgSpeed;
     if(typeof p.showWx==='boolean') this.showWx=p.showWx;
     if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
-    if(isFinite(p.wxDays)&&p.wxDays>0) this.wxDays=p.wxDays;
     if(isFinite(p.miMin)) this.miMin=p.miMin;
     if(isFinite(p.miMax)) this.miMax=p.miMax;
     if(isFinite(p.mpFrom)&&p.mpFrom>=0) this.mpFrom=p.mpFrom;
@@ -641,7 +702,11 @@ class TrailApp {
     // retired key is inert rather than needing pruning here.
     if(Array.isArray(p.catOrder)) this.catOrder=p.catOrder.filter(c=>typeof c==='string');
     if(Array.isArray(p.lyrOrder)) this.lyrOrder=p.lyrOrder.filter(c=>typeof c==='string');
-    if(Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
+    // Only trust a stored hidden-set from after the switches were coupled. The older
+    // one recorded list visibility alone, and replaying it now would switch every map
+    // layer on at once — 700-odd pins on the first load after upgrading.
+    if(p.catCoupled && Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
+    if(Array.isArray(p.grpShut)) this.grpShut=new Set(p.grpShut.filter(c=>typeof c==='string'));
     this.renderDirLabels();
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
@@ -649,16 +714,58 @@ class TrailApp {
     const spd=this.$('avgSpeed'); if(spd) spd.value=this.avgSpeed;
     const sw=this.$('showWx'); if(sw) sw.checked=this.showWx;
     const pd=this.$('wxPerDay'); if(pd) pd.value=this.wxPerDay;
-    const wd=this.$('wxDays'); if(wd) wd.value=this.wxDays;
     const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
     const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
     const c=this.$('mpFrom'); if(c && this.mpFrom!=null) c.value=this.mpFrom;
     const d=this.$('mpTo'); if(d && this.mpTo!=null) d.value=this.mpTo;
+    if(typeof p.followMap==='boolean') this.followMap=p.followMap;
+    const fm=this.$('mpFollow'); if(fm) fm.checked=this.followMap;
+    this.syncFollowUi();
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxDays:this.wxDays,
-      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
-      catOrder:this.catOrder,catHidden:[...this.catHidden],lyrOrder:this.lyrOrder})); }catch(e){}
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
+      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
+      catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
+      grpShut:[...this.grpShut]})); }catch(e){}
+  }
+  /* While following, the two boxes are an output, not an input — say so rather than
+     leaving a rider typing into fields the next pan silently overwrites. */
+  syncFollowUi(){
+    const on=this.followMap;
+    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el){ el.readOnly=on; el.classList.toggle('is-auto',on); } });
+    const pv=this.$('mpFromMap'); if(pv) pv.disabled=on;
+    const pc=this.$('mpClear'); if(pc) pc.disabled=on;
+  }
+  /* Is this place inside the map's current viewport? While following the map this is
+     what decides the list, rather than the trail-mile range: the range was only ever a
+     proxy for "what I can see", and it disagreed at the edges — a guesthouse 3 mi off
+     the route sat plainly on screen while its milepost fell outside the band, so the
+     pin was there and the row was not. */
+  inMapView(p){
+    if(!this.map || p==null || !isFinite(p.lat) || !isFinite(p.lng)) return true;
+    return this.map.getBounds().contains([p.lat,p.lng]);
+  }
+  /* Called on every moveend. The trail-mile boxes still track the view as a readout,
+     but the list itself is rebuilt every time because any pan changes what's on
+     screen, and what's on screen is exactly what the list must show. */
+  syncRangeToMap(){
+    if(!this.followMap) return;
+    const r=this.mileRangeInView();
+    if(r){
+      const lo=Math.floor(r.lo), hi=Math.ceil(r.hi);
+      this.mpFrom=lo; this.mpTo=hi;
+      const a=this.$('mpFrom'); if(a) a.value=lo;
+      const b=this.$('mpTo'); if(b) b.value=hi;
+      this.savePrefs();
+    }
+    this.renderNearby();
+  }
+  /* Any manual edit to the range takes the wheel back from the map. */
+  stopFollowing(){
+    if(!this.followMap) return;
+    this.followMap=false;
+    const fm=this.$('mpFollow'); if(fm) fm.checked=false;
+    this.syncFollowUi();
   }
   /* Summary shown on the collapsed header. A filter you can't see is a filter you
      forget you set, so the closed state has to say when something is narrowing. */
@@ -858,12 +965,15 @@ class TrailApp {
     this.setTabsHidden(false);
     this.tabs.forEach(b=>{ const on=b.dataset.tab===name; b.classList.toggle('active',on); b.setAttribute('aria-current', on?'page':'false'); });
     this.screens.forEach(s=>{ s.classList.toggle('active', s.dataset.screen===name); });
-    if(name==='map' && this.map){ setTimeout(()=>{ this.map.invalidateSize(); if(this.myLL) this.map.setView([this.myLL.lat,this.myLL.lng]); },60); }
+    // Only resize. Recentring here threw away wherever you had panned to the moment
+    // you glanced at another tab and came back.
+    if(name==='map' && this.map){ setTimeout(()=>this.map.invalidateSize(),60); }
   }
 
   /* ---------- controls ---------- */
   wireControls(){
     const ob=this.$('osmBtn'); if(ob) ob.addEventListener('click',()=>this.loadOsmPois());
+    this.syncOsmBtn();
     const ua=this.$('ulAdd'); if(ua) ua.addEventListener('click',()=>this.addArcgisLayer((this.$('ulUrl')||{}).value));
     const uu=this.$('ulUrl'); if(uu) uu.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); this.addArcgisLayer(uu.value); } });
     const ug=this.$('ulGpx'); if(ug) ug.addEventListener('change',e=>{
@@ -875,6 +985,9 @@ class TrailApp {
     const tr=this.$('showTrip'); if(tr) tr.addEventListener('change',e=>{ this.showTrip=e.target.checked; this.savePrefs(); this.applyTripTab(); });
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
     const rc=this.$('recenterBtn'); if(rc) rc.addEventListener('click',()=>this.recenter());
+    this.wirePoiHover();
+    const zi=this.$('zoomInBtn'); if(zi) zi.addEventListener('click',()=>{ if(this.map) this.map.zoomIn(); });
+    const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ if(this.map) this.map.zoomOut(); });
     const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.savePrefs(); this.renderItin(); });
     const tp=this.$('tapToSet'); if(tp) tp.addEventListener('change',e=>{ this.tapToSet=e.target.checked; this.savePrefs();
       this.status(this.tapToSet?'Tapping the map will offer to move you there.':'Map taps no longer move you — use Locate or a simulated spot.'); });
@@ -926,9 +1039,17 @@ class TrailApp {
       this.mpFrom=g('mpFrom'); this.mpTo=g('mpTo');
       this.savePrefs(); this.renderNearby();
     };
-    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readRange); });
+    // Typing a bound is the rider overriding the map, so it stops the follow. Safe
+    // from feedback loops: syncRangeToMap assigns .value, which fires no input event.
+    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',()=>{ this.stopFollowing(); readRange(); }); });
+    const fm=this.$('mpFollow');
+    if(fm) fm.addEventListener('change',()=>{
+      this.followMap=fm.checked; this.syncFollowUi(); this.savePrefs();
+      if(this.followMap){ this.syncRangeToMap(); this.status('Trail mile range now follows the map view.'); }
+      else this.status('Trail mile range held — pan the map without changing it.');
+    });
     const pc=this.$('mpClear');
-    if(pc) pc.addEventListener('click',()=>{ ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readRange(); });
+    if(pc) pc.addEventListener('click',()=>{ this.stopFollowing(); ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readRange(); });
     const pv=this.$('mpFromMap');
     if(pv) pv.addEventListener('click',()=>{
       const r=this.mileRangeInView();
@@ -946,8 +1067,8 @@ class TrailApp {
     const wg=this.$('wxGo');
     if(wg) wg.addEventListener('click',()=>this.loadOutlook());
     const rd=id=>{ const el=this.$(id); if(!el) return;
-      el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this[id==='wxDays'?'wxDays':'wxPerDay']=n; this.savePrefs(); } }); };
-    rd('wxPerDay'); rd('wxDays');
+      el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this.wxPerDay=n; this.savePrefs(); } }); };
+    rd('wxPerDay');
     const sw=this.$('showWx');
     if(sw) sw.addEventListener('change',()=>{ this.showWx=sw.checked; this.savePrefs(); this.applyWxTab(); });
     const as=this.$('avgSpeed');
@@ -988,6 +1109,9 @@ class TrailApp {
   }
   flipDir(){
     this.dir = this.dir==='B2NYC' ? 'NYC2B' : 'B2NYC';
+    // The anchor is the start of the trip, so flipping the direction moves it to the
+    // other end of the state. Only while planning — a real fix is a real fix.
+    if(this.planning) this.applyAnchor();
     this.renderDirLabels();
     this.savePrefs();
     this.renderAll();
@@ -996,7 +1120,9 @@ class TrailApp {
     if(!('geolocation' in navigator)){ this.status('No geolocation — pick a simulated spot in Settings, or tap the map.'); return; }
     this.status('Locating…');
     navigator.geolocation.getCurrentPosition(
-      p=>{ this.setMyLocation(p.coords.latitude,p.coords.longitude); this.status('Location on — updates as you move.');
+      // The first fix earns a recentre because you asked for it by tapping Locate.
+      // The watch that follows does not: it fires while you are reading the map.
+      p=>{ this.setMyLocation(p.coords.latitude,p.coords.longitude,true); this.status('Location on — updates as you move.');
         navigator.geolocation.watchPosition(q=>this.setMyLocation(q.coords.latitude,q.coords.longitude),()=>{},{enableHighAccuracy:true,maximumAge:15000}); },
       e=>{ this.status('Couldn’t locate ('+e.message+'). Pick a simulated spot, or tap the map.'); },
       {enableHighAccuracy:true,timeout:12000});
@@ -1044,8 +1170,28 @@ class TrailApp {
     this.setMyLocation(ll.lat,ll.lng);
     this.status('Location set from your map tap.');
   }
-  setMyLocation(lat,lng){
-    this.myMile=projectMile(lat,lng); this.myLL={lat,lng};
+  /* `move` is opt-in, and that is the whole point. This used to recentre on every
+     call — including each watchPosition tick — so panning the map to read the pins
+     around Syracuse got yanked back to the rider's real fix a few seconds later,
+     over and over. Only a deliberate Locate or Recenter moves the map now. */
+  setMyLocation(lat,lng,move){
+    const pr=projectRoute(lat,lng);
+    // A fix hundreds of miles from the route is not a position on the trail. Left
+    // unguarded it still projected onto a milepost, so planning from out of state
+    // silently re-sorted Nearby and the itinerary around a fictional trail mile.
+    if(pr.off>OFF_TRAIL_MI){
+      this.myLL={lat,lng}; this.myMile=null; this.offTrail=Math.round(pr.off);
+      this.applyAnchor();
+      // Recentre on the anchor, not on the rider: dropping someone who tapped Locate
+      // onto blank map a thousand miles from any trail answers nothing.
+      const t=this.anchorTown();
+      if(this.map && move && t) this.map.setView([t.lat,t.lng],11);
+      this.savePrefs(); this.renderAll();
+      this.status('You are ~'+this.offTrail+' mi from the trail, so distances are planned from '+this.anchorName()+' instead. They switch to your real position once you are on the route.');
+      return;
+    }
+    this.offTrail=0; this.planning=false;
+    this.myMile=pr.mile; this.myLL={lat,lng};
     if(this.map){ const ll=[lat,lng];
       // dark fill, not --color-accent: that's the Hudson Valley stop color, so
       // "you are here" used to blend into the very dots it should stand out from
@@ -1053,7 +1199,7 @@ class TrailApp {
         radius:8,weight:3,color:'#fff',fillColor:ME_BLUE,fillOpacity:1,className:'me-dot'})
         .addTo(this.map).bindPopup('You are here'); }
       else this.myMarker.setLatLng(ll);
-      this.map.setView(ll, Math.max(this.map.getZoom(),10));
+      if(move) this.map.setView(ll, Math.max(this.map.getZoom(),10));
     }
     this.savePrefs();
     this.renderAll();
@@ -1134,12 +1280,18 @@ class TrailApp {
     // that stays distinct whichever way you're travelling.
     const ridden = this.dir==='B2NYC' ? TOTAL-this.myMile : this.myMile;
     const pct = Math.max(0,Math.min(100,(ridden/TOTAL)*100));
-    let h='<div class="sheet-row"><div><div class="sheet-k">Trail mile</div><div class="sheet-v">'+fmtMp(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
-      +'<div class="sheet-r"><div class="sheet-k">ridden</div><div class="sheet-v">'+Math.round(pct)+'%</div></div></div>';
+    /* One line. This was a stat block — trail mile and percent ridden as display
+       figures, a next-stop button, and a planning banner — stacked above a list whose
+       whole job is to be read. On a map screen the map is the thing worth the pixels,
+       so what survives is the mile you are measuring from, the fact that it might be
+       an anchor rather than a fix, and the weather if there is any. Percent ridden,
+       the next stop and the pager are all a tab away or a pan away. */
+    const bits=['<b>TM '+fmtMp(this.myMile)+'</b> <span class="sheet-of">of '+Math.round(TOTAL)+'</span>'];
+    if(this.planning) bits.push('planning from '+esc(this.anchorName()));
+    else bits.push(Math.round(pct)+'% ridden');
     const wl=this.wxLine();
-    if(wl) h+='<div class="sheet-wx">'+esc(wl)+'</div>';
-    if(nx){ h+='<button class="sheet-next" data-lat="'+nx.lat+'" data-lng="'+nx.lng+'" data-town="'+esc(nx.n)+'"><span class="sheet-k">Next stop</span><span class="sheet-nm">'+esc(nx.n)+' · '+mpTxt(nx.mi)+' · ~'+fmtMi(abs(nx.mi-this.myMile))+' mi</span>'+icon('chevR',18)+'</button>'; }
-    el.innerHTML=h;
+    if(wl) bits.push(esc(wl));
+    el.innerHTML='<div class="sheet-line">'+bits.join(' <span class="sheet-dot">·</span> ')+'</div>';
   }
 
   renderNext(){
@@ -1345,6 +1497,9 @@ class TrailApp {
     const lo=+el.dataset.lo, hi=+el.dataset.hi;
     if(!isFinite(lo)||!isFinite(hi)) return;
     const ids = w.kind==='band' ? ['miMin','miMax'] : ['mpFrom','mpTo'];
+    // Stepping to another stretch is a manual choice about range, so it takes the
+    // wheel back from the map the same way typing a bound does.
+    if(w.kind!=='band') this.stopFollowing();
     if(w.kind==='band'){ this.miMin=lo; this.miMax=hi; } else { this.mpFrom=lo; this.mpTo=hi; }
     const a=this.$(ids[0]); if(a) a.value=lo;
     const b=this.$(ids[1]); if(b) b.value=hi;
@@ -1355,25 +1510,42 @@ class TrailApp {
     // a filter or a category toggle lands in both without either owning the state.
     const mounts=[this.$('poiList'), this.$('panelList')].filter(Boolean);
     if(!mounts.length) return;
+    this.clearPoiHi();
     const list={ set innerHTML(v){ mounts.forEach(m=>{ m.innerHTML=v; }); } };
     if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
     // The two controls are orthogonal: the chips decide which groups appear and in
     // what order, the band filters the items inside each one.
     // "X of Y" whenever anything is narrowing, so a filtered count never reads as the
     // full one. The band needs a location to mean anything; the range never does.
-    const CAP=6, banded=((this.miMin!=null||this.miMax!=null) && this.myMile!=null)
+    // Following the map, the viewport is the filter and there is no cap: anything you
+    // can see a pin for has to have a row, so truncating at six would break exactly
+    // the promise the two views make to each other. Zoom is what shortens this list.
+    const view=this.followMap && !!this.map;
+    const CAP=view ? Infinity : 6;
+    const banded=view || ((this.miMin!=null||this.miMax!=null) && this.myMile!=null)
       || this.mpFrom!=null || this.mpTo!=null;
     const byCat=this.poisByCat();
     this.renderFilterState();
     const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length);
     if(!keys.length){ list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
-    let h=this.pagerHTML();
-    keys.forEach(cat=>{
+    // No pager while the list follows the map: panning IS how you move the window,
+    // and a stepper for it only repeated what the map already does, three rows deep.
+    let h=view?'':this.pagerHTML();
+    // Same parents as the chips above, so "where did this come from" is answered
+    // once per run of categories instead of never.
+    GRP_ORDER.forEach(grp=>{
+    const inGrp=keys.filter(c=>catGrp(c)===grp);
+    if(!inGrp.length) return;
+    const gc=CAT_GRP[grp];
+    h+='<div class="poi-src">'+esc(gc.label)+'<span class="poi-src-s">'+esc(gc.src)+'</span></div>';
+    inGrp.forEach(cat=>{
       const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
       // Absolute range first — it's the one filter that doesn't need a location, so
-      // it has to bite even when nothing below it can.
-      if(this.mpFrom!=null||this.mpTo!=null) items=items.filter(p=>this.inMileRange(p));
+      // it has to bite even when nothing below it can. Following the map, the
+      // viewport replaces it outright rather than stacking with it.
+      if(view) items=items.filter(p=>this.inMapView(p));
+      else if(this.mpFrom!=null||this.mpTo!=null) items=items.filter(p=>this.inMileRange(p));
       if(this.myMile==null){
         // No rider to sort around, so fall back to trail order in the direction of
         // travel. Matters most with a range set: that IS the list you asked for.
@@ -1397,7 +1569,7 @@ class TrailApp {
       const open=!!this.poiOpen[cat], shown=open?items:items.slice(0,CAP);
       const ct=banded ? items.length+' of '+total : String(total);
       h+='<div class="poi-group"><div class="poi-h">'+icon(cfg.icon,18)+'<span>'+esc(cfg.label)+'</span><span class="poi-ct">'+ct+'</span></div>';
-      if(!items.length) h+='<div class="poi-more">Nothing in this mileage range.</div>';
+      if(!items.length) h+='<div class="poi-more">'+(view?'None of these on screen — zoom out or pan.':'Nothing in this mileage range.')+'</div>';
       shown.forEach(p=>{
         const d=this.aheadMi(p), back=(d!=null&&d<-0.3), s=this.spurMi(p), tot=this.rideMi(p);
         // Three numbers when there's a detour — trail leg, spur, and the total they
@@ -1416,6 +1588,7 @@ class TrailApp {
       });
       if(items.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+items.length)+'</button>';
       h+='</div>';
+    });
     });
     list.innerHTML=h;
   }
@@ -1474,15 +1647,75 @@ class TrailApp {
   }
   /* A chain wordmark, a rate, or both, in place of the generic bed — the point being
      that a map of forty identical pins tells you nothing you couldn't already see. */
+  /* Borrowed pins are drawn small and hollow against the State layer's filled
+     circles. Shape and weight, not just colour: it survives a colourblind rider and
+     a phone in sunlight, and at 900 food pins the lighter mark is what keeps the
+     curated ones readable underneath. */
   poiIcon(p, cfg){
-    const pr=this.priceOf(p), br=(p.asset==='Lodging')?brandOf(p.name):null;
-    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]});
+    const osm=catGrp(poiCat(p))==='osm';
+    const pr=this.priceOf(p), br=LODGE_CATS[poiCat(p)]?brandOf(p.name):null;
+    // Every pin carries its name. Hidden by CSS until the map is zoomed in past
+    // POI_LABEL_Z, or the pin is hovered — a field of identical dots you have to tap
+    // one at a time to identify is the thing this is fixing.
+    const lbl='<span class="poi-lbl">'+esc(p.name)+'</span>';
+    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin'+(osm?' is-osm':'')+'">'+icon(cfg.icon,osm?14:18)+'</span>'+lbl,
+      className:'poi-ic'+(osm?' osm-ic':''), iconSize:osm?[22,22]:[28,28], iconAnchor:osm?[11,11]:[14,14]});
     const col=br?br.color:'';
-    let h='<span class="poi-chip'+(pr?' has-price':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
+    let h='<span class="poi-chip'+(pr?' has-price':'')+(osm?' is-osm':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
       + (br ? '<span class="chip-b">'+esc(br.tag)+'</span>' : icon(cfg.icon,13))
       + (pr ? '<span class="chip-p">'+esc(fmtMoney(pr.amt))+'</span>' : '')
       + '</span>';
-    return L.divIcon({html:h, className:'poi-chip-ic', iconSize:[0,0], iconAnchor:[0,0]});
+    return L.divIcon({html:h+lbl, className:'poi-chip-ic', iconSize:[0,0], iconAnchor:[0,0]});
+  }
+  /* Hovering a row lights its pin — the list answers "what is near me" and the map
+     answers "where", and without this you had to read a name here and then hunt for
+     it among forty identical dots there. Delegated, so it survives every re-render.
+     Also lights the label, which is the part that actually identifies the pin. */
+  /* Puts everything the highlight touched back. Also called before each list rebuild:
+     a re-render drops the row you were pointing at without ever firing pointerout, so
+     without this a pan left pins lit behind you, one per row you had passed over. */
+  clearPoiHi(){
+    const mk=this._hiMk;
+    if(mk){
+      const n=mk.getElement&&mk.getElement();
+      if(n) n.classList.remove('is-hi');
+      if(mk.setZIndexOffset) mk.setZIndexOffset(0);
+      this._hiMk=null;
+    }
+    if(this._hiPane){ this._hiPane.style.zIndex=this._hiPaneZ||''; this._hiPane=null; this._hiPaneZ=null; }
+  }
+  wirePoiHover(){
+    const mark=(el,on)=>{
+      const id=el&&el.dataset?el.dataset.poi:null; if(id==null) return;
+      const mk=this.poiMarker[id]; if(!mk||!mk.getElement) return;
+      if(!on){ if(this._hiMk===mk) this.clearPoiHi(); return; }
+      this.clearPoiHi();
+      const node=mk.getElement(); if(!node) return;
+      node.classList.add('is-hi');
+      /* Two axes to win, and CSS alone loses both. Within a pane Leaflet derives each
+         marker's z-index from its y position, so a neighbour further down the screen
+         outranks any fixed value — hence the offset, which is Leaflet's own lever.
+         Across panes, each layer owns one and a pane is a stacking context, so the
+         pane has to rise too or the pin stays under the layer stacked above it. */
+      if(mk.setZIndexOffset) mk.setZIndexOffset(HI_Z_OFFSET);
+      this._hiMk=mk;
+      const pane=node.parentElement;
+      if(pane){ this._hiPane=pane; this._hiPaneZ=pane.style.zIndex; pane.style.zIndex=HI_PANE_Z; }
+    };
+    // pointerover/out rather than mouseenter/leave: those don't bubble, and the rows
+    // are replaced wholesale on every filter change.
+    document.addEventListener('pointerover',e=>{
+      const el=e.target.closest?e.target.closest('.poi-item'):null; if(el) mark(el,true);
+    });
+    document.addEventListener('pointerout',e=>{
+      const el=e.target.closest?e.target.closest('.poi-item'):null; if(el) mark(el,false);
+    });
+  }
+  /* Labels are a zoom-level decision, not a per-pin one: at state scale they would be
+     a solid wall of text, and close in they are the whole point. */
+  syncPoiLabels(){
+    if(!this.map) return;
+    this.map.getContainer().classList.toggle('is-labeled', this.map.getZoom()>=POI_LABEL_Z);
   }
   refreshPin(p){
     const mk=this.poiMarker[p.i];
@@ -1543,6 +1776,11 @@ class TrailApp {
     const have={};
     this.POIS.forEach(p=>{ have[this.osmKey(p.name,p.lat,p.lng)]=1; });
     let added=0, near=0;
+    // Every one of these categories is seeded hidden — the map must not open under
+    // 700 pins. But asking for them IS asking to see them, and without this a rider
+    // pressed the button, fifteen hundred places arrived, and nothing appeared on
+    // the map or in the list. Only categories this fetch actually filled.
+    const lit=new Set();
     els.forEach(el=>{
       const t=el.tags||{};
       const cat=osmCat(t); if(!cat) return;
@@ -1561,16 +1799,30 @@ class TrailApp {
         addr:osmAddr(t), phone:t.phone||t['contact:phone']||'',
         url:t.website||t['contact:website']||'', src:'osm', osmId:el.type+'/'+el.id,
         lat, lng, mile:pr.mile, off:pr.off});
+      lit.add(cat);
       added++;
     });
     this.POIS.forEach((p,i)=>{ p.i=i; });
+    // A category that already existed keeps whatever the rider set — switching Food
+    // back on because they refetched would undo a choice they made on purpose.
+    lit.forEach(c=>{ if(!this.poiLayers[c]) this.catHidden.delete(c); });
+    this.savePrefs();
     this.osmAt=b.mile;
     this.osmBusy=false;
     this.rebuildPOIs();
+    this.syncOsmBtn();
     this.osmStatus(added
       ? added+' added from OpenStreetMap around TM '+fmtMp(b.mile)+' \u2014 shops, fuel and beds within 5 mi of the route.'
       : (near?'Nothing new here \u2014 the '+near+' places OpenStreetMap knows about were already on the list.'
              :'OpenStreetMap has nothing within 5 mi of the route just here.'));
+  }
+  /* Once anything is loaded the card stops being the headline and becomes a refresh:
+     the label says so, and the note \u2014 the pitch for a thing you have not done yet \u2014
+     drops away. */
+  syncOsmBtn(){
+    const loaded=this.POIS.some(p=>p.src==='osm');
+    const ob=this.$('osmBtn'); if(ob) ob.textContent=loaded?'Refresh from OpenStreetMap around you':'Load them from OpenStreetMap';
+    const band=ob?ob.closest('.osm-band'):null; if(band) band.classList.toggle('loaded',loaded);
   }
   // Name and position together: the same shop mapped twice, or listed by two
   // services, lands within a few metres of itself.
@@ -1582,13 +1834,21 @@ class TrailApp {
   rebuildPOIs(){
     if(!this.map) return;
     const on={};
+    /* Guarded end to end. Tearing a layer down calls map.removeLayer on a layer the
+       control still knows about, which fires overlayremove — and that handler's whole
+       job is to record "the rider switched this off". Unguarded, every rebuild wrote
+       all the live categories into catHidden, so an OpenStreetMap fetch silently
+       emptied the list of everything the State layer had while its pins stayed on the
+       map. Exactly the drift the coupling exists to prevent. */
+    this._syncCats=true;
     Object.keys(this.poiLayers).forEach(a=>{
       on[a]=this.map.hasLayer(this.poiLayers[a]);
       this.unregLayer('poi:'+a);
     });
     this.poiLayers={}; this.poiMarker={};
     this.buildPOILayers(on);
-    this.buildWxDest(); this.renderNext(); this.renderCategories(); this.renderNearby();
+    this._syncCats=false;
+    this.renderNext(); this.renderCategories(); this.renderNearby();
     this.renderFilterState && this.renderFilterState();
   }
 
@@ -2420,9 +2680,9 @@ class TrailApp {
       rows.push(['Wind', mph+' mph <b style="color:'+(mph<3?'#5f6368':this.wxKindColor(kind))+'">'+word+'</b>', 1]);
       if(kind!=='cross' && r.parts.cross>=5) rows.push(['Across', Math.round(r.parts.cross)+' mph']);
     }
-    const hh=Math.round(g.h*10)/10;
+    // No subtitle: the heading already carries the clock time and the milepost, which
+    // is what the marker is being asked. Anything else here was narration.
     return '<b>'+esc(this.wxClock(g.when||Date.parse(w.startTime)))+' \u00b7 '+mpTxt(g.mile)+'</b>'
-      +'<div class="wxp-s">'+(g.h===0?'the day starts here':fmtWin(hh)+'h in at '+this.avgSpeed+' mph')+'</div>'
       +'<table class="wxp">'+rows.map(x=>'<tr><th>'+x[0]+'</th><td>'
         +(x[2]?x[1]:esc(String(x[1])))+'</td></tr>').join('')+'</table>'
       +'<a href="'+nwsLink(g.lat,g.lng)+'" target="_blank" rel="noopener">weather.gov \u2197</a>';
@@ -2462,29 +2722,6 @@ class TrailApp {
     return TOWNS.filter(t=>t.mi>=lo-0.2 && t.mi<=hi+0.2)
       .slice().sort((a,b)=> fwd ? a.mi-b.mi : b.mi-a.mi);
   }
-  buildWxDest(){
-    const sel=this.$('wxDest'); if(!sel) return;
-    const keep=sel.value;
-    let h='<option value="">nowhere in particular — just ride</option><optgroup label="Trail stops">';
-    TOWNS.forEach(t=>{ h+='<option value="t:'+t.mi+'">'+esc(t.n)+' — TM '+fmtMp(t.mi)+'</option>'; });
-    h+='</optgroup>';
-    const stay=this.POIS.filter(p=>(p.asset==='Lodging'||p.asset==='Campground') && p.mile!=null)
-      .slice().sort((a,b)=>a.mile-b.mile);
-    if(stay.length){
-      h+='<optgroup label="Lodging &amp; campgrounds">';
-      stay.forEach(p=>{ h+='<option value="p:'+p.i+'">'+esc(p.name)+' — TM '+fmtMp(p.mile)+'</option>'; });
-      h+='</optgroup>';
-    }
-    sel.innerHTML=h;
-    if(keep) sel.value=keep;
-  }
-  wxDestMile(){
-    const sel=this.$('wxDest'); if(!sel||!sel.value) return null;
-    const k=sel.value.slice(0,1), v=sel.value.slice(2);
-    if(k==='t') return +v;
-    const p=this.POIS[+v];
-    return p && p.mile!=null ? p.mile : null;
-  }
   /* Days are cut by distance, then capped by the destination if there is one. Six is
      the ceiling because NWS hourly runs about six and a half days out — past that
      there is nothing to report, and a made-up seventh day is worse than none. */
@@ -2493,23 +2730,17 @@ class TrailApp {
     if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
     const sgn=this.dir==='B2NYC'?-1:1;
     const per=Math.max(5, this.wxPerDay||60);
-    const dest=this.wxDestMile();
-    let days=Math.max(1, Math.min(6, this.wxDays||4));
-    if(dest!=null){
-      const gap=(dest-anchor)*sgn;                  // positive when it lies ahead of you
-      if(gap<=0.5) return {err:'That one is behind you. Flip your direction in More, or pick something further along.'};
-      days=Math.ceil(gap/per);
-      if(days>6) return {err:'That is '+Math.round(gap)+' mi — about '+days+' days at '+Math.round(per)+' a day, and the forecast only runs six out. Raise the miles a day, or aim closer.'};
-    }
+    // Always the full six. NWS hourly runs about that far and no further, so a box
+    // asking how many days you wanted only ever offered you less than there was.
+    const days=WX_MAX_DAYS;
     const legs=[]; let from=anchor;
     for(let d=0; d<days; d++){
-      let to=from+sgn*per;
-      if(dest!=null && (to-dest)*sgn>0) to=dest;
-      to=Math.max(0,Math.min(TOTAL,to));
+      // The end of the trail is the only thing that shortens a day now that there is
+      // no destination to ride at.
+      const to=Math.max(0,Math.min(TOTAL,from+sgn*per));
       if(abs(to-from)<0.5) break;
       legs.push({d, from, to, miles:abs(to-from)});
       from=to;
-      if(dest!=null && abs(from-dest)<0.5) break;
     }
     return legs.length?legs:{err:'That works out to no riding at all — check the miles a day.'};
   }
@@ -2785,7 +3016,11 @@ class TrailApp {
     const accent=getComputedStyle(document.body).getPropertyValue('--color-accent').trim()||'#0088b0';
     const accent2=getComputedStyle(document.body).getPropertyValue('--color-accent-2').trim()||'#d6006c';
     this.accent=accent; this.accent2=accent2;
-    const map=L.map(el,{scrollWheelZoom:false,zoomControl:true,attributionControl:true}).setView([42.9,-76.0],7);
+    // Zoom lives in the FAB stack with Find/Locate/Recenter rather than in Leaflet's
+    // top-left corner, so every map control is under one thumb.
+    // Opens on the start of the trip, not a whole-state view nobody can read.
+    const st=this.anchorTown(), home=st?[st.lat,st.lng]:[42.9,-76.0];
+    const map=L.map(el,{scrollWheelZoom:false,zoomControl:false,attributionControl:true}).setView(home, st?11:7);
     this.map=map;
     /* Above the marker pane (600) and below the popup pane (700), so where you are
        is never underneath anything you have switched on. */
@@ -2829,7 +3064,20 @@ class TrailApp {
        looking at. Redrawn on moveend — which is also what a zoom ends in. */
     this.mileLayer=L.layerGroup().addTo(map);
     this.regLayer('miles', this.mileLayer,'Mileposts');
-    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); });
+    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
+    map.on('zoomend',()=>this.syncPoiLabels());
+    this.syncPoiLabels();
+    /* The other half of the coupling: a facility layer switched from Leaflet's own
+       control has to move the chip and the list with it, or the two views drift apart
+       again by the other route. Skipped while setCatVisible is driving. */
+    map.on('overlayadd overlayremove',e=>{
+      if(this._syncCats) return;
+      const key=this.lyrKeyById[L.Util.stamp(e.layer)];
+      if(!key || key.indexOf('poi:')!==0) return;
+      const cat=key.slice(4);
+      if(e.type==='overlayadd') this.catHidden.delete(cat); else this.catHidden.add(cat);
+      this.savePrefs(); this.renderCategories(); this.renderNearby();
+    });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
        control. The Shoreline is free to draw; the counts cost a request per view. */
@@ -2866,7 +3114,7 @@ class TrailApp {
     // live data
     const stat=this.$('poiStat'); if(stat) stat.textContent='Loading live data from the NY State service…';
     Promise.allSettled([
-      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); this.buildWxDest(); return n; }),
+      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); return n; }),
       this.fetchRouteLine().then(feats=>{ this.drawLiveRoute(feats); return feats.length; })
     ]).then(([poi,route])=>{
       if(stat){
@@ -2956,16 +3204,16 @@ class TrailApp {
     this.POIS.forEach((p,i)=>{ p.i=i; });
     return this.POIS.length;
   }
-  /* Map pins. These feed Leaflet's own layers control — deliberately independent
-     of the Nearby chips, so a rider can narrow the browse list down to campsites
-     without also blanking the pins they're navigating by. */
+  /* Map pins, feeding Leaflet's own layers control. Visibility comes from the same
+     catHidden set the Nearby chips read, so a pin and its row appear and disappear
+     together — see setCatVisible. */
   buildPOILayers(was){
     const byCat=this.poisByCat();
     // Fixed order, NOT the rider's Nearby order — the map control stays put even
     // as they rearrange the browse list.
     [...new Set([...CAT_ORDER, ...Object.keys(byCat)])].forEach(asset=>{
       const items=byCat[asset]; if(!items||!items.length) return;
-      const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
+      const cfg=catCfg(asset), g=L.layerGroup(), def=!this.catHidden.has(asset);
       const pane=this.lyrPane('poi:'+asset);
       items.forEach(p=>{
         const mk=L.marker([p.lat,p.lng],{pane, icon:this.poiIcon(p,cfg)});
@@ -2981,26 +3229,89 @@ class TrailApp {
   }
 
   /* Nearby chips: which groups appear in the list below, and in what order. */
+  /* The single entry point for showing or hiding a category, wherever the tap came
+     from — the chip, or Leaflet's own layers control. Moves the pins and the rows
+     together so the two views cannot drift apart. */
+  // The pins-and-rows half, without the redraw — so a whole group can be switched
+  // in one pass and repaint once rather than six times over a 900-row list.
+  applyCatVis(cat, on){
+    if(on) this.catHidden.delete(cat); else this.catHidden.add(cat);
+    const g=this.poiLayers[cat];
+    if(!g || !this.map) return;
+    // Guarded: adding or removing fires overlayadd/overlayremove, which routes
+    // straight back here. Without this the pair ping-pongs on every toggle.
+    this._syncCats=true;
+    if(on && !this.map.hasLayer(g)) g.addTo(this.map);
+    else if(!on && this.map.hasLayer(g)) this.map.removeLayer(g);
+    this._syncCats=false;
+  }
+  setCatVisible(cat, on){
+    this.applyCatVis(cat, on);
+    // The parent's own box and counts are derived from its children, so a child
+    // toggle has to redraw the header above it.
+    this.savePrefs(); this.renderCategories(); this.renderNearby();
+  }
+  /* A whole source at once. Turning OpenStreetMap's fifteen hundred pins off is the
+     common case, and doing it six chips at a time was the reason to group them. */
+  setGrpVisible(grp, on){
+    const byCat=this.poisByCat();
+    Object.keys(byCat).filter(c=>catGrp(c)===grp && byCat[c].length)
+      .forEach(c=>this.applyCatVis(c, on));
+    this.savePrefs(); this.renderCategories(); this.renderNearby();
+  }
+  // Folding only hides the chips. It deliberately does NOT hide the pins: a group
+  // you collapsed is one whose controls you put away, not one you switched off.
+  toggleGrp(grp){
+    if(this.grpShut.has(grp)) this.grpShut.delete(grp); else this.grpShut.add(grp);
+    this.savePrefs(); this.renderCategories();
+  }
   renderCategories(){
     const el=this.$('features'); if(!el) return;
     const byCat=this.poisByCat();
+    const ordered=this.orderedCats(Object.keys(byCat)).filter(c=>byCat[c] && byCat[c].length);
     el.innerHTML='';
-    this.orderedCats(Object.keys(byCat)).forEach(cat=>{
-      const items=byCat[cat]; if(!items||!items.length) return;
-      const cfg=catCfg(cat), on=!this.catHidden.has(cat);
-      const chip=document.createElement('div');
-      chip.className='feat'+(on?'':' off'); chip.dataset.cat=cat;
-      chip.innerHTML='<span class="feat-grip" title="Drag to reorder" aria-hidden="true"></span>'
-        +'<label class="feat-tog"><input type="checkbox"'+(on?' checked':'')+'>'
-        +icon(cfg.icon,16)+'<span>'+esc(cfg.label)+'</span>'
-        +'<span class="feat-ct">'+items.length+'</span></label>';
-      chip.querySelector('input').addEventListener('change',ev=>{
-        if(ev.target.checked) this.catHidden.delete(cat); else this.catHidden.add(cat);
-        chip.classList.toggle('off',!ev.target.checked);
-        this.savePrefs(); this.renderNearby();
+    GRP_ORDER.forEach(grp=>{
+      const cats=ordered.filter(c=>catGrp(c)===grp);
+      if(!cats.length) return;   // OpenStreetMap hasn't been asked for yet
+      const gc=CAT_GRP[grp], shut=this.grpShut.has(grp);
+      const lit=cats.filter(c=>!this.catHidden.has(c)).length;
+      const n=cats.reduce((s,c)=>s+byCat[c].length,0);
+      const box=document.createElement('div');
+      box.className='feat-grp'+(shut?' shut':''); box.dataset.grp=grp;
+      box.innerHTML='<div class="fg-h">'
+        +'<button type="button" class="fg-fold" aria-expanded="'+(shut?'false':'true')+'"'
+        +' title="'+(shut?'Show':'Hide')+' these categories"></button>'
+        +'<label class="fg-tog"><input type="checkbox"'+(lit?' checked':'')+'>'
+        +'<span class="fg-nm">'+esc(gc.label)+'</span></label>'
+        +'<span class="fg-src">'+esc(gc.src)+'</span>'
+        +'<span class="fg-ct">'+lit+' of '+cats.length+' · '+n+'</span>'
+        +'</div><div class="feat-list"></div>';
+      const box2=box.querySelector('.fg-h input');
+      // Half-on is a real state and the box should say so rather than rounding to
+      // one of the two — it's the difference between "off" and "you hid four of six".
+      box2.indeterminate = lit>0 && lit<cats.length;
+      box2.addEventListener('change',ev=>this.setGrpVisible(grp, ev.target.checked));
+      box.querySelector('.fg-fold').addEventListener('click',()=>this.toggleGrp(grp));
+      const list=box.querySelector('.feat-list');
+      cats.forEach(cat=>{
+        const items=byCat[cat], cfg=catCfg(cat), on=!this.catHidden.has(cat);
+        const chip=document.createElement('div');
+        chip.className='feat'+(on?'':' off'); chip.dataset.cat=cat;
+        chip.innerHTML='<span class="feat-grip" title="Drag to reorder" aria-hidden="true"></span>'
+          +'<label class="feat-tog"><input type="checkbox"'+(on?' checked':'')+'>'
+          +icon(cfg.icon,16)+'<span>'+esc(cfg.label)+'</span>'
+          +'<span class="feat-ct">'+items.length+'</span></label>';
+        chip.querySelector('input').addEventListener('change',ev=>{
+          chip.classList.toggle('off',!ev.target.checked);
+          this.setCatVisible(cat, ev.target.checked);
+        });
+        // Its own group is the drag container, so a chip can't be dropped into the
+        // other source — the parent it sits under is a fact about where the data
+        // came from, not a preference.
+        this.wireCatDrag(chip, list);
+        list.appendChild(chip);
       });
-      this.wireCatDrag(chip);
-      el.appendChild(chip);
+      el.appendChild(box);
     });
   }
 
@@ -3036,9 +3347,12 @@ class TrailApp {
       document.addEventListener('pointercancel',up);
     });
   }
-  wireCatDrag(chip){
-    const el=this.$('features'); if(!el) return;
-    this.wireDrag(chip, el, '.feat', '.feat-grip', 'x', ()=>{
+  // Order stays one flat list across both groups even though the drag is confined to
+  // one: reading it back in DOM order keeps each group's run contiguous by
+  // construction, and render intersects by group anyway.
+  wireCatDrag(chip, list){
+    this.wireDrag(chip, list, '.feat', '.feat-grip', 'x', ()=>{
+      const el=this.$('features'); if(!el) return;
       this.catOrder=[...el.querySelectorAll('.feat')].map(c=>c.dataset.cat);
       this.savePrefs(); this.renderNearby();
     });
