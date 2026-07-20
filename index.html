@@ -29,6 +29,12 @@
      ═════════════════════════════════════════════════════════════════ */
   html,body{height:100%;margin:0}
   body{overflow:hidden;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}
+  /* Leaflet only marks tiles and markers unselectable, so a long press landed on the
+     zoom control's "+"/"\2212" glyphs and selected them — with the iOS callout on top.
+     Controls and buttons have no text worth selecting; popup copy (addresses, phone
+     numbers) is deliberately left out of this so it stays selectable. */
+  button,.leaflet-control,.leaflet-control a,.leaflet-bar a{
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .phone-app{height:100%;height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--color-bg)}
   .ic{display:block;flex:none}
 
