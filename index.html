@@ -447,6 +447,18 @@
     color:var(--color-neutral-500);background:transparent}
   .poi-page.is-off:hover{border-color:var(--color-divider);background:transparent}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
+  /* Shops/fuel/beds loader, on the Nearby screen where you look for them. A tinted
+     card so it reads as an action, not another filter, and it stays until loaded. */
+  .osm-band{background:var(--color-accent-100);border:1px solid var(--color-accent-200);
+    border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3)}
+  .osm-band-h{display:flex;align-items:center;gap:6px;font-family:var(--font-heading);
+    font-weight:var(--font-heading-weight);font-size:14px}
+  .osm-band-h .ic{color:var(--color-accent)}
+  .osm-band-note{font-size:11px;color:var(--color-neutral-700);line-height:1.5;margin:5px 0 var(--space-2)}
+  .osm-band .poi-band-view{margin-top:0;background:var(--color-bg)}
+  /* Loaded, the card goes quiet — it's a refresh now, not the headline of the screen. */
+  .osm-band.loaded{background:var(--color-surface);border-color:var(--color-divider)}
+  .osm-band.loaded .osm-band-note{display:none}
   /* Collapsible filter block. Closed by default so the list starts near the top;
      the summary carries a live state line so a filter can't be silently on. */
   .pop-zoom{font-family:inherit;font-size:inherit;font-weight:600;cursor:pointer;
@@ -683,6 +695,15 @@
       <div class="screen-pad">
         <h1 class="screen-title">Nearby</h1>
         <div id="poiStat" class="poi-stat"></div>
+        <!-- Shops, fuel and beds live one tap away, right here rather than buried in
+             More — this is the screen you are on when you want them. Its label flips
+             to "Refresh …" once loaded, and the button carries the state line. -->
+        <div class="osm-band">
+          <div class="osm-band-h"><span data-ic="cart"></span><span>Shops, fuel &amp; beds</span></div>
+          <p class="osm-band-note">The State’s pins are a trail layer — lock campsites and the canal museum, almost nothing about where you buy food. Pull the supermarkets, restaurants, convenience and dollar/big-box stores, gas and hotels within 5 mi of the route, 25 mi either side of you, from OpenStreetMap. A few seconds on a shared service.</p>
+          <button id="osmBtn" type="button" class="poi-band-view">Load them from OpenStreetMap</button>
+          <div id="osmStat" class="ul-stat"></div>
+        </div>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
         <details id="poiFilters" class="filters">
@@ -745,10 +766,6 @@
         <select id="simSel" class="input"><option value="">Choose a place…</option></select>
         <div class="set-lbl">Test locations</div>
         <div id="testRows" class="test-list"></div>
-        <div class="set-lbl">Shops, fuel and beds</div>
-        <button id="osmBtn" type="button" class="poi-band-view">Load them from OpenStreetMap</button>
-        <div id="osmStat" class="ul-stat"></div>
-        <p class="poi-band-note">The state’s own layer is a trail layer — it knows the lock campsites and the canal museum, and next to nothing about where you buy food. This asks OpenStreetMap for the supermarkets, restaurants and cafes, convenience stores, dollar and big-box shops, gas stations and hotels within 5 miles of the route, 25 miles either side of you, and folds them into Nearby and the map with everything else. Overpass is a shared public service and can take a few seconds.</p>
         <div class="set-lbl">Your own layers</div>
         <div class="poi-band">
           <label class="ul-lbl">ArcGIS layer URL

@@ -973,6 +973,7 @@ class TrailApp {
   /* ---------- controls ---------- */
   wireControls(){
     const ob=this.$('osmBtn'); if(ob) ob.addEventListener('click',()=>this.loadOsmPois());
+    this.syncOsmBtn();
     const ua=this.$('ulAdd'); if(ua) ua.addEventListener('click',()=>this.addArcgisLayer((this.$('ulUrl')||{}).value));
     const uu=this.$('ulUrl'); if(uu) uu.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); this.addArcgisLayer(uu.value); } });
     const ug=this.$('ulGpx'); if(ug) ug.addEventListener('change',e=>{
@@ -1809,10 +1810,19 @@ class TrailApp {
     this.osmAt=b.mile;
     this.osmBusy=false;
     this.rebuildPOIs();
+    this.syncOsmBtn();
     this.osmStatus(added
       ? added+' added from OpenStreetMap around TM '+fmtMp(b.mile)+' \u2014 shops, fuel and beds within 5 mi of the route.'
       : (near?'Nothing new here \u2014 the '+near+' places OpenStreetMap knows about were already on the list.'
              :'OpenStreetMap has nothing within 5 mi of the route just here.'));
+  }
+  /* Once anything is loaded the card stops being the headline and becomes a refresh:
+     the label says so, and the note \u2014 the pitch for a thing you have not done yet \u2014
+     drops away. */
+  syncOsmBtn(){
+    const loaded=this.POIS.some(p=>p.src==='osm');
+    const ob=this.$('osmBtn'); if(ob) ob.textContent=loaded?'Refresh from OpenStreetMap around you':'Load them from OpenStreetMap';
+    const band=ob?ob.closest('.osm-band'):null; if(band) band.classList.toggle('loaded',loaded);
   }
   // Name and position together: the same shop mapped twice, or listed by two
   // services, lands within a few metres of itself.
