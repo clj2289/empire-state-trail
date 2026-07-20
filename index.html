@@ -225,18 +225,33 @@
   .wx-k-h::before{background:#b3261e}
   .wx-k-l::before{background:#146c2e}
   .wx-k-c::before{background:var(--color-neutral-400)}
-  .wx-ic{background:none;border:0}
-  .wx-pin{display:flex;align-items:center;gap:3px;padding:2px 5px;white-space:nowrap;
-    font-family:var(--font-body);font-size:11px;font-weight:600;line-height:1;
-    background:var(--color-bg);border:1px solid currentColor;border-radius:999px;
-    box-shadow:var(--shadow-md);font-variant-numeric:tabular-nums}
-  .wx-arrow{display:inline-block;font-size:13px;line-height:1}
-  .wx-s{font-weight:700}
-  .wx-p{font-weight:400;opacity:.7}
+  /* The map's forecast: one dial per riding-hour, readable without a tap. */
+  .wx-ic{background:none;border:0;overflow:visible}
+  .wx-pin{display:flex;flex-direction:column;align-items:center;gap:1px;
+    font-family:var(--font-body);font-variant-numeric:tabular-nums}
+  .wxc{width:88px;overflow:hidden;background:var(--color-bg);
+    border:2px solid;border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
+  .wxc-hd{display:flex;align-items:center;justify-content:center;gap:5px;padding:3px 0 2px}
+  .wxc-hd .ic{color:var(--color-neutral-700)}
+  .wxc-hd b{font-size:19px;font-weight:700;line-height:1;color:var(--color-text)}
+  .wxc-w{display:flex;align-items:center;justify-content:center;gap:4px;padding:2px 0;
+    color:#fff;font-size:10px;font-weight:700;letter-spacing:.07em;line-height:1.3}
+  .wxc-w .ic{color:#fff}
+  .wxc-w b{font-size:11.5px;letter-spacing:0}
+  /* The popup: a label and a value per line, never a paragraph. */
+  .wxp{border-collapse:collapse;margin:5px 0 6px;font-size:12.5px}
+  .wxp th{text-align:left;padding:1px 10px 1px 0;font-weight:400;
+    color:var(--color-neutral-600);white-space:nowrap}
+  .wxp td{padding:1px 0}
+  .wxp-s{font-size:11px;color:var(--color-neutral-600)}
+  .wx-when{display:inline-flex;align-items:center;gap:3px;padding:1px 5px;
+    font-size:9.5px;font-weight:600;line-height:1.5;white-space:nowrap;
+    color:var(--color-neutral-700);background:var(--color-bg);
+    border:1px solid var(--color-divider);border-radius:999px;box-shadow:var(--shadow-sm)}
+  .wx-wet{font-style:normal;color:var(--color-accent-700)}
   .wx-head{color:#b3261e}
   .wx-tail{color:#146c2e}
   .wx-cross{color:var(--color-neutral-700)}
-  .wx-pin .wx-t{color:var(--color-text)}
   .sheet-wx{margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-700);
     font-variant-numeric:tabular-nums}
   /* Outlook */
@@ -499,6 +514,33 @@
     max-height:calc(100vh - 200px);overflow-y:auto}
   .leaflet-control-layers-selector{accent-color:var(--color-accent)}
   .leaflet-control-layers label{line-height:1.9;white-space:nowrap}
+  /* A draggable row: the grip sits outside the label, so a drag can't end in a toggle. */
+  .lyr-row{display:flex;align-items:center;gap:6px}
+  .lyr-row.dragging{opacity:.9;background:var(--color-accent-100);border-radius:var(--radius-md)}
+  .lyr-row label{flex:1;min-width:0}
+  .lyr-grip{flex:none;width:12px;height:16px;cursor:grab;touch-action:none;
+    background-image:radial-gradient(currentColor 1px,transparent 1px);background-size:4px 4px;
+    background-position:1px 3px;color:var(--color-neutral-400)}
+  .lyr-grip:active{cursor:grabbing}
+  /* Layers the rider brought: the form, the list of them, and their popups. */
+  .ul-lbl{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;
+    font-size:12px;color:var(--color-neutral-700)}
+  .ul-stat{font-size:11.5px;color:var(--color-neutral-600);margin-top:var(--space-2);min-height:1em}
+  .ul-list{margin-top:var(--space-2)}
+  .ul-row{display:flex;align-items:center;gap:7px;padding:6px 0;
+    border-bottom:1px solid var(--color-divider);font-size:12.5px}
+  .ul-dot{flex:none;width:10px;height:10px;border-radius:50%}
+  .ul-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ul-k{flex:none;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-500)}
+  .ul-x{flex:none;font-family:inherit;font-size:11px;cursor:pointer;padding:3px 7px;
+    background:transparent;color:var(--color-accent-700);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .ul-x:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .ul-tbl{border-collapse:collapse;margin-top:4px;font-size:11.5px}
+  .ul-tbl th{text-align:left;padding:1px 8px 1px 0;font-weight:600;
+    color:var(--color-neutral-600);white-space:nowrap;vertical-align:top}
+  .ul-tbl td{padding:1px 0;vertical-align:top}
+  .poi-src{margin-top:5px;font-size:10.5px;line-height:1.45;color:var(--color-neutral-600)}
   .leaflet-control-attribution{background:color-mix(in srgb,var(--color-bg) 82%,transparent);font-size:10px;color:var(--color-neutral-600)}
   .pa-lbl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:9px 0 5px}
   .pa-row{display:flex;flex-wrap:wrap;gap:4px}
@@ -509,6 +551,8 @@
   .poi-pin .ic{color:#fff;stroke-width:2.2}
   /* circleMarker dots: lift them off the map tiles */
   .map-dot{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
+  /* You: the blue dot, with the soft halo every phone map gives it. */
+  .me-dot{filter:drop-shadow(0 0 4px rgba(26,115,232,.55)) drop-shadow(0 1px 3px rgba(0,0,0,.35))}
 </style>
 </head>
 <body class="ds-broadsheet">
@@ -628,6 +672,24 @@
         <select id="simSel" class="input"><option value="">Choose a place…</option></select>
         <div class="set-lbl">Test locations</div>
         <div id="testRows" class="test-list"></div>
+        <div class="set-lbl">Shops, fuel and beds</div>
+        <button id="osmBtn" type="button" class="poi-band-view">Load them from OpenStreetMap</button>
+        <div id="osmStat" class="ul-stat"></div>
+        <p class="poi-band-note">The state’s own layer is a trail layer — it knows the lock campsites and the canal museum, and next to nothing about where you buy food. This asks OpenStreetMap for the supermarkets, restaurants and cafes, convenience stores, dollar and big-box shops, gas stations and hotels within 5 miles of the route, 25 miles either side of you, and folds them into Nearby and the map with everything else. Overpass is a shared public service and can take a few seconds.</p>
+        <div class="set-lbl">Your own layers</div>
+        <div class="poi-band">
+          <label class="ul-lbl">ArcGIS layer URL
+            <input id="ulUrl" type="url" class="input" inputmode="url" autocomplete="off"
+              placeholder="https://…/FeatureServer/0"></label>
+          <button id="ulAdd" type="button" class="poi-band-view">Add</button>
+        </div>
+        <div class="poi-band">
+          <label class="ul-lbl">Or a GPX file
+            <input id="ulGpx" type="file" accept=".gpx,application/gpx+xml,application/xml" class="input"></label>
+        </div>
+        <div id="ulStat" class="ul-stat"></div>
+        <div id="ulList" class="ul-list"></div>
+        <p class="poi-band-note">Anything you add turns up in the map’s layers control, off until you switch it on, and can be dragged into whatever order you want it drawn in. An ArcGIS URL is a single layer’s endpoint — the one ending in a number. It’s fetched over New York, up to 2,000 features, and stored as the URL so it stays current. A GPX is stored as its points, since there’s nowhere to fetch it back from.</p>
         <div id="locStatus" class="locstat">Tap Locate on the map, tap the map itself, or pick a simulated spot to set where you are.</div>
         <div class="about">
           Route and every trail-mile are measured along the official Empire State Trail GPX (Oct 2025). Facility pins load live from NY State's public service; confirm a specific business before relying on it.<br><br>

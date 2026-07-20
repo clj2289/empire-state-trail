@@ -87,6 +87,12 @@ const SHORE={
 // lives — the layers control links to it the same way the borrowed layers link to
 // theirs, because "where did this line come from" is the same question either way.
 const EST_SRC='https://empiretrail.ny.gov/import-instructions';
+/* The blue dot every phone map uses for "you". Simulated or off the GPS, it means
+   the same thing and so it looks the same — the dark accent it used to wear read as
+   one more piece of trail furniture. It rides in a pane of its own above the markers
+   so nothing can cover it: not a road line, not forty lodging pins, not a milepost.
+   Below the popup pane, though — a popup you cannot read is worse. */
+const ME_BLUE='#1a73e8', ME_PANE='mePane';
 
 /* ---- NYSDOT traffic counts -------------------------------------------------
    The AADT layer behind the state's Traffic Data Viewer: annual average daily
@@ -97,11 +103,18 @@ const EST_SRC='https://empiretrail.ny.gov/import-instructions';
 const AADT_URL='https://gis.dot.ny.gov/hostingny/rest/services/Roadways/Traffic_Monitoring/FeatureServer/1/query';
 const AADT_SRC='https://www.dot.ny.gov/tdv';
 const AADT_MINZ=10, AADT_CAP=400;
-// Bands as a bike feels them, not as a traffic engineer files them. The weights are
-// deliberately heavier than the route line: this layer is the answer to "which way
-// round do I go", and a hairline you have to hunt for cannot answer it.
-const AADT_BANDS=[[1000,'#2e7d32','quiet',4],[5000,'#c98a00','moderate',5],
-                  [15000,'#e06c00','busy',6.5],[Infinity,'#b3261e','heavy',8]];
+/* Bands as a bike feels them, not as a traffic engineer files them: five hundred
+   vehicles a day is where a road stops being empty, and fifteen hundred is where
+   most riders would rather be somewhere else. Everything above that is one colour,
+   because past the point you would avoid it, how much worse it gets is somebody
+   else's question. Weights run heavier than the route line — a hairline you have
+   to hunt for cannot answer "which way round do I go".
+   Each band carries two colours: the bright one is the line on the map, the dark
+   one is for type, because yellow that reads well as a 6px stroke is unreadable
+   as 10px text on white. */
+const AADT_BANDS=[[500,'#2e7d32','quiet',4,'#1b5e20'],
+                  [1500,'#f0b400','moderate',5.5,'#8a6100'],
+                  [Infinity,'#d32f2f','heavy',7,'#b3261e']];
 /* Zoomed out, the quiet streets are not what you are looking for and there is not
    the room to draw them anyway, so the floor rises with the scale — the same idea
    as the milepost interval. Where more is in view than will be drawn the busiest
@@ -185,23 +198,53 @@ const P = {
   lock:'M6 10V7a6 6 0 0 1 12 0v3|M5 10h14v10H5z',
   pin:'M12 21s-7-6-7-12a7 7 0 0 1 14 0c0 6-7 12-7 12Z|c12 9 2.5',
   search:'c10 10 6.5|M14.9 14.9L20 20',
+  food:'M7 3v7a2.5 2.5 0 0 0 5 0V3|M9.5 10.5V21|M17.5 3c1.6 1.3 2.5 3.2 2.5 5.2 0 1.9-.9 3.4-2.5 4V21',
+  // sky, in the five states a rider actually cares about
+  sun:'c12 12 4.3|M12 2.4v2.2|M12 19.4v2.2|M2.4 12h2.2|M19.4 12h2.2|M5.2 5.2l1.6 1.6|M17.2 17.2l1.6 1.6|M18.8 5.2l-1.6 1.6|M6.8 17.2l-1.6 1.6',
+  cloud:'M7.5 19h9.5a3.6 3.6 0 0 0 .4-7.18A5.6 5.6 0 0 0 6.5 10.4 4.3 4.3 0 0 0 7.5 19Z',
+  rain:'M7.5 16h9.5a3.6 3.6 0 0 0 .4-7.18A5.6 5.6 0 0 0 6.5 7.4 4.3 4.3 0 0 0 7.5 16Z|M8.5 18.5l-1 3|M12.5 18.5l-1 3|M16.5 18.5l-1 3',
+  snow:'M7.5 15h9.5a3.6 3.6 0 0 0 .4-7.18A5.6 5.6 0 0 0 6.5 6.4 4.3 4.3 0 0 0 7.5 15Z|M8 18.2l1.8 2|M9.8 18.2l-1.8 2|M14.2 18.2l1.8 2|M16 18.2l-1.8 2',
+  storm:'M7.5 15h9.5a3.6 3.6 0 0 0 .4-7.18A5.6 5.6 0 0 0 6.5 6.4 4.3 4.3 0 0 0 7.5 15Z|M13 17l-3.5 4.2h3L11.5 24',
+  fog:'M4 8h13|M6.5 12h13|M3.5 16h11|M7 20h12',
+  // and what the wind is doing to you, in the same three shapes the chart uses
+  whead:'M12 21V4|M5.5 10.5L12 4l6.5 6.5',
+  wtail:'M12 3v17|M5.5 13.5L12 20l6.5-6.5',
+  wcross:'M3 12h18|M7.5 6.5L2 12l5.5 5.5|M16.5 6.5L22 12l-5.5 5.5',
+  fuel:'M5 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16|M3.5 21h13|M7.5 8h5|M14 11h3a1.5 1.5 0 0 1 1.5 1.5v5a1.5 1.5 0 0 0 3 0V9.5L19 7',
+  cart:'M3 4h2l2.1 10.3a2 2 0 0 0 2 1.6h8a2 2 0 0 0 1.95-1.55L21 7.5H6.2|c9.5 19.5 1.3|c17.5 19.5 1.3',
   wind:'M3 8h10a3 3 0 1 0-3-3|M3 13h14a3 3 0 1 1-3 3|M3 18h7a2 2 0 1 1-2 2',
   // sun behind a cloud — the outlook tab, distinct from the plain wind glyph
   fcast:'M8.5 2.6v1.8|M3.6 4.6l1.3 1.3|M1.6 9.5h1.8|M13.4 4.6l-1.3 1.3|c8.5 9.5 3|M10 20h7.5a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8.6 11.4 4.3 4.3 0 0 0 10 20Z',
   chevR:'M9 6l6 6-6 6',
   chevL:'M15 6l-6 6 6 6'
 };
-function icon(name, size){
-  size = size || 20;
-  const spec = P[name]; if(!spec) return '';
-  const parts = spec.split('|').map(s=>{
+function iconInner(spec){
+  return spec.split('|').map(s=>{
     // "c<cx> <cy> <r>" — the cx rides on the 'c' with no space, so slice it off
     // rather than destructuring past it (that shifts every field and drops r).
     if(s[0]==='c'){ const t=s.split(' '); return '<circle cx="'+t[0].slice(1)+'" cy="'+t[1]+'" r="'+t[2]+'"/>'; }
     if(s[0]==='M'){ return '<path d="'+s+'"/>'; }
     return '';
   }).join('');
-  return '<svg class="ic" viewBox="0 0 24 24" width="'+size+'" height="'+size+'" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+parts+'</svg>';
+}
+function icon(name, size){
+  size = size || 20;
+  const spec = P[name]; if(!spec) return '';
+  return '<svg class="ic" viewBox="0 0 24 24" width="'+size+'" height="'+size+'" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+iconInner(spec)+'</svg>';
+}
+/* NWS writes the sky as a sentence. These are the five pictures worth drawing, and
+   the order matters: "Mostly Cloudy" is cloud, "Partly Sunny" is the sun behind one,
+   and only a plain "Sunny" or "Clear" gets the bare sun. */
+function skyIcon(t){
+  const s=String(t||'').toLowerCase();
+  if(/thunder|t-storm|squall/.test(s)) return 'storm';
+  if(/snow|flurr|sleet|ice|freezing|wintry/.test(s)) return 'snow';
+  if(/rain|shower|drizzle/.test(s)) return 'rain';
+  if(/fog|haze|mist|smoke/.test(s)) return 'fog';
+  if(/cloudy|overcast/.test(s) && !/partly|mostly sunny/.test(s)) return 'cloud';
+  if(/partly|mostly sunny|mostly clear|few clouds|scattered/.test(s)) return 'fcast';
+  if(/sunny|clear|fair/.test(s)) return 'sun';
+  return 'fcast';
 }
 
 /* ---- amenity categories inferred from stop text ---- */
@@ -218,6 +261,63 @@ const AMKEYS=['store','lodging','camp','rail'];
 const AMICON={store:'store',lodging:'bed',camp:'tent',rail:'train'};
 const AMQ={store:'grocery store supermarket',lodging:'hotel motel lodging',camp:'campground',rail:'train station'};
 function iconStrTxt(t){ const c=cats(t); return AMKEYS.filter(k=>c[k]).map(k=>({store:'resupply',lodging:'lodging',camp:'camping',rail:'rail'}[k])).join(' · '); }
+
+/* ---- layers the rider brings themselves ----
+   Two ways in, because these are the two things a trail is published as: an ArcGIS
+   layer endpoint, or a GPX. What is kept differs by kind and that is deliberate —
+   a service URL is four dozen bytes and always current, so it is stored and the
+   features are fetched again; a GPX has no address to go back to, so its points are
+   stored instead. Neither is drawn until the layer is switched on. */
+const USER_KEY='est-layers-v1';
+const USER_CAP=2000;
+const USER_BOX={xmin:-79.95,ymin:40.45,xmax:-73.15,ymax:45.05,spatialReference:{wkid:4326}};
+// Distinct from the trail's cyan and magenta, from the Shoreline's purple, and from
+// the four traffic bands — a borrowed layer should not read as one of ours.
+const USER_COLORS=['#00838f','#ad1457','#5d4037','#3949ab','#00695c','#bf360c'];
+/* Servers older than 10.4 have never heard of GeoJSON and answer in Esri's own
+   shape. It is the same information: a point is x/y, a line is paths, a polygon is
+   rings — the ring winding differs from GeoJSON's but nothing here depends on it. */
+function esriToGeo(j){
+  return (j.features||[]).map(f=>{
+    const g=f.geometry||{};
+    const geom = g.x!=null ? {type:'Point',coordinates:[g.x,g.y]}
+      : g.paths ? {type:'MultiLineString',coordinates:g.paths}
+      : g.rings ? {type:'Polygon',coordinates:g.rings} : null;
+    return geom ? {type:'Feature',geometry:geom,properties:f.attributes||{}} : null;
+  }).filter(Boolean);
+}
+/* A GPX is a track, a route, or a pile of waypoints, and plenty of files are more
+   than one of those. All three are read: the lines get drawn as lines and the loose
+   waypoints as points, which is what the file is saying they are. */
+function parseGpx(text){
+  const doc=new DOMParser().parseFromString(text,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('that file isn\u2019t readable XML');
+  const ll=n=>[+n.getAttribute('lat'), +n.getAttribute('lon')];
+  const good=p=>isFinite(p[0]) && isFinite(p[1]) && abs(p[0])<=90 && abs(p[1])<=180;
+  const lines=[];
+  ['trkseg','rte'].forEach(tag=>{
+    [].slice.call(doc.getElementsByTagName(tag)).forEach(seg=>{
+      const pts=[].slice.call(seg.getElementsByTagName(tag==='rte'?'rtept':'trkpt')).map(ll).filter(good);
+      if(pts.length>1) lines.push(pts);
+    });
+  });
+  const wpts=[].slice.call(doc.getElementsByTagName('wpt')).map(n=>{
+    const p=ll(n); if(!good(p)) return null;
+    const nm=n.getElementsByTagName('name')[0];
+    return {lat:p[0], lng:p[1], name:nm?nm.textContent:''};
+  }).filter(Boolean);
+  const nm=doc.getElementsByTagName('name')[0];
+  if(!lines.length && !wpts.length) throw new Error('no track, route or waypoints in it');
+  return {name:nm?nm.textContent.trim():'', lines, wpts};
+}
+
+// The forecast office's own page for a point: the discussion, the radar and the
+// warnings, none of which fit on a dial.
+// "an 8am start", "an 11am start", "a 9am start" — spoken, not spelled.
+const aOrAn = w => (/^(8|11|18)/.test(String(w)) ? 'an ' : 'a ') + w;
+function nwsLink(lat,lng){
+  return 'https://forecast.weather.gov/MapClick.php?lat='+lat.toFixed(4)+'&lon='+lng.toFixed(4);
+}
 
 /* ---- finding a place ----
    Two questions wear the same box. A pair of numbers is answered here and offline:
@@ -392,19 +492,58 @@ async function fetchSource(src){
   }
   return feats;
 }
+/* ---- shops, fuel and beds, out of OpenStreetMap ----
+   The state's own layer is a trail layer: it knows about lock camping and the canal
+   museum, and almost nothing about where you buy food. OSM knows, because somebody
+   who lives there put it in. These come in as ordinary POIs — same distances, same
+   Nearby list, same saved rates — with their source recorded, because a volunteer
+   map and a state asset register deserve different amounts of trust when you are
+   deciding whether to ride nine miles for a shower.
+   Fetched only when asked for: Overpass is a shared public service that takes its
+   time, and a corridor of this length would be an unkind thing to ask it for in the
+   background. A window around wherever you are is the unit. */
+const OSM_EPS=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
+const OSM_WIN=25;                 // miles either way along the route
+const OSM_TAGS=[
+  ['tourism','^(hotel|motel|guest_house|hostel)$','Lodging'],
+  ['shop','^(supermarket|grocery|greengrocer)$','Groceries'],
+  ['shop','^(convenience|general)$','Convenience'],
+  ['shop','^(variety_store|department_store|wholesale)$','General store'],
+  ['amenity','^(restaurant|fast_food|cafe|pub|bar|ice_cream)$','Food'],
+  ['amenity','^(fuel)$','Fuel']
+];
+function osmCat(t){
+  if(!t) return '';
+  for(let i=0;i<OSM_TAGS.length;i++){
+    const v=t[OSM_TAGS[i][0]];
+    if(v && new RegExp(OSM_TAGS[i][1]).test(v)) return OSM_TAGS[i][2];
+  }
+  return '';
+}
+// House number and street are separate tags in OSM, and a phone is spelled two ways.
+function osmAddr(t){
+  const line=[t['addr:housenumber'],t['addr:street']].filter(Boolean).join(' ');
+  return [line, t['addr:city'], t['addr:state'], t['addr:postcode']].filter(Boolean).join(', ');
+}
 const CATCFG={
   'Lock camping':{icon:'lock',label:'Lock camping'},
   'Campground':{icon:'tent',label:'Campgrounds'},
   'Lodging':{icon:'bed',label:'Lodging'},
   'Attraction':{icon:'star',label:'Attractions'},
   'Train Station':{icon:'train',label:'Train stations'},
+  'Groceries':{icon:'cart',label:'Groceries'},
+  'Food':{icon:'food',label:'Food'},
+  'Convenience':{icon:'store',label:'Convenience'},
+  'General store':{icon:'store',label:'Dollar / big box'},
+  'Fuel':{icon:'fuel',label:'Fuel / gas'},
   'Restroom':{icon:'drop',label:'Restrooms / water'},
   'Parking Area':{icon:'park',label:'Parking'}
 };
 const CAT_DEFAULT={'Lock camping':true,'Campground':true,'Lodging':true};
 /* Fallback order for the Nearby groups — a rider who hasn't dragged anything yet
    gets sleeping options first, sightseeing after, logistics last. */
-const CAT_ORDER=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area'];
+const CAT_ORDER=['Lock camping','Campground','Lodging','Food','Groceries','Convenience','General store','Fuel',
+                 'Attraction','Train Station','Restroom','Parking Area'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
 
@@ -435,6 +574,10 @@ class TrailApp {
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.mileLayer=null; this.mileSig='';
+    // Overlays by key, the order they were registered in, and the order the rider
+    // has dragged them into — the last of these is the only one that is saved.
+    this.lyrByKey={}; this.lyrKeyById={}; this.lyrSeq=[]; this.lyrOrder=[];
+    this.userLayers=[]; this.wxAt0=null; this.wxPanT=null;
     this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
@@ -453,6 +596,7 @@ class TrailApp {
   init(){
     this.loadPrefs();
     this.loadPrices();
+    this.loadUserLayers();
     this.buildDropdowns();
     this.buildTestRows();
     this.wireTabs();
@@ -496,6 +640,7 @@ class TrailApp {
     // types we don't hardcode. Render intersects with what actually arrived, so a
     // retired key is inert rather than needing pruning here.
     if(Array.isArray(p.catOrder)) this.catOrder=p.catOrder.filter(c=>typeof c==='string');
+    if(Array.isArray(p.lyrOrder)) this.lyrOrder=p.lyrOrder.filter(c=>typeof c==='string');
     if(Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     this.renderDirLabels();
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
@@ -513,7 +658,7 @@ class TrailApp {
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxDays:this.wxDays,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
-      catOrder:this.catOrder,catHidden:[...this.catHidden]})); }catch(e){}
+      catOrder:this.catOrder,catHidden:[...this.catHidden],lyrOrder:this.lyrOrder})); }catch(e){}
   }
   /* Summary shown on the collapsed header. A filter you can't see is a filter you
      forget you set, so the closed state has to say when something is narrowing. */
@@ -718,6 +863,14 @@ class TrailApp {
 
   /* ---------- controls ---------- */
   wireControls(){
+    const ob=this.$('osmBtn'); if(ob) ob.addEventListener('click',()=>this.loadOsmPois());
+    const ua=this.$('ulAdd'); if(ua) ua.addEventListener('click',()=>this.addArcgisLayer((this.$('ulUrl')||{}).value));
+    const uu=this.$('ulUrl'); if(uu) uu.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); this.addArcgisLayer(uu.value); } });
+    const ug=this.$('ulGpx'); if(ug) ug.addEventListener('change',e=>{
+      const f=e.target.files && e.target.files[0];
+      this.addGpxLayer(f); e.target.value='';
+    });
+    document.addEventListener('click',e=>{ const x=e.target.closest('.ul-x'); if(x) this.removeUserLayer(x.dataset.ul); });
     document.addEventListener('click',e=>{ if(e.target.closest('.dir-toggle')) this.flipDir(); });
     const tr=this.$('showTrip'); if(tr) tr.addEventListener('change',e=>{ this.showTrip=e.target.checked; this.savePrefs(); this.applyTripTab(); });
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
@@ -896,7 +1049,9 @@ class TrailApp {
     if(this.map){ const ll=[lat,lng];
       // dark fill, not --color-accent: that's the Hudson Valley stop color, so
       // "you are here" used to blend into the very dots it should stand out from
-      if(!this.myMarker){ this.myMarker=L.circleMarker(ll,{radius:9,weight:3,color:'#fff',fillColor:getComputedStyle(document.body).getPropertyValue('--color-accent-900').trim()||'#0a303e',fillOpacity:1,className:'map-dot'}).addTo(this.map).bindPopup('You are here'); }
+      if(!this.myMarker){ this.myMarker=L.circleMarker(ll,{pane:this.map.getPane(ME_PANE)?ME_PANE:undefined,
+        radius:8,weight:3,color:'#fff',fillColor:ME_BLUE,fillOpacity:1,className:'me-dot'})
+        .addTo(this.map).bindPopup('You are here'); }
       else this.myMarker.setLatLng(ll);
       this.map.setView(ll, Math.max(this.map.getZoom(),10));
     }
@@ -1334,6 +1489,383 @@ class TrailApp {
     if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
   }
 
+  /* ---------- shops and fuel from OpenStreetMap ---------- */
+  /* A window along the route rather than a box around the map: what you want is
+     what you will ride past, and at this zoom the two are not the same thing. */
+  osmWindow(){
+    const mile=this.wxAnchorMile();
+    if(mile==null) return null;
+    const a=Math.max(0,mile-OSM_WIN), b=Math.min(TOTAL,mile+OSM_WIN);
+    let s=90,w=180,n=-90,e=-180;
+    for(let m=a;m<=b;m+=1){
+      const p=this.milePoint(m);
+      if(p[0]<s)s=p[0]; if(p[0]>n)n=p[0]; if(p[1]<w)w=p[1]; if(p[1]>e)e=p[1];
+    }
+    // A tenth of a degree of margin is about the five miles off-route we keep anyway.
+    return {s:s-0.09, w:w-0.11, n:n+0.09, e:e+0.11, mile};
+  }
+  osmQuery(b){
+    const box='('+b.s.toFixed(4)+','+b.w.toFixed(4)+','+b.n.toFixed(4)+','+b.e.toFixed(4)+')';
+    const parts=OSM_TAGS.map(t=>'nwr["'+t[0]+'"~"'+t[1]+'"]'+box+';').join('');
+    // 'center' so a supermarket mapped as a building comes back as a point like the
+    // rest; without it a way arrives with no coordinates at all.
+    return '[out:json][timeout:90];('+parts+');out center tags;';
+  }
+  async osmFetch(q){
+    let err=null;
+    for(let i=0;i<OSM_EPS.length;i++){
+      try{
+        const r=await fetch(OSM_EPS[i],{method:'POST',body:'data='+encodeURIComponent(q),
+          headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        const j=await r.json();
+        return j.elements||[];
+      }catch(e){ err=e; }          // the main endpoint is busy often enough to be worth a mirror
+    }
+    throw err||new Error('no answer');
+  }
+  /* Merged into the same list the state's POIs live in, so every distance, the
+     Nearby ordering, the saved rates and the popups all work without knowing where
+     a pin came from. Only the popup says, because that is where it matters. */
+  async loadOsmPois(){
+    if(this.osmBusy) return;
+    const b=this.osmWindow();
+    if(!b){ this.osmStatus('That needs a position on the trail first \u2014 locate yourself, or tap the map.'); return; }
+    this.osmBusy=true;
+    this.osmStatus('Asking OpenStreetMap about the '+(OSM_WIN*2)+' miles around you. It can take a few seconds\u2026');
+    let els;
+    try{ els=await this.osmFetch(this.osmQuery(b)); }
+    catch(e){
+      this.osmBusy=false;
+      this.osmStatus('No answer from OpenStreetMap just now. Nothing else is affected \u2014 try again in a minute.');
+      return;
+    }
+    const have={};
+    this.POIS.forEach(p=>{ have[this.osmKey(p.name,p.lat,p.lng)]=1; });
+    let added=0, near=0;
+    els.forEach(el=>{
+      const t=el.tags||{};
+      const cat=osmCat(t); if(!cat) return;
+      const lat = el.lat!=null?el.lat:(el.center?el.center.lat:null);
+      const lng = el.lon!=null?el.lon:(el.center?el.center.lon:null);
+      if(lat==null||lng==null) return;
+      const pr=projectRoute(lat,lng);
+      if(pr.off>5) return;
+      near++;
+      // A name is how a rider recognises the place; an unnamed pump is still a pump.
+      const name=t.name || t.brand || t.operator || cat;
+      const k=this.osmKey(name,lat,lng);
+      if(have[k]) return;
+      have[k]=1;
+      this.POIS.push({asset:cat, name, sub:t.brand&&t.brand!==name?t.brand:'',
+        addr:osmAddr(t), phone:t.phone||t['contact:phone']||'',
+        url:t.website||t['contact:website']||'', src:'osm', osmId:el.type+'/'+el.id,
+        lat, lng, mile:pr.mile, off:pr.off});
+      added++;
+    });
+    this.POIS.forEach((p,i)=>{ p.i=i; });
+    this.osmAt=b.mile;
+    this.osmBusy=false;
+    this.rebuildPOIs();
+    this.osmStatus(added
+      ? added+' added from OpenStreetMap around TM '+fmtMp(b.mile)+' \u2014 shops, fuel and beds within 5 mi of the route.'
+      : (near?'Nothing new here \u2014 the '+near+' places OpenStreetMap knows about were already on the list.'
+             :'OpenStreetMap has nothing within 5 mi of the route just here.'));
+  }
+  // Name and position together: the same shop mapped twice, or listed by two
+  // services, lands within a few metres of itself.
+  osmKey(name,lat,lng){ return String(name||'').toLowerCase()+'@'+lat.toFixed(4)+','+lng.toFixed(4); }
+  osmStatus(m){ const el=this.$('osmStat'); if(el) el.textContent=m; }
+  /* Layers are rebuilt rather than added to: a category that gained pins needs its
+     count redrawn, and Leaflet has no way to change a row's label in place. Layers
+     that were switched on stay on. */
+  rebuildPOIs(){
+    if(!this.map) return;
+    const on={};
+    Object.keys(this.poiLayers).forEach(a=>{
+      on[a]=this.map.hasLayer(this.poiLayers[a]);
+      this.unregLayer('poi:'+a);
+    });
+    this.poiLayers={}; this.poiMarker={};
+    this.buildPOILayers(on);
+    this.buildWxDest(); this.renderNext(); this.renderCategories(); this.renderNearby();
+    this.renderFilterState && this.renderFilterState();
+  }
+
+  /* ---------- layers the rider adds ---------- */
+  loadUserLayers(){
+    try{ const v=JSON.parse(localStorage.getItem(USER_KEY)||'[]');
+      if(Array.isArray(v)) this.userLayers=v.filter(r=>r&&r.id&&r.kind); }catch(e){}
+  }
+  /* Only the fields that describe the layer. The record also carries the live
+     Leaflet group once it is registered, and that has a reference to the map, which
+     has a reference to every layer on it — stringifying that throws on the circular
+     structure, and the failure would have surfaced as "no room to remember it". */
+  saveUserLayers(){
+    const keep=this.userLayers.map(r=>{
+      const o={id:r.id, kind:r.kind, name:r.name, color:r.color};
+      if(r.url) o.url=r.url;
+      if(r.lines) o.lines=r.lines;
+      if(r.wpts && r.wpts.length) o.wpts=r.wpts;
+      return o;
+    });
+    try{ localStorage.setItem(USER_KEY, JSON.stringify(keep)); return true; }
+    catch(e){ return false; }        // out of room — the caller says so rather than lying
+  }
+  userColor(){ return USER_COLORS[this.userLayers.length % USER_COLORS.length]; }
+  /* The layer's own endpoint, which is the one ending in a number. Anything else —
+     the service root, the portal item page, a query someone copied out of a browser
+     — is a URL that cannot answer a query, so it is refused by name rather than
+     failing later with something unhelpful about JSON. */
+  arcgisBase(u){
+    const s=String(u||'').trim().split('?')[0].replace(/\/+$/,'').replace(/\/query$/i,'');
+    return /\/(FeatureServer|MapServer)\/\d+$/i.test(s) ? s : '';
+  }
+  async arcgisName(base){
+    try{
+      const r=await fetch(base+'?f=json');
+      const j=r.ok?await r.json():null;
+      if(j && j.name) return String(j.name);
+    }catch(e){}
+    return base.split('/').slice(-3).join('/');
+  }
+  async arcgisFeatures(base){
+    const p=new URLSearchParams({where:'1=1', outFields:'*', outSR:'4326', returnGeometry:'true',
+      geometry:JSON.stringify(USER_BOX), geometryType:'esriGeometryEnvelope', inSR:'4326',
+      spatialRel:'esriSpatialRelIntersects', geometryPrecision:'5',
+      resultRecordCount:String(USER_CAP), f:'geojson'});
+    let r=await fetch(base+'/query?'+p.toString());
+    let j=r.ok ? await r.json() : null;
+    if(j && !j.error && j.features) return j.features;
+    p.set('f','json');
+    r=await fetch(base+'/query?'+p.toString());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    j=await r.json();
+    if(j.error) throw new Error(j.error.message||'the service refused the query');
+    return esriToGeo(j);
+  }
+  async addArcgisLayer(url){
+    const base=this.arcgisBase(url);
+    if(!base){ this.userStatus('That needs to be a single layer\u2019s URL \u2014 the one ending in a number, like \u2026/FeatureServer/0.'); return; }
+    if(this.userLayers.some(r=>r.url===base)){ this.userStatus('That layer is already on the list.'); return; }
+    this.userStatus('Asking the service what it holds\u2026');
+    const name=await this.arcgisName(base);
+    const rec={id:'u'+Date.now(), kind:'arcgis', url:base, name, color:this.userColor()};
+    this.userLayers.push(rec);
+    if(!this.saveUserLayers()) this.userStatus('Added, but there wasn\u2019t room to remember it past this session.');
+    else this.userStatus('Added \u201c'+name+'\u201d. Switch it on in the map\u2019s layers control.');
+    this.registerUserLayer(rec);
+    this.renderUserLayers();
+    const inp=this.$('ulUrl'); if(inp) inp.value='';
+  }
+  async addGpxLayer(file){
+    if(!file) return;
+    this.userStatus('Reading '+file.name+'\u2026');
+    let g;
+    try{ g=parseGpx(await file.text()); }
+    catch(e){ this.userStatus('Couldn\u2019t read '+file.name+' \u2014 '+e.message+'.'); return; }
+    const rec={id:'u'+Date.now(), kind:'gpx', name:g.name||file.name.replace(/\.gpx$/i,''),
+      color:this.userColor(), lines:g.lines, wpts:g.wpts};
+    this.userLayers.push(rec);
+    const n=g.lines.reduce((a,l)=>a+l.length,0);
+    if(!this.saveUserLayers()){
+      // Better to draw it now and say it won't survive than to refuse the file.
+      this.userStatus('Drawn, but '+file.name+' is too big to keep \u2014 it will be gone on reload.');
+    } else this.userStatus('Added \u201c'+rec.name+'\u201d: '+n+' points'
+      +(g.wpts.length?' and '+g.wpts.length+' waypoints':'')+'. Switch it on in the layers control.');
+    this.registerUserLayer(rec);
+    this.renderUserLayers();
+  }
+  removeUserLayer(id){
+    const rec=this.userLayers.find(r=>r.id===id); if(!rec) return;
+    this.userLayers=this.userLayers.filter(r=>r.id!==id);
+    this.saveUserLayers();
+    this.unregLayer('user:'+id);
+    this.renderUserLayers();
+    this.userStatus('Removed \u201c'+rec.name+'\u201d.');
+  }
+  userStatus(msg){ const el=this.$('ulStat'); if(el) el.textContent=msg; }
+  /* Registered empty and filled on first switch-on, the same bargain the Shoreline
+     and the traffic counts make: a layer you have not asked to see costs nothing. */
+  registerUserLayer(rec){
+    if(!this.layersCtl) return;
+    const g=L.layerGroup();
+    rec._layer=g; rec._drawn=false;
+    this.regLayer('user:'+rec.id, g,
+      esc(rec.name)+' <span class="lyr-ct">'+(rec.kind==='gpx'?'GPX':'ArcGIS')+'</span>');
+    if(this.map) this.map.on('overlayadd', e=>{ if(e.layer===g) this.fillUserLayer(rec); });
+  }
+  async fillUserLayer(rec){
+    if(rec._drawn) return;
+    rec._drawn=true;
+    if(rec.kind==='gpx'){ this.drawUserGeom(rec, rec.lines, rec.wpts); return; }
+    this.status('Reading \u201c'+rec.name+'\u201d from ArcGIS\u2026');
+    let feats;
+    try{ feats=await this.arcgisFeatures(rec.url); }
+    catch(e){
+      rec._drawn=false;
+      this.status('Couldn\u2019t read \u201c'+rec.name+'\u201d \u2014 '+e.message+'.');
+      return;
+    }
+    const n=this.drawUserFeats(rec, feats);
+    this.status('\u201c'+rec.name+'\u201d: '+n+' feature'+(n===1?'':'s')
+      +(feats.length>=USER_CAP?' (the first '+USER_CAP+' \u2014 there are more)':'')+'.');
+  }
+  drawUserGeom(rec, lines, wpts){
+    const g=rec._layer, col=rec.color, pane=this.lyrPane('user:'+rec.id);
+    (lines||[]).forEach(l=>L.polyline(l,{pane,color:col,weight:4,opacity:.9}).addTo(g));
+    (wpts||[]).forEach(p=>L.circleMarker([p.lat,p.lng],{pane,radius:5,weight:2,color:'#fff',
+      fillColor:col,fillOpacity:1}).bindPopup(esc(p.name||'Waypoint')).addTo(g));
+    this.applyLyrOrder();
+  }
+  drawUserFeats(rec, feats){
+    const g=rec._layer, col=rec.color, pane=this.lyrPane('user:'+rec.id);
+    let n=0;
+    feats.forEach(f=>{
+      const gm=f.geometry||{}, pr=f.properties||{};
+      const pop=()=>this.userPopup(rec, pr);
+      const line=ll=>{ if(ll.length>1){ L.polyline(ll,{pane,color:col,weight:3.5,opacity:.9}).bindPopup(pop).addTo(g); n++; } };
+      const flip=path=>path.map(c=>[c[1],c[0]]);
+      if(gm.type==='Point'){
+        const c=gm.coordinates||[];
+        if(isFinite(c[0])&&isFinite(c[1])){
+          L.circleMarker([c[1],c[0]],{pane,radius:5,weight:2,color:'#fff',fillColor:col,fillOpacity:1})
+            .bindPopup(pop).addTo(g); n++;
+        }
+      }
+      else if(gm.type==='LineString') line(flip(gm.coordinates||[]));
+      else if(gm.type==='MultiLineString') (gm.coordinates||[]).forEach(p=>line(flip(p)));
+      else if(gm.type==='Polygon'||gm.type==='MultiPolygon'){
+        const rings = gm.type==='Polygon' ? [gm.coordinates] : gm.coordinates;
+        rings.forEach(poly=>{
+          const ll=(poly||[]).map(flip);
+          if(ll.length && ll[0].length>2){
+            L.polygon(ll,{pane,color:col,weight:2,opacity:.9,fillOpacity:.12}).bindPopup(pop).addTo(g); n++;
+          }
+        });
+      }
+    });
+    this.applyLyrOrder();
+    return n;
+  }
+  /* Whatever the layer happens to carry, since we cannot know which of its fields
+     matters to you. Trimmed to a dozen so a table of forty internal ID columns does
+     not fill the screen, and empties dropped because they say nothing. */
+  userPopup(rec, pr){
+    const keys=Object.keys(pr||{}).filter(k=>pr[k]!=null && pr[k]!=='' && !/^(objectid|globalid|shape[_.])/i.test(k));
+    let h='<b>'+esc(rec.name)+'</b>';
+    if(!keys.length) return h+'<br><span style="opacity:.65">No attributes on this one.</span>';
+    h+='<table class="ul-tbl">'+keys.slice(0,12).map(k=>
+      '<tr><th>'+esc(k)+'</th><td>'+esc(String(pr[k]))+'</td></tr>').join('')+'</table>';
+    if(keys.length>12) h+='<span style="opacity:.65">and '+(keys.length-12)+' more fields</span>';
+    return h;
+  }
+  renderUserLayers(){
+    const el=this.$('ulList'); if(!el) return;
+    if(!this.userLayers.length){ el.innerHTML=''; return; }
+    el.innerHTML=this.userLayers.map(r=>
+      '<div class="ul-row"><span class="ul-dot" style="background:'+r.color+'"></span>'
+      +'<span class="ul-nm">'+esc(r.name)+'</span>'
+      +'<span class="ul-k">'+(r.kind==='gpx'?'GPX':'ArcGIS')+'</span>'
+      +'<button type="button" class="ul-x" data-ul="'+esc(r.id)+'">Remove</button></div>').join('');
+  }
+
+  /* ---------- the layers control ---------- */
+  /* Overlays are registered here rather than handed straight to Leaflet, because a
+     control you can drag needs a name for each row that outlives the page: layer
+     objects don't survive a reload and the labels carry counts that change. */
+  regLayer(key,layer,label){
+    if(!this.layersCtl) return layer;
+    this.lyrPane(key);          // so the order has something to set, even if empty
+    this.lyrByKey[key]=layer;
+    this.lyrKeyById[L.Util.stamp(layer)]=key;
+    if(this.lyrSeq.indexOf(key)<0) this.lyrSeq.push(key);
+    this.layersCtl.addOverlay(layer,label);
+    this.decorateLayers();
+    return layer;
+  }
+  unregLayer(key){
+    const l=this.lyrByKey[key]; if(!l) return;
+    if(this.map && this.map.hasLayer(l)) this.map.removeLayer(l);
+    if(this.layersCtl) this.layersCtl.removeLayer(l);
+    delete this.lyrKeyById[L.Util.stamp(l)];
+    delete this.lyrByKey[key];
+    this.lyrSeq=this.lyrSeq.filter(k=>k!==key);
+    this.lyrOrder=this.lyrOrder.filter(k=>k!==key);
+    this.savePrefs(); this.decorateLayers();
+  }
+  /* One pane per overlay. bringToFront was never going to be enough: it shuffles a
+     layer within its own pane, and Leaflet puts every marker in one pane and every
+     vector in another — so dragging the weather above lodging moved nothing, because
+     both are markers and L.Marker has no bringToFront to call in the first place.
+     With a pane each, the dragged order is just a list of z-indexes. */
+  lyrPaneName(key){ return 'lyr-'+String(key).replace(/[^A-Za-z0-9]+/g,'_'); }
+  lyrPane(key){
+    const m=this.map;
+    if(!m || !m.createPane || !m.getPane) return undefined;
+    const nm=this.lyrPaneName(key);
+    if(!m.getPane(nm)){ const p=m.createPane(nm); if(p) p.style.zIndex='600'; }
+    return nm;
+  }
+  // Dragged order first, then anything registered since, in the order it arrived.
+  lyrOrderList(){
+    const seen={}, out=[];
+    this.lyrOrder.forEach(k=>{ if(this.lyrByKey[k] && !seen[k]){ seen[k]=1; out.push(k); } });
+    this.lyrSeq.forEach(k=>{ if(!seen[k]){ seen[k]=1; out.push(k); } });
+    return out;
+  }
+  /* Leaflet rebuilds the overlay list from scratch on every addOverlay, so the grips
+     and the order are re-applied afterwards rather than set up once. Each row is
+     wrapped so the grip sits outside the label — inside it, a drag would toggle the
+     layer on pointerup. */
+  decorateLayers(){
+    const ctl=this.layersCtl;
+    const box=ctl && ctl._container ? ctl._container.querySelector('.leaflet-control-layers-overlays') : null;
+    if(!box) return;
+    [].slice.call(box.children).forEach(node=>{
+      if(node.tagName!=='LABEL') return;
+      const inp=node.querySelector('input');
+      const key=inp ? this.lyrKeyById[inp.layerId] : null;
+      if(!key) return;
+      const row=document.createElement('div');
+      row.className='lyr-row'; row.dataset.lyr=key;
+      const grip=document.createElement('span');
+      grip.className='lyr-grip'; grip.title='Drag to reorder'; grip.setAttribute('aria-hidden','true');
+      box.insertBefore(row,node);
+      row.appendChild(grip); row.appendChild(node);
+      this.wireDrag(row, box, '.lyr-row', '.lyr-grip', 'y', ()=>{
+        this.lyrOrder=[].slice.call(box.querySelectorAll('.lyr-row')).map(r=>r.dataset.lyr);
+        this.savePrefs(); this.applyLyrOrder();
+      });
+    });
+    this.lyrOrderList().forEach(k=>{
+      const r=box.querySelector('.lyr-row[data-lyr="'+k+'"]');
+      if(r) box.appendChild(r);
+    });
+    this.applyLyrOrder();
+  }
+  /* Top of the list gets the highest pane, so it draws over everything below it —
+     pins as well as lines, which is the whole point. The band runs under the "you
+     are here" pane at 655 and well over Leaflet's own overlay pane at 400, and it
+     is clamped so a very long list cannot walk out the bottom of it.
+     A layer whose pane never got made (an older map, or a stub) falls back to
+     bringToFront from the bottom up, which is right for lines and does nothing for
+     markers — the same as before, but now only in the case that cannot be helped. */
+  applyLyrOrder(){
+    const ord=this.lyrOrderList(), m=this.map, loose=[];
+    ord.forEach((k,i)=>{
+      const p=(m&&m.getPane)?m.getPane(this.lyrPaneName(k)):null;
+      if(p) p.style.zIndex=String(Math.max(410, 640-i*4));
+      else loose.push(k);
+    });
+    for(let i=loose.length-1;i>=0;i--){
+      const l=this.lyrByKey[loose[i]];
+      if(!l) continue;
+      if(l.bringToFront) l.bringToFront();
+      else if(l.eachLayer) l.eachLayer(x=>{ if(x.bringToFront) x.bringToFront(); });
+    }
+  }
+
   /* ---------- find a place ---------- */
   openFind(){
     const f=this.$('mapFind'), q=this.$('findQ');
@@ -1478,8 +2010,9 @@ class TrailApp {
     for(let i=0;i<AADT_FLOOR.length;i++) if(z>=AADT_FLOOR[i][0]) return AADT_FLOOR[i][1];
     return AADT_FLOOR[AADT_FLOOR.length-1][1];
   }
+  // Inclusive at the top of each band, because "over 500 is yellow" means 500 is not.
   aadtBand(v){
-    for(let i=0;i<AADT_BANDS.length;i++) if(v<AADT_BANDS[i][0]) return AADT_BANDS[i];
+    for(let i=0;i<AADT_BANDS.length;i++) if(v<=AADT_BANDS[i][0]) return AADT_BANDS[i];
     return AADT_BANDS[AADT_BANDS.length-1];
   }
   // 430, 3.2k, 89k — a count read at a glance, not audited.
@@ -1548,7 +2081,7 @@ class TrailApp {
       paths.forEach(path=>{
         if(!path || path.length<2) return;
         const ll=path.map(c=>[c[1],c[0]]);
-        const ln=L.polyline(ll,{color:band[1],weight:band[3],opacity:.85,className:'aadt-ln'});
+        const ln=L.polyline(ll,{pane:this.lyrPane('aadt'),color:band[1],weight:band[3],opacity:.85,className:'aadt-ln'});
         ln.bindPopup('',{maxWidth:250,autoPan:false});
         ln.on('popupopen',()=>ln.setPopupContent(this.aadtPopup(pr)));
         ln.addTo(g);
@@ -1558,6 +2091,7 @@ class TrailApp {
         name:String(pr.RoadwayName||pr.RouteNumber||'').trim()});
     });
     this.labelAadt(rows);
+    this.applyLyrOrder();
     return rows.length;
   }
   /* One number per road, and only where it fits. Labelling every segment stacks a
@@ -1573,9 +2107,9 @@ class TrailApp {
       const box={l:pt.x-w/2, t:pt.y-h/2, r:pt.x+w/2, b:pt.y+h/2};
       if(placed.some(q=>!(box.r<q.l||box.l>q.r||box.b<q.t||box.t>q.b))) return;
       placed.push(box); seen[nm]=1;
-      g.addLayer(L.marker(r.mid,{interactive:false,keyboard:false,zIndexOffset:-400,
+      g.addLayer(L.marker(r.mid,{pane:this.lyrPane('aadt'),interactive:false,keyboard:false,zIndexOffset:-400,
         icon:L.divIcon({className:'aadt-ic',iconSize:[w,h],iconAnchor:[w/2,h/2],
-          html:'<span class="aadt-n" style="border-color:'+r.band[1]+';color:'+r.band[1]+'">'+esc(txt)+'</span>'})}));
+          html:'<span class="aadt-n" style="border-color:'+r.band[1]+';color:'+r.band[4]+'">'+esc(txt)+'</span>'})}));
     });
   }
   aadtPopup(p){
@@ -1583,7 +2117,7 @@ class TrailApp {
     const sign=String(p.RouteSigning||'').trim(), num=String(p.RouteNumber||'').trim();
     const nm=String(p.RoadwayName||'').trim() || (sign+' '+num).trim() || 'Unnamed road';
     let h='<b>'+esc(nm)+'</b>'
-      +'<br><b style="color:'+band[1]+'">'+v.toLocaleString()+' vehicles a day</b> \u00b7 '+band[2]
+      +'<br><b style="color:'+band[4]+'">'+v.toLocaleString()+' vehicles a day</b> \u00b7 '+band[2]
       +'<br><span style="opacity:.65">NYSDOT count'+(p.CalculationYear?', '+p.CalculationYear:'')+'</span>';
     const bits=[];
     if(p.SpeedLimit) bits.push(p.SpeedLimit+' mph limit');
@@ -1646,6 +2180,7 @@ class TrailApp {
       n++;
       g.addLayer(mi%step===0 ? this.mileLabel(mi,p) : this.mileTick(mi,p));
     }
+    this.applyLyrOrder();
   }
   mileLabel(mile,p){
     const c=this.mileColor(mile);
@@ -1654,15 +2189,15 @@ class TrailApp {
       +'<i class="mp-dot"></i></div>';
     // Under everything else in the z-order: a milepost is a reference, not a
     // destination, and it should never be the thing your thumb lands on.
-    const mk=L.marker(p,{keyboard:false, zIndexOffset:-500,
+    const mk=L.marker(p,{pane:this.lyrPane('miles'), keyboard:false, zIndexOffset:-500,
       icon:L.divIcon({className:'mp-ic',html,iconSize:[46,26],iconAnchor:[23,26]})});
     mk.bindPopup('',{maxWidth:250,autoPan:false});
     mk.on('popupopen',()=>mk.setPopupContent(this.milePopup(mile,p)));
     return mk;
   }
   mileTick(mile,p){
-    return L.circleMarker(p,{radius:2.2,weight:0,fillColor:this.mileColor(mile),
-      fillOpacity:.9,interactive:false,className:'mp-tick'});
+    return L.circleMarker(p,{pane:this.lyrPane('miles'),radius:2.2,weight:0,
+      fillColor:this.mileColor(mile),fillOpacity:.9,interactive:false,className:'mp-tick'});
   }
   milePopup(mile,p){
     // Not mpTxt: these are whole miles by construction, and a trailing .0 on every
@@ -1745,8 +2280,41 @@ class TrailApp {
      stepped by the hour at your average speed. Direction stays on the map even though
      the outlook drops it: an arrow on a map has somewhere to point, and seeing the
      whole day's wind swing round is worth the ink. */
+  /* The map layer follows the map. Pan up the canal and the question becomes what it
+     is doing up the canal, which is the only reason to pan there. The Outlook stays
+     anchored to you, because that one is about your trip rather than about what you
+     happen to be looking at — so this is a second anchor rather than a change to the
+     first. A centre well off the route is somebody looking at Vermont, and falls back. */
+  wxMapAnchor(){
+    if(this.map){
+      const c=this.map.getCenter(), pr=projectRoute(c.lat,c.lng);
+      if(pr && pr.mile!=null && pr.off<=8){
+        // Looking at yourself is not panning: inside a few miles the answer stays
+        // pinned to where you actually are, so the first dial sits on you rather
+        // than a mile up the towpath from you.
+        if(this.myMile!=null && abs(pr.mile-this.myMile)<=3) return this.myMile;
+        return pr.mile;
+      }
+    }
+    return this.wxAnchorMile();
+  }
+  /* Redrawing as you pan is affordable because of the cache, not in spite of it: a
+     grid point costs two requests, they are keyed to a hundredth of a degree and
+     kept half an hour, so panning the length of a county costs a handful and panning
+     back costs none. Debounced, and ignored until the anchor has actually moved a
+     few miles — the expensive part was never the drawing. */
+  wxPanRefresh(){
+    if(!this.map||!this.wxLayer||!this.map.hasLayer(this.wxLayer)) return;
+    clearTimeout(this.wxPanT);
+    this.wxPanT=setTimeout(()=>{
+      const a=this.wxMapAnchor();
+      if(a==null) return;
+      if(this.wxAt0!=null && abs(a-this.wxAt0)<3) return;
+      this.loadWeather();
+    },450);
+  }
   wxSamples(){
-    const anchor=this.wxAnchorMile();
+    const anchor=this.wxMapAnchor();
     if(anchor==null) return [];
     const sgn=this.dir==='B2NYC'?-1:1, sp=this.avgSpeed>0?this.avgSpeed:12;
     const dist=Math.max(sp, this.wxPerDay||60);
@@ -1768,14 +2336,18 @@ class TrailApp {
     const pts=this.wxSamples();
     if(!pts.length){ this.status('Weather follows your route, so it needs a position on the trail first.'); return; }
     this.status('Reading the forecast along your route…');
-    const now=Date.now();
+    /* The day starts at eight. Reading the first sample for whatever moment the app
+       happened to be opened answers a question nobody asked — what matters is what it
+       will be doing when you are out in it. Same clock the Outlook keeps: if eight
+       has already gone by then you are up, and the answer is now. */
+    const dep=this.wxDepart(0), now=Date.now();
     const res=await Promise.allSettled(pts.map(async pt=>{
       const periods=await this.nwsHourly(pt.lat,pt.lng);
-      return {...pt, w:this.wxAt(periods, now+pt.h*36e5)};
+      return {...pt, when:dep+pt.h*36e5, w:this.wxAt(periods, dep+pt.h*36e5)};
     }));
     const got=res.filter(r=>r.status==='fulfilled' && r.value.w).map(r=>r.value);
     this.wxLayer.clearLayers();
-    this.wxAsOf=now;
+    this.wxAsOf=now; this.wxAt0=pts[0].mile;
     this.wxNow=got.filter(g=>g.h===0)[0]||null;
     got.forEach(g=>this.addWxMarker(g));
     this.renderMapSheet();
@@ -1783,7 +2355,8 @@ class TrailApp {
     const ride=abs(pts[pts.length-1].mile-pts[0].mile);
     this.status(got.length<pts.length
       ? 'Forecast in for '+got.length+' of '+pts.length+' points along your route.'
-      : 'Forecast in for today\u2019s '+fmtWin(Math.round(ride))+' mi at '+this.avgSpeed+' mph.');
+      : 'Forecast in for '+fmtWin(Math.round(ride))+' mi from TM '+fmtMp(pts[0].mile)
+        +', at '+this.avgSpeed+' mph from '+aOrAn(this.wxClock(this.wxDepart(0)))+' start.');
   }
   // One reading, in the units a rider thinks in.
   wxRead(g){
@@ -1794,38 +2367,65 @@ class TrailApp {
   }
   // Under 3 mph either way is noise, not a wind you'd notice on a bike.
   wxKind(r){ return !r.parts ? 'cross' : r.parts.head>3 ? 'head' : r.parts.head<-3 ? 'tail' : 'cross'; }
+  // "9am", the way a person says an hour.
+  wxClock(t){
+    return new Date(t).toLocaleTimeString([], {hour:'numeric'})
+      .replace(/\s?([AP])M/i,(m,a)=>a.toLowerCase()+'m').replace(/\s+/g,'');
+  }
+  wxKindColor(k){ return k==='head' ? '#b3261e' : k==='tail' ? '#146c2e' : '#5f6368'; }
+  wxKindGlyph(k){ return k==='head' ? 'whead' : k==='tail' ? 'wtail' : 'wcross'; }
+  wxKindWord(k){ return k==='head' ? 'HEAD' : k==='tail' ? 'TAIL' : 'CROSS'; }
+  /* A dial asked you to read a thin ring against a scale nobody published. This is
+     a card: sky and temperature on top at a size you can read at arm's length, then
+     a full-width band in the colour of what the wind is doing to you with the word
+     on it, so head or tail lands before you have focused on anything. The bearing is
+     gone from the map pin entirely — it was the number that had to be worked out. */
+  wxCard(r, kind){
+    const mph=r.mph==null?null:Math.round(r.mph);
+    const calm=mph==null || mph<3;
+    const col=calm?'#5f6368':this.wxKindColor(kind);
+    return '<div class="wxc" style="border-color:'+col+'">'
+      +'<div class="wxc-hd">'+icon(skyIcon(r.short),20)
+        +'<b>'+(r.temp==null?'\u2014':r.temp+'\u00b0')+'</b></div>'
+      +'<div class="wxc-w" style="background:'+col+'">'
+        +(calm?'<span>CALM</span>'
+              :icon(this.wxKindGlyph(kind),13)+'<span>'+this.wxKindWord(kind)+'</span><b>'+mph+'</b>')
+      +'</div></div>';
+  }
   addWxMarker(g){
     const r=this.wxRead(g), kind=this.wxKind(r);
-    const rot = r.from==null ? 0 : (r.from+180)%360;   // the arrow flies the way it blows
-    const html='<div class="wx-pin wx-'+kind+'">'
-      +'<span class="wx-arrow" style="transform:rotate('+Math.round(rot)+'deg)">\u2191</span>'
-      +(r.mph!=null?'<span class="wx-s">'+Math.round(r.mph)+'</span>':'')
-      +'<span class="wx-t">'+(r.temp==null?'—':r.temp+'\u00b0')+'</span>'
-      +(r.pop?'<span class="wx-p">'+r.pop+'%</span>':'')+'</div>';
-    const mk=L.marker([g.lat,g.lng],{icon:L.divIcon({className:'wx-ic',html,iconSize:[80,24],iconAnchor:[40,12]})});
-    mk.bindPopup('',{maxWidth:260,autoPan:false});
+    const wet=r.pop!=null && r.pop>=20;
+    const html='<div class="wx-pin wx-'+kind+'">'+this.wxCard(r,kind)
+      +'<span class="wx-when">'+esc(this.wxClock(g.when||Date.now()))
+      +(wet?'<i class="wx-wet">'+r.pop+'%</i>':'')+'</span></div>';
+    const mk=L.marker([g.lat,g.lng],{pane:this.lyrPane('wx'),
+      icon:L.divIcon({className:'wx-ic',html,iconSize:[96,74],iconAnchor:[48,29]})});
+    mk.bindPopup('',{maxWidth:270,autoPan:false});
     mk.on('popupopen',()=>mk.setPopupContent(this.wxPopup(g)));
     mk.addTo(this.wxLayer);
   }
+  /* Rows, not sentences. Every line is a label and a value, so the eye can go
+     straight to the one it wants instead of reading to the end of a paragraph to
+     find out whether the wind is a problem. */
   wxPopup(g){
-    const r=this.wxRead(g), w=g.w;
-    const t=new Date(Date.parse(w.startTime)).toLocaleTimeString([], {hour:'numeric'});
-    const hh=Math.round(g.h*10)/10;
-    let h='<b>'+(g.h===0?'Where you are now':'About '+fmtWin(hh)+'h up the trail')+'</b>'
-      +'<br><span style="opacity:.65">'+mpTxt(g.mile)+' · around '+t+'</span>'
-      +'<br>'+esc(r.short)+(r.temp!=null?' · <b>'+r.temp+'\u00b0'+esc(r.unit)+'</b>':'');
-    if(r.pop!=null) h+='<br>Rain '+r.pop+'%';
-    if(r.mph!=null){
-      h+='<br>Wind '+Math.round(r.mph)+' mph from the '+esc(w.windDirection||'?');
-      if(r.parts){
-        const hd=r.parts.head, cr=r.parts.cross;
-        h+='<br>'+(hd>3 ? '<b>'+Math.round(hd)+' mph headwind</b>'
-          : hd<-3 ? '<b>'+Math.round(-hd)+' mph tailwind</b>'
-          : 'nothing much head-on')
-          +(cr>=5?' · '+Math.round(cr)+' mph across':'');
-      } else h+='<br><span style="opacity:.65">No heading here to call it head or tail.</span>';
+    const r=this.wxRead(g), w=g.w, kind=this.wxKind(r);
+    const mph=r.mph==null?null:Math.round(r.mph);
+    const rows=[['Sky', r.short||'\u2014'],
+                ['Temp', r.temp==null?'\u2014':r.temp+'\u00b0'+r.unit],
+                ['Rain', r.pop==null?'\u2014':r.pop+'%']];
+    if(mph==null) rows.push(['Wind','\u2014']);
+    else if(!r.parts) rows.push(['Wind', mph+' mph']);
+    else {
+      const word = mph<3 ? 'calm' : kind==='head' ? 'headwind' : kind==='tail' ? 'tailwind' : 'crosswind';
+      rows.push(['Wind', mph+' mph <b style="color:'+(mph<3?'#5f6368':this.wxKindColor(kind))+'">'+word+'</b>', 1]);
+      if(kind!=='cross' && r.parts.cross>=5) rows.push(['Across', Math.round(r.parts.cross)+' mph']);
     }
-    return h;
+    const hh=Math.round(g.h*10)/10;
+    return '<b>'+esc(this.wxClock(g.when||Date.parse(w.startTime)))+' \u00b7 '+mpTxt(g.mile)+'</b>'
+      +'<div class="wxp-s">'+(g.h===0?'the day starts here':fmtWin(hh)+'h in at '+this.avgSpeed+' mph')+'</div>'
+      +'<table class="wxp">'+rows.map(x=>'<tr><th>'+x[0]+'</th><td>'
+        +(x[2]?x[1]:esc(String(x[1])))+'</td></tr>').join('')+'</table>'
+      +'<a href="'+nwsLink(g.lat,g.lng)+'" target="_blank" rel="noopener">weather.gov \u2197</a>';
   }
   // The one-line version for the map sheet.
   wxLine(){
@@ -2170,7 +2770,10 @@ class TrailApp {
       h+='</div>';
     });
     const at=new Date(pl.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
-    h+='<div class="wx-asof">Forecast read at '+esc(at)+' \u00b7 sampled at '+sp+' mph, starting 8am each day</div>';
+    const a0=(pl.legs&&pl.legs[0]&&pl.legs[0].anchors&&pl.legs[0].anchors[0])||null;
+    h+='<div class="wx-asof">Forecast read at '+esc(at)+' \u00b7 sampled at '+sp+' mph, starting 8am each day'
+      +(a0&&a0.lat!=null?' · <a href="'+nwsLink(a0.lat,a0.lng)+'" target="_blank" rel="noopener">weather.gov</a>':'')
+      +'</div>';
     el.innerHTML=h;
   }
 
@@ -2184,6 +2787,9 @@ class TrailApp {
     this.accent=accent; this.accent2=accent2;
     const map=L.map(el,{scrollWheelZoom:false,zoomControl:true,attributionControl:true}).setView([42.9,-76.0],7);
     this.map=map;
+    /* Above the marker pane (600) and below the popup pane (700), so where you are
+       is never underneath anything you have switched on. */
+    if(map.createPane){ map.createPane(ME_PANE); const pn=map.getPane(ME_PANE); if(pn) pn.style.zIndex=655; }
     // One place decides where a popup sits, whoever opened it, using the panel height
     // as it is right now — a bind-time padding would be stale the moment it moved.
     map.on('popupopen', e=>setTimeout(()=>this.fitPopup(e.popup),0));
@@ -2199,52 +2805,56 @@ class TrailApp {
     this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright',collapsed:true}).addTo(map);
     const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
     const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
-    this.embLines=[ L.polyline(rHV,{color:accent,weight:4,opacity:.85}),
-                    L.polyline(rER,{color:accent2,weight:4,opacity:.85}) ];
+    const rtPane=this.lyrPane('route');
+    this.embLines=[ L.polyline(rHV,{pane:rtPane,color:accent,weight:4,opacity:.85}),
+                    L.polyline(rER,{pane:rtPane,color:accent2,weight:4,opacity:.85}) ];
     /* The trail itself gets a row in the control like everything else, and like the
        borrowed layers it names where it comes from — the state's own page, which is
        also where the official GPX for a GPS unit lives. One group, so the swap from
        the embedded line to the live ArcGIS one below doesn't lose the row. */
     this.routeLayer=L.layerGroup(this.embLines).addTo(map);
-    this.layersCtl.addOverlay(this.routeLayer,
+    this.regLayer('route', this.routeLayer,
       this.lyrSrc('Empire State Trail', EST_SRC, 'The official route, and the GPX for your GPS')
       +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
     this.stopLayer=L.layerGroup();
     TOWNS.forEach(t=>{
-      const mk=L.circleMarker([t.lat,t.lng],{radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
+      const mk=L.circleMarker([t.lat,t.lng],{pane:this.lyrPane('stops'),radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
       mk.bindPopup('',{maxWidth:300,minWidth:230,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
     this.stopLayer.addTo(map);
-    this.layersCtl.addOverlay(this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
+    this.regLayer('stops', this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
     /* On from the start, unlike the weather: it costs a few divs and no requests, and
        a trail map without mileposts makes you guess which end of the line you are
        looking at. Redrawn on moveend — which is also what a zoom ends in. */
     this.mileLayer=L.layerGroup().addTo(map);
-    this.layersCtl.addOverlay(this.mileLayer,'Mileposts');
-    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); });
+    this.regLayer('miles', this.mileLayer,'Mileposts');
+    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
        control. The Shoreline is free to draw; the counts cost a request per view. */
-    this.shoreLayer=L.polyline([],{color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
+    this.shoreLayer=L.polyline([],{pane:this.lyrPane('shore'),color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
     this.shoreLayer.bindPopup('',{maxWidth:270,autoPan:false});
     this.shoreLayer.on('popupopen',()=>this.shoreLayer.setPopupContent(this.shorePopup()));
-    this.layersCtl.addOverlay(this.shoreLayer,
+    this.regLayer('shore', this.shoreLayer,
       this.lyrSrc(SHORE.name, SHORE.src, 'From '+SHORE.srcName+' \u2014 opens the route this line came from')
       +' <span class="lyr-ct">GPX</span>');
     map.on('overlayadd', e=>{ if(e.layer===this.shoreLayer) this.showShore(); });
     this.aadtLayer=L.layerGroup();
-    this.layersCtl.addOverlay(this.aadtLayer,
+    this.regLayer('aadt', this.aadtLayer,
       this.lyrSrc('Traffic counts', AADT_SRC, 'From the NYSDOT Traffic Data Viewer \u2014 opens the source')
       +' <span class="lyr-ct">AADT</span>');
     map.on('overlayadd', e=>{ if(e.layer===this.aadtLayer){ this.aadtSig=''; this.loadAadt(); } });
+    // Whatever the rider brought last time, back in the control in the same order.
+    this.userLayers.forEach(rec=>this.registerUserLayer(rec));
+    this.renderUserLayers();
     map.on('overlayremove', e=>{ if(e.layer===this.aadtLayer) this.aadtLayer.clearLayers(); });
     // Off until asked for: it costs a dozen requests to a public service, so switching
     // it on is the fetch trigger rather than something that happens behind your back.
     this.wxLayer=L.layerGroup();
-    this.layersCtl.addOverlay(this.wxLayer,'Wind &amp; weather');
+    this.regLayer('wx', this.wxLayer,'Wind &amp; weather');
     map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
-    map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.renderMapSheet(); } });
+    map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.wxAt0=null; this.renderMapSheet(); } });
     map.on('click',e=>this.tapPopup(e.latlng));
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
@@ -2325,7 +2935,13 @@ class TrailApp {
     // Exact coords here, so this routes precisely — no geocoding guess involved.
     lk.push('<a href="https://www.google.com/maps/dir/?api=1'+(this.myLL?'&origin='+this.myLL.lat+','+this.myLL.lng:'')
       +'&destination='+p.lat+','+p.lng+'&travelmode=bicycling" target="_blank" rel="noopener">Directions</a>');
-    return h+'<br>'+lk.join(' · ');
+    /* Said plainly, because a volunteer map and a state asset register are worth
+       different amounts of trust when you are deciding to ride nine miles for a
+       shower — and because whoever mapped it can be told if it has closed. */
+    if(p.src==='osm' && p.osmId)
+      lk.push('<a href="https://www.openstreetmap.org/'+esc(p.osmId)+'" target="_blank" rel="noopener">OpenStreetMap</a>');
+    return h+'<br>'+lk.join(' \u00b7 ')
+      +(p.src==='osm'?'<div class="poi-src">Mapped by OpenStreetMap contributors \u2014 hours and whether it\u2019s still there are worth a call.</div>':'');
   }
   async fetchAllPOIs(){
     const res=await Promise.allSettled(POI_SOURCES.map(async src=>{
@@ -2343,21 +2959,24 @@ class TrailApp {
   /* Map pins. These feed Leaflet's own layers control — deliberately independent
      of the Nearby chips, so a rider can narrow the browse list down to campsites
      without also blanking the pins they're navigating by. */
-  buildPOILayers(){
+  buildPOILayers(was){
     const byCat=this.poisByCat();
     // Fixed order, NOT the rider's Nearby order — the map control stays put even
     // as they rearrange the browse list.
     [...new Set([...CAT_ORDER, ...Object.keys(byCat)])].forEach(asset=>{
       const items=byCat[asset]; if(!items||!items.length) return;
       const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
+      const pane=this.lyrPane('poi:'+asset);
       items.forEach(p=>{
-        const mk=L.marker([p.lat,p.lng],{icon:this.poiIcon(p,cfg)});
+        const mk=L.marker([p.lat,p.lng],{pane, icon:this.poiIcon(p,cfg)});
         mk.bindPopup('',{maxWidth:280,minWidth:200,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
         this.poiMarker[p.i]=mk;
         g.addLayer(mk);
       });
-      this.poiLayers[asset]=g; if(def) g.addTo(this.map);
-      if(this.layersCtl) this.layersCtl.addOverlay(g, esc(cfg.label)+' <span class="lyr-ct">'+items.length+'</span>');
+      // A rebuild must not switch a layer off under the rider, nor on.
+      const show = was && Object.prototype.hasOwnProperty.call(was,asset) ? was[asset] : def;
+      this.poiLayers[asset]=g; if(show) g.addTo(this.map);
+      this.regLayer('poi:'+asset, g, esc(cfg.label)+' <span class="lyr-ct">'+items.length+'</span>');
     });
   }
 
@@ -2386,34 +3005,42 @@ class TrailApp {
   }
 
   /* Pointer Events rather than HTML5 drag-and-drop — the latter never fires on
-     touch, and this list is phone-first. Reorders the DOM live, commits on drop. */
-  wireCatDrag(chip){
-    const grip=chip.querySelector('.feat-grip'); if(!grip) return;
+     touch, and these lists are phone-first. Reorders the DOM live, commits on drop.
+     Chips wrap in a row so the test is which side of a neighbour you are on;
+     a stacked list only cares about above or below. */
+  wireDrag(item, list, sel, gripSel, axis, onDrop){
+    const grip=item.querySelector(gripSel); if(!grip) return;
     grip.addEventListener('pointerdown',e=>{
       e.preventDefault();
-      const el=this.$('features');
-      chip.classList.add('dragging');
+      item.classList.add('dragging');
       // Listeners go on document, NOT the grip with setPointerCapture: reordering
-      // re-inserts the chip, and re-inserting a node drops its implicit capture,
+      // re-inserts the item, and re-inserting a node drops its implicit capture,
       // so a grip-bound pointerup never fires and the drag never commits.
       const move=ev=>{
         const under=document.elementFromPoint(ev.clientX,ev.clientY);
-        const over=under&&under.closest?under.closest('.feat'):null;
-        if(!over||over===chip||over.parentElement!==el) return;
+        const over=under&&under.closest?under.closest(sel):null;
+        if(!over||over===item||over.parentElement!==list) return;
         const r=over.getBoundingClientRect();
-        el.insertBefore(chip, (ev.clientX-r.left)>r.width/2 ? over.nextSibling : over);
+        const past = axis==='y' ? (ev.clientY-r.top)>r.height/2 : (ev.clientX-r.left)>r.width/2;
+        list.insertBefore(item, past ? over.nextSibling : over);
       };
       const up=()=>{
         document.removeEventListener('pointermove',move);
         document.removeEventListener('pointerup',up);
         document.removeEventListener('pointercancel',up);
-        chip.classList.remove('dragging');
-        this.catOrder=[...el.querySelectorAll('.feat')].map(c=>c.dataset.cat);
-        this.savePrefs(); this.renderNearby();
+        item.classList.remove('dragging');
+        onDrop();
       };
       document.addEventListener('pointermove',move);
       document.addEventListener('pointerup',up);
       document.addEventListener('pointercancel',up);
+    });
+  }
+  wireCatDrag(chip){
+    const el=this.$('features'); if(!el) return;
+    this.wireDrag(chip, el, '.feat', '.feat-grip', 'x', ()=>{
+      this.catOrder=[...el.querySelectorAll('.feat')].map(c=>c.dataset.cat);
+      this.savePrefs(); this.renderNearby();
     });
   }
   async fetchRouteLine(){
@@ -2428,7 +3055,8 @@ class TrailApp {
       const sec=(f.properties||{}).Section, col = sec==='Hudson Valley' ? this.accent : this.accent2;
       const geom=f.geometry||{};
       const parts = geom.type==='MultiLineString' ? geom.coordinates : [geom.coordinates||[]];
-      parts.forEach(line=>{ const ll=line.map(c=>[c[1],c[0]]); if(ll.length>1) lines.push(L.polyline(ll,{color:col,weight:4,opacity:.9})); });
+      parts.forEach(line=>{ const ll=line.map(c=>[c[1],c[0]]);
+        if(ll.length>1) lines.push(L.polyline(ll,{pane:this.lyrPane('route'),color:col,weight:4,opacity:.9})); });
     });
     // An empty answer used to clear the embedded line and draw nothing over it,
     // leaving a map with no trail on it. Keep what we have unless there is a
