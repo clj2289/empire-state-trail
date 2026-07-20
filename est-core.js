@@ -135,6 +135,8 @@ const P = {
   lock:'M6 10V7a6 6 0 0 1 12 0v3|M5 10h14v10H5z',
   pin:'M12 21s-7-6-7-12a7 7 0 0 1 14 0c0 6-7 12-7 12Z|c12 9 2.5',
   wind:'M3 8h10a3 3 0 1 0-3-3|M3 13h14a3 3 0 1 1-3 3|M3 18h7a2 2 0 1 1-2 2',
+  // sun behind a cloud — the outlook tab, distinct from the plain wind glyph
+  fcast:'M8.5 2.6v1.8|M3.6 4.6l1.3 1.3|M1.6 9.5h1.8|M13.4 4.6l-1.3 1.3|c8.5 9.5 3|M10 20h7.5a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8.6 11.4 4.3 4.3 0 0 0 10 20Z',
   chevR:'M9 6l6 6-6 6',
   chevL:'M15 6l-6 6 6 6'
 };
@@ -189,7 +191,22 @@ function mapsLink(t,q,from){
 // Hands the query off to Google Hotels rather than fetching rates ourselves: nightly
 // price is date- and occupancy-dependent, needs a keyed API behind a proxy, and the
 // small trail-town inns in the ArcGIS layer mostly aren't in bookable inventory anyway.
-function ratesLink(q){ return 'https://www.google.com/travel/search?q='+encodeURIComponent(q); }
+/* Dated, because a rate without a night attached is not a rate. Google Travel takes
+   its dates in an undocumented protobuf blob, which I am not willing to guess at and
+   have wrong silently; Booking spells checkin and checkout out in the query string,
+   so the link lands on the night you are actually asking about. */
+function nextDay(ymd){
+  const d=new Date(ymd+'T12:00:00');
+  if(isNaN(d)) return '';
+  d.setDate(d.getDate()+1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function ratesLink(q, date){
+  const p=['ss='+encodeURIComponent(q),'group_adults=1','no_rooms=1','group_children=0'];
+  const out=date?nextDay(date):'';
+  if(date && out) p.push('checkin='+date,'checkout='+out);
+  return 'https://www.booking.com/searchresults.html?'+p.join('&');
+}
 // Same reasoning for star ratings and reviews: reading them out of the Places API
 // needs a key and a proxy, and the ArcGIS layer carries none of its own. The map
 // search lands on the place card, where the rating and the reviews already sit.
@@ -1137,13 +1154,24 @@ class TrailApp {
   priceOf(p){ return (p && this.prices[this.poiKey(p)]) || null; }
   /* The night you'd actually be there, at your planned daily distance — so the date
      box opens on the date you're about to go and look up, not on today. */
+  ymd(t){ return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); }
+  // Anything within today's riding is tonight; past that, a day per planned day.
+  dateAfterMi(d){
+    const t=new Date();
+    if(d!=null && isFinite(d) && d>0.3)
+      t.setDate(t.getDate() + Math.max(1,Math.ceil(d/Math.max(5,this.wxPerDay||60))) - 1);
+    return this.ymd(t);
+  }
   arrivalDate(p){
     const d=this.rideMi(p);
     if(d==null || d<-0.3) return '';
-    const per=Math.max(5, this.wxPerDay||60);
-    const t=new Date();
-    t.setDate(t.getDate() + Math.max(1,Math.ceil(d/per)) - 1);
-    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+    return this.dateAfterMi(d);
+  }
+  // A town's night is the same sum, but a town has no spur to add on.
+  townDate(t){
+    if(this.myMile==null) return this.dateAfterMi(null);
+    const gap=(t.mi-this.myMile)*(this.dir==='B2NYC'?-1:1);
+    return this.dateAfterMi(gap>0.3?gap:null);
   }
   savePriceFrom(btn){
     const row=btn.closest('.pr-row'); if(!row) return;
@@ -1239,18 +1267,25 @@ class TrailApp {
     }
     return periods[0]||null;
   }
+  /* The layer covers today's ride — from where you are out to the miles a day you set,
+     stepped by the hour at your average speed. Direction stays on the map even though
+     the outlook drops it: an arrow on a map has somewhere to point, and seeing the
+     whole day's wind swing round is worth the ink. */
   wxSamples(){
     const anchor=this.wxAnchorMile();
     if(anchor==null) return [];
     const sgn=this.dir==='B2NYC'?-1:1, sp=this.avgSpeed>0?this.avgSpeed:12;
+    const dist=Math.max(sp, this.wxPerDay||60);
+    const steps=Math.max(1, Math.min(8, Math.round(dist/sp)));
     const out=[], seen={};
-    for(let h=0;h<=5;h++){
-      const mile=Math.max(0,Math.min(TOTAL, anchor+sgn*sp*h));
+    for(let i=0;i<=steps;i++){
+      const f=i/steps;
+      const mile=Math.max(0,Math.min(TOTAL, anchor+sgn*dist*f));
       const k=Math.round(mile);
       if(seen[k]) continue;        // the route ran out — stop restating its last point
       seen[k]=1;
       const p=this.routePtAt(mile);
-      out.push({h, mile, lat:p[0], lng:p[1], hdg:this.routeBearing(mile)});
+      out.push({h: dist*f/sp, mile, lat:p[0], lng:p[1], hdg:this.routeBearing(mile)});
     }
     return out;
   }
@@ -1271,9 +1306,10 @@ class TrailApp {
     got.forEach(g=>this.addWxMarker(g));
     this.renderMapSheet();
     if(!got.length){ this.status('No answer from api.weather.gov. It’s the US forecast service — it covers the whole trail, but it does go down.'); return; }
+    const ride=abs(pts[pts.length-1].mile-pts[0].mile);
     this.status(got.length<pts.length
       ? 'Forecast in for '+got.length+' of '+pts.length+' points along your route.'
-      : 'Forecast in along your route, '+this.avgSpeed+' mph out to '+(pts.length-1)+'h ahead.');
+      : 'Forecast in for today\u2019s '+fmtWin(Math.round(ride))+' mi at '+this.avgSpeed+' mph.');
   }
   // One reading, in the units a rider thinks in.
   wxRead(g){
@@ -1289,9 +1325,10 @@ class TrailApp {
     const rot = r.from==null ? 0 : (r.from+180)%360;   // the arrow flies the way it blows
     const html='<div class="wx-pin wx-'+kind+'">'
       +'<span class="wx-arrow" style="transform:rotate('+Math.round(rot)+'deg)">\u2191</span>'
+      +(r.mph!=null?'<span class="wx-s">'+Math.round(r.mph)+'</span>':'')
       +'<span class="wx-t">'+(r.temp==null?'—':r.temp+'\u00b0')+'</span>'
       +(r.pop?'<span class="wx-p">'+r.pop+'%</span>':'')+'</div>';
-    const mk=L.marker([g.lat,g.lng],{icon:L.divIcon({className:'wx-ic',html,iconSize:[62,24],iconAnchor:[31,12]})});
+    const mk=L.marker([g.lat,g.lng],{icon:L.divIcon({className:'wx-ic',html,iconSize:[80,24],iconAnchor:[40,12]})});
     mk.bindPopup('',{maxWidth:260,autoPan:false});
     mk.on('popupopen',()=>mk.setPopupContent(this.wxPopup(g)));
     mk.addTo(this.wxLayer);
@@ -1299,7 +1336,8 @@ class TrailApp {
   wxPopup(g){
     const r=this.wxRead(g), w=g.w;
     const t=new Date(Date.parse(w.startTime)).toLocaleTimeString([], {hour:'numeric'});
-    let h='<b>'+(g.h===0?'Where you are now':'About '+g.h+'h up the trail')+'</b>'
+    const hh=Math.round(g.h*10)/10;
+    let h='<b>'+(g.h===0?'Where you are now':'About '+fmtWin(hh)+'h up the trail')+'</b>'
       +'<br><span style="opacity:.65">'+mpTxt(g.mile)+' · around '+t+'</span>'
       +'<br>'+esc(r.short)+(r.temp!=null?' · <b>'+r.temp+'\u00b0'+esc(r.unit)+'</b>':'');
     if(r.pop!=null) h+='<br>Rain '+r.pop+'%';
@@ -1332,6 +1370,24 @@ class TrailApp {
   /* The map layer answers "what am I riding into today". This answers the question you
      ask the night before: split the route into days, work out where you'd be and when,
      and report the weather waiting for you there rather than the weather here now. */
+  /* Town names do more work than mileposts here: nobody plans a day around TM 299.
+     The nearest one gets named even when it is a few miles off, because "near Rome"
+     still tells you where you are in a way a number never will. */
+  nearestTown(mile){
+    if(mile==null || !isFinite(mile)) return null;
+    let best=null, bd=Infinity;
+    TOWNS.forEach(t=>{ const d=abs(t.mi-mile); if(d<bd){ bd=d; best=t; } });
+    return best ? {t:best, off:bd} : null;
+  }
+  townLabel(n){ return !n ? '' : (n.off<=3 ? n.t.n : 'near '+n.t.n); }
+  // Chart labels get the first name only — "Chittenango", not the whole park.
+  shortTown(n){ return String(n||'').split(' / ')[0]; }
+  // Every town you'd roll through that day, in the order you'd reach them.
+  legTowns(leg){
+    const lo=Math.min(leg.from,leg.to), hi=Math.max(leg.from,leg.to), fwd=leg.to>=leg.from;
+    return TOWNS.filter(t=>t.mi>=lo-0.2 && t.mi<=hi+0.2)
+      .slice().sort((a,b)=> fwd ? a.mi-b.mi : b.mi-a.mi);
+  }
   buildWxDest(){
     const sel=this.$('wxDest'); if(!sel) return;
     const keep=sel.value;
@@ -1434,6 +1490,30 @@ class TrailApp {
       unit: rs[0].unit, short: rs[rs.length-1].short
     };
   }
+  /* The night where the day leaves you: the low you'd sleep in and whether it rains on
+     the tent, read at the far anchor between 7pm and 6am. No wind — a crosswind at 2am
+     is nobody's problem. Later days fall off the end of the hourly forecast, and those
+     simply go without rather than being extrapolated. */
+  wxOvernight(leg){
+    const as=leg.anchors||[], a=as[as.length-1];
+    if(!a || !a.periods || !a.periods.length) return null;
+    const d0=new Date(this.wxDepart(leg.d));
+    const from=new Date(d0.getFullYear(),d0.getMonth(),d0.getDate(),19,0,0,0).getTime();
+    const to=from+11*36e5;
+    const win=a.periods.filter(p=>{ const t=Date.parse(p.startTime); return t>=from && t<to; });
+    if(win.length<3) return null;
+    const temps=win.map(p=>p.temperature).filter(t=>t!=null && isFinite(t));
+    const pops=win.map(p=>p.probabilityOfPrecipitation?p.probabilityOfPrecipitation.value:null)
+      .filter(v=>v!=null && isFinite(v));
+    const mid=win[Math.floor(win.length/2)];
+    return {
+      lo: temps.length?Math.min.apply(null,temps):null,
+      hi: temps.length?Math.max.apply(null,temps):null,
+      pop: pops.length?Math.max.apply(null,pops):null,
+      unit: win[0].temperatureUnit||'F',
+      short: mid?(mid.shortForecast||''):''
+    };
+  }
   // All three of head, tail and cross, said the way you'd say them out loud.
   windWord(head, cross){
     const h=head==null?0:head, c=cross==null?0:cross, mag=abs(h);
@@ -1456,51 +1536,115 @@ class TrailApp {
     this.wxPlan={legs, at:Date.now(), got:legs.filter(l=>l.sum).length};
     this.renderOutlook();
   }
-  /* An hour of riding per column: temperature as a line, rain as bars off the
-     baseline, and a wind arrow under each hour turned the way it blows and coloured
-     by what it does to you. Plain inline SVG on a viewBox — it scales to any phone,
-     needs no library, and prints the numbers it is drawing so the picture never has
-     to be trusted on its own. */
+  /* Laid out the way the NWS hourly graph is: stacked panels over one shared time
+     axis, so reading straight down a column gives you the temperature, the rain and
+     the wind at that hour. The wind panel is the part rewritten for a bicycle. The
+     compass bearing is gone — it is a number you have to do trigonometry on before it
+     means anything — and what is drawn instead is the component that actually reaches
+     you: up and red when it is in your face, down and green at your back, straddling
+     the line in grey when it is only shoving you sideways. Height is its speed.
+     Towns are ruled in down the whole stack, because "the headwind starts after
+     Canajoharie" is the sentence you actually want out of a chart like this. */
   wxChart(leg){
     const S=(leg.series||[]).filter(x=>x.w);
     if(S.length<2) return '';
-    const W=320, H=126, L=8, R=8, span=W-L-R;
-    const x=i=>L+span*(i/(S.length-1));
-    const temps=S.map(p=>p.w.temperature).filter(t=>t!=null && isFinite(t));
+    const rd=S.map(p=>this.wxRead(p));
+    const temps=rd.map(r=>r.temp).filter(t=>t!=null && isFinite(t));
     if(!temps.length) return '';
-    let tMin=Math.min.apply(null,temps), tMax=Math.max.apply(null,temps);
+    const W=340, L=27, R=10, H=196, span=W-L-R;
+    const x=i=>L+span*(i/(S.length-1));
+    const den=leg.to-leg.from;
+    const xm=m=>L+span*(den===0?0:(m-leg.from)/den);
+    const bw=Math.max(3.5, Math.min(15, span/S.length*0.5));
+    const T0=30, T1=70;            // temperature band
+    const RB=112, RH=30;           // rain baseline, full-height bar
+    const WZ=158, WH=24;           // wind zero line, half height
+    const TOP=14, BOT=WZ+WH;       // the run of a town's rule
+    const n2=v=>(Math.round(v*10)/10).toFixed(1);
+    const tHi=Math.max.apply(null,temps), tLo=Math.min.apply(null,temps);
+    let tMax=tHi, tMin=tLo;
     if(tMax-tMin<4){ const m=(tMin+tMax)/2; tMin=m-2; tMax=m+2; }
-    const ty=t=>52-((t-tMin)/(tMax-tMin))*36;      // temperature band, y 16..52
-    const BASE=88, RAIN=30;                         // rain grows up from the baseline
-    let g='<svg class="wx-svg" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Hourly forecast along the day\u2019s ride">';
-    g+='<line class="wx-ax" x1="'+L+'" y1="'+BASE+'" x2="'+(W-R)+'" y2="'+BASE+'"/>';
-    const bw=Math.max(4, Math.min(16, span/S.length*0.55));
-    S.forEach((p,i)=>{
-      const pop=p.w.probabilityOfPrecipitation ? p.w.probabilityOfPrecipitation.value : null;
-      if(!pop) return;
-      const hgt=Math.max(1.5, (pop/100)*RAIN);
-      g+='<rect class="wx-rain" x="'+(x(i)-bw/2).toFixed(1)+'" y="'+(BASE-hgt).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="1.5"/>';
+    const ty=t=>T1-((t-tMin)/(tMax-tMin))*(T1-T0);
+    const tag=(y,t,c)=>'<text class="wx-gt'+(c?' '+c:'')+'" x="'+(L-5)+'" y="'+y+'" text-anchor="end">'+esc(t)+'</text>';
+    let g='<svg class="wx-svg" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Hour by hour along the day’s ride: temperature, rain chance, and head or tail wind">';
+
+    /* ---- towns, ruled first so every series draws over them ---- */
+    const tw=this.legTowns(leg).map(t=>({t, x:xm(t.mi)}))
+      .filter(o=>isFinite(o.x) && o.x>=L-1 && o.x<=W-R+1).sort((a,b)=>a.x-b.x);
+    let last=-1e9;
+    tw.forEach(o=>{
+      g+='<line class="wx-tn" x1="'+n2(o.x)+'" y1="'+TOP+'" x2="'+n2(o.x)+'" y2="'+BOT+'"/>';
+      const nm=this.shortTown(o.t.n), wpx=nm.length*4.4+4;
+      let anch='middle', tx=o.x;
+      if(tx-wpx/2<1){ anch='start'; tx=1; }
+      else if(tx+wpx/2>W-1){ anch='end'; tx=W-1; }
+      const lft = anch==='start' ? tx : anch==='end' ? tx-wpx : tx-wpx/2;
+      if(lft<last+3) return;                     // it would sit on the last name
+      last=lft+wpx;
+      g+='<text class="wx-tnl" x="'+n2(tx)+'" y="9" text-anchor="'+anch+'">'+esc(nm)+'</text>';
     });
-    const pts=S.map((p,i)=> p.w.temperature==null?null:x(i).toFixed(1)+','+ty(p.w.temperature).toFixed(1)).filter(Boolean);
-    g+='<polyline class="wx-temp" points="'+pts.join(' ')+'"/>';
-    S.forEach((p,i)=>{ if(p.w.temperature!=null) g+='<circle class="wx-dot" cx="'+x(i).toFixed(1)+'" cy="'+ty(p.w.temperature).toFixed(1)+'" r="2"/>'; });
-    // The high and the low get printed; the rest of the curve is shape, not data.
-    const iHi=S.findIndex(p=>p.w.temperature===tMax), iLo=S.findIndex(p=>p.w.temperature===tMin);
-    if(iHi>=0) g+='<text class="wx-tl" x="'+x(iHi).toFixed(1)+'" y="'+(ty(tMax)-6).toFixed(1)+'" text-anchor="middle">'+tMax+'\u00b0</text>';
-    if(iLo>=0 && iLo!==iHi) g+='<text class="wx-tl" x="'+x(iLo).toFixed(1)+'" y="'+(ty(tMin)+13).toFixed(1)+'" text-anchor="middle">'+tMin+'\u00b0</text>';
-    S.forEach((p,i)=>{
-      const r=this.wxRead(p), k=this.wxKind(r);
-      if(r.from==null) return;
-      const rot=(r.from+180)%360, cx=x(i).toFixed(1);
-      g+='<text class="wx-ar wx-'+k+'" x="'+cx+'" y="103" text-anchor="middle" transform="rotate('+Math.round(rot)+' '+cx+' 99)">\u2191</text>';
+
+    /* ---- temperature ---- */
+    g+='<line class="wx-gl" x1="'+L+'" y1="'+T0+'" x2="'+(W-R)+'" y2="'+T0+'"/>'
+      +'<line class="wx-gl" x1="'+L+'" y1="'+T1+'" x2="'+(W-R)+'" y2="'+T1+'"/>';
+    g+=tag(T0+3, Math.round(tMax)+'°')+tag(T1+3, Math.round(tMin)+'°');
+    const pts=S.map((p,i)=>rd[i].temp==null?null:n2(x(i))+','+n2(ty(rd[i].temp))).filter(Boolean);
+    if(pts.length>1){
+      g+='<polygon class="wx-tfill" points="'+L+','+T1+' '+pts.join(' ')+' '+(W-R)+','+T1+'"/>';
+      g+='<polyline class="wx-temp" points="'+pts.join(' ')+'"/>';
+    }
+    rd.forEach((r,i)=>{ if(r.temp!=null) g+='<circle class="wx-dot" cx="'+n2(x(i))+'" cy="'+n2(ty(r.temp))+'" r="1.9"/>'; });
+    const iHi=rd.findIndex(r=>r.temp===tHi), iLo=rd.findIndex(r=>r.temp===tLo);
+    if(iHi>=0) g+='<text class="wx-tl" x="'+n2(x(iHi))+'" y="'+n2(ty(tHi)-5)+'" text-anchor="middle">'+tHi+'°</text>';
+    if(iLo>=0 && iLo!==iHi) g+='<text class="wx-tl" x="'+n2(x(iLo))+'" y="'+n2(ty(tLo)+11)+'" text-anchor="middle">'+tLo+'°</text>';
+
+    /* ---- rain ---- */
+    g+='<line class="wx-gl wx-dash" x1="'+L+'" y1="'+(RB-RH/2)+'" x2="'+(W-R)+'" y2="'+(RB-RH/2)+'"/>';
+    g+='<line class="wx-ax" x1="'+L+'" y1="'+RB+'" x2="'+(W-R)+'" y2="'+RB+'"/>';
+    g+=tag(RB-RH/2+3, '50%');
+    let wet=0;
+    rd.forEach((r,i)=>{
+      if(!r.pop) return;
+      wet++;
+      const hgt=Math.max(1.5,(r.pop/100)*RH);
+      g+='<rect class="wx-rain" x="'+n2(x(i)-bw/2)+'" y="'+n2(RB-hgt)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1.5"/>';
     });
-    // Thin the clock labels so they never collide on a narrow screen.
+    if(!wet) g+='<text class="wx-xl" x="'+(L+3)+'" y="'+(RB-4)+'">no rain in the forecast</text>';
+
+    /* ---- wind, as a rider meets it ---- */
+    const wv=rd.map(r=>{
+      if(!r.parts) return null;
+      const k=this.wxKind(r);
+      return {k, v: k==='cross' ? r.parts.cross : abs(r.parts.head)};
+    });
+    const seen=wv.filter(Boolean);
+    const wMax=Math.max(10, Math.ceil(Math.max.apply(null, seen.length?seen.map(o=>o.v):[0])/5)*5);
+    g+='<line class="wx-ax" x1="'+L+'" y1="'+WZ+'" x2="'+(W-R)+'" y2="'+WZ+'"/>';
+    g+=tag(WZ-WH+7,'head','wx-g-head')+tag(WZ+WH-1,'tail','wx-g-tail');
+    wv.forEach((o,i)=>{
+      // A calm hour draws nothing. A floored minimum bar would put a grey nub on the
+      // line at every still hour, which reads as a light crosswind rather than as calm.
+      if(!o || o.v<1) return;
+      const hgt=Math.max(1.5,(o.v/wMax)*WH), lx=n2(x(i)-bw/2);
+      const y = o.k==='head' ? WZ-hgt : o.k==='tail' ? WZ : WZ-hgt/2;
+      g+='<rect class="wx-b-'+o.k+'" x="'+lx+'" y="'+n2(y)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1"/>';
+    });
+    // Print the strongest of them, so the panel's scale never has to be inferred.
+    let iw=-1, top=0;
+    wv.forEach((o,i)=>{ if(o && o.v>top){ top=o.v; iw=i; } });
+    if(iw>=0 && top>=3){
+      const o=wv[iw], hgt=(o.v/wMax)*WH;
+      const y = o.k==='head' ? WZ-hgt-3 : o.k==='tail' ? WZ+hgt+8 : WZ-hgt/2-3;
+      g+='<text class="wx-wl wx-'+o.k+'" x="'+n2(x(iw))+'" y="'+n2(y)+'" text-anchor="middle">'+Math.round(top)+' mph</text>';
+    }
+
+    /* ---- the clock, thinned so it never collides on a narrow screen ---- */
     const every=Math.max(1, Math.ceil(S.length/5));
     S.forEach((p,i)=>{
       if(i%every && i!==S.length-1) return;
       const t=new Date(p.when).toLocaleTimeString([], {hour:'numeric'}).replace(/\s?([AP])M/i,(m,a)=>a.toLowerCase());
       const anch=i===0?'start':i===S.length-1?'end':'middle';
-      g+='<text class="wx-xl" x="'+x(i).toFixed(1)+'" y="120" text-anchor="'+anch+'">'+esc(t)+'</text>';
+      g+='<text class="wx-xl" x="'+n2(x(i))+'" y="190" text-anchor="'+anch+'">'+esc(t)+'</text>';
     });
     return g+'</svg>';
   }
@@ -1520,8 +1664,11 @@ class TrailApp {
       const hrs=leg.miles/sp;
       h+='<div class="wx-day"><div class="wx-day-h"><span class="wx-day-n">Day '+(leg.d+1)+'</span>'
         +'<span class="wx-day-d">'+esc(day)+'</span>'
-        +'<span class="wx-day-m">'+fmtWin(leg.miles)+' mi \u00b7 ~'+(hrs<1?Math.round(hrs*60)+' min':fmtWin(Math.round(hrs*10)/10)+'h')+'</span></div>'
-        +'<div class="wx-day-tm">TM '+fmtMp(leg.from)+' \u2192 '+fmtMp(leg.to)+'</div>';
+        +'<span class="wx-day-m">'+fmtWin(leg.miles)+' mi \u00b7 ~'+(hrs<1?Math.round(hrs*60)+' min':fmtWin(Math.round(hrs*10)/10)+'h')+'</span>'
+        +'</div>';
+      const tA=this.townLabel(this.nearestTown(leg.from)), tB=this.townLabel(this.nearestTown(leg.to));
+      if(tA && tB) h+='<div class="wx-day-tw">'+esc(tA)+' \u2192 '+esc(tB)+'</div>';
+      h+='<div class="wx-day-tm">TM '+fmtMp(leg.from)+' \u2192 '+fmtMp(leg.to)+'</div>';
       const s=leg.sum;
       if(!s){ h+='<div class="wx-none">No forecast came back for this stretch.</div>'; }
       else{
@@ -1533,7 +1680,18 @@ class TrailApp {
         const ww=this.windWord(s.head, s.cross);
         h+='<div class="wx-wind wx-'+ww.cls+'">'+icon('wind',15)+'<span>'+esc(ww.txt)+'</span></div>';
         h+=this.wxChart(leg);
-        h+='<div class="wx-key"><span class="wx-k-t">temperature</span><span class="wx-k-r">rain %</span><span class="wx-k-w">wind, pointing the way it blows</span></div>';
+        h+='<div class="wx-key"><span class="wx-k-t">temp</span><span class="wx-k-r">rain %</span>'
+          +'<span class="wx-k-h">headwind</span><span class="wx-k-l">tailwind</span><span class="wx-k-c">crosswind</span></div>';
+        const ov=this.wxOvernight(leg);
+        if(ov){
+          const nb=[];
+          if(ov.lo!=null) nb.push('low '+ov.lo+'\u00b0'+ov.unit);
+          if(ov.pop) nb.push('rain '+ov.pop+'%');
+          if(ov.short) nb.push(esc(ov.short).toLowerCase());
+          const tn=this.nearestTown(leg.to);
+          h+='<div class="wx-night"><b>Overnight'+(tn?' at '+esc(this.shortTown(tn.t.n)):'')+'</b> \u00b7 '
+            +nb.join(' \u00b7 ')+'</div>';
+        }
       }
       h+='</div>';
     });
@@ -1615,7 +1773,7 @@ class TrailApp {
       +'<div class="pa-lbl">Find nearby:</div><div class="pa-row">'
       +b('gas station convenience store','Gas / C-store')+b('grocery store supermarket','Groceries')
       +b('restaurant cafe','Food')+b('hotel motel lodging','Lodging')
-      +'<a href="'+ratesLink(t.n+' NY')+'" target="_blank" rel="noopener" class="pa">Rates</a>'
+      +'<a href="'+ratesLink(t.n+' NY', this.townDate(t))+'" target="_blank" rel="noopener" class="pa">Rates</a>'
       +b('campground','Camping')+b('bicycle shop','Bike shop')+'</div>'
       // Same offer a bare map tap gets, gated on the same setting — a known town is
       // the likeliest place to want it, and it beats hunting the simulate dropdown.
@@ -1658,7 +1816,7 @@ class TrailApp {
     const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
     // Campgrounds get reviews too — same question a rider is asking of a motel.
     const stay=(p.asset==='Lodging'||p.asset==='Campground');
-    if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '))+'" target="_blank" rel="noopener">Check rates</a>');
+    if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
     if(stay) lk.push('<a href="'+reviewsLink([p.name,p.addr].filter(Boolean).join(' '),p.lat,p.lng)+'" target="_blank" rel="noopener">Reviews</a>');
     // Exact coords here, so this routes precisely — no geocoding guess involved.
     lk.push('<a href="https://www.google.com/maps/dir/?api=1'+(this.myLL?'&origin='+this.myLL.lat+','+this.myLL.lng:'')

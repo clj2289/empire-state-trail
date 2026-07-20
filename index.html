@@ -143,31 +143,48 @@
     padding:4px 7px;background:transparent;border:1px solid var(--color-divider);
     border-radius:var(--radius-md);color:var(--color-accent-700)}
   .pr-row button:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
-  /* The day chart: an hour of riding per column. */
+  /* The day chart: stacked panels over one time axis, an hour of riding per column. */
   .wx-svg{display:block;width:100%;height:auto;margin-top:var(--space-2);overflow:visible}
-  .wx-ax{stroke:var(--color-divider);stroke-width:1}
-  .wx-rain{fill:var(--color-accent);opacity:.3}
+  .wx-ax{stroke:var(--color-neutral-400);stroke-width:1}
+  .wx-gl{stroke:var(--color-divider);stroke-width:1}
+  .wx-dash{stroke-dasharray:2 3}
+  .wx-rain{fill:var(--color-accent);opacity:.35}
+  .wx-tfill{fill:var(--color-accent-800);opacity:.08}
   .wx-temp{fill:none;stroke:var(--color-accent-800);stroke-width:1.75;
     stroke-linejoin:round;stroke-linecap:round}
   .wx-dot{fill:var(--color-accent-800)}
   .wx-tl{fill:var(--color-text);font-family:var(--font-body);font-size:10px;font-weight:700}
   .wx-xl{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:9px}
-  .wx-ar{font-size:13px;font-weight:700}
+  .wx-gt{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:8px}
+  .wx-wl{font-family:var(--font-body);font-size:9px;font-weight:700}
+  /* Wind as a rider meets it: up in your face, down at your back, straddling
+     the line when it only pushes you sideways. */
+  .wx-b-head{fill:#b3261e}
+  .wx-b-tail{fill:#146c2e}
+  .wx-b-cross{fill:var(--color-neutral-400)}
+  .wx-g-head{fill:#b3261e}
+  .wx-g-tail{fill:#146c2e}
+  /* Towns ruled down the stack — the chart's landmarks. */
+  .wx-tn{stroke:var(--color-neutral-400);stroke-width:1;stroke-dasharray:1 3;opacity:.75}
+  .wx-tnl{fill:var(--color-neutral-600);font-family:var(--font-body);font-size:8.5px;font-weight:600}
   text.wx-head{fill:#b3261e}
   text.wx-tail{fill:#146c2e}
   text.wx-cross{fill:var(--color-neutral-500)}
-  .wx-key{display:flex;flex-wrap:wrap;gap:10px;margin-top:3px;font-size:10px;color:var(--color-neutral-500)}
+  .wx-key{display:flex;flex-wrap:wrap;gap:9px;margin-top:3px;font-size:10px;color:var(--color-neutral-500)}
   .wx-key span::before{content:"";display:inline-block;width:8px;height:8px;margin-right:4px;
     border-radius:2px;vertical-align:-1px}
   .wx-k-t::before{background:var(--color-accent-800)}
   .wx-k-r::before{background:var(--color-accent);opacity:.4}
-  .wx-k-w::before{background:var(--color-neutral-400)}
+  .wx-k-h::before{background:#b3261e}
+  .wx-k-l::before{background:#146c2e}
+  .wx-k-c::before{background:var(--color-neutral-400)}
   .wx-ic{background:none;border:0}
   .wx-pin{display:flex;align-items:center;gap:3px;padding:2px 5px;white-space:nowrap;
     font-family:var(--font-body);font-size:11px;font-weight:600;line-height:1;
     background:var(--color-bg);border:1px solid currentColor;border-radius:999px;
     box-shadow:var(--shadow-md);font-variant-numeric:tabular-nums}
   .wx-arrow{display:inline-block;font-size:13px;line-height:1}
+  .wx-s{font-weight:700}
   .wx-p{font-weight:400;opacity:.7}
   .wx-head{color:#b3261e}
   .wx-tail{color:#146c2e}
@@ -187,7 +204,11 @@
   .wx-day-n{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px}
   .wx-day-d{font-size:12px;color:var(--color-neutral-600)}
   .wx-day-m{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
+  .wx-day-tw{font-size:13px;font-weight:600;color:var(--color-neutral-800);margin-top:2px}
   .wx-day-tm{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums;margin-top:1px}
+  .wx-night{margin-top:5px;padding:5px 8px;font-size:12px;color:var(--color-neutral-700);
+    background:var(--color-neutral-100);border-radius:var(--radius-md)}
+  .wx-night b{color:var(--color-text)}
   .wx-day-w{font-size:13px;margin-top:5px}
   .wx-none{font-size:12px;color:var(--color-neutral-500);margin-top:5px}
   .wx-wind{display:flex;align-items:center;gap:5px;margin-top:4px;font-size:13px;font-weight:600}
@@ -552,7 +573,7 @@
     <button data-tab="next" type="button" class="tab" aria-current="false" title="Next up" aria-label="Next up"><span class="tab-ic" data-ic="next"></span></button>
     <button data-tab="itin" type="button" class="tab" aria-current="false" title="Trip" aria-label="Trip" hidden><span class="tab-ic" data-ic="list"></span></button>
     <button data-tab="nearby" type="button" class="tab" aria-current="false" title="Nearby" aria-label="Nearby"><span class="tab-ic" data-ic="near"></span></button>
-    <button data-tab="wx" type="button" class="tab" aria-current="false" title="Outlook" aria-label="Outlook"><span class="tab-ic" data-ic="wind"></span></button>
+    <button data-tab="wx" type="button" class="tab" aria-current="false" title="Outlook" aria-label="Outlook"><span class="tab-ic" data-ic="fcast"></span></button>
     <button data-tab="settings" type="button" class="tab" aria-current="false" title="More" aria-label="More"><span class="tab-ic" data-ic="gear"></span></button>
   </nav>
 </div>
