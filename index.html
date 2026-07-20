@@ -499,6 +499,32 @@
     max-height:calc(100vh - 200px);overflow-y:auto}
   .leaflet-control-layers-selector{accent-color:var(--color-accent)}
   .leaflet-control-layers label{line-height:1.9;white-space:nowrap}
+  /* A draggable row: the grip sits outside the label, so a drag can't end in a toggle. */
+  .lyr-row{display:flex;align-items:center;gap:6px}
+  .lyr-row.dragging{opacity:.9;background:var(--color-accent-100);border-radius:var(--radius-md)}
+  .lyr-row label{flex:1;min-width:0}
+  .lyr-grip{flex:none;width:12px;height:16px;cursor:grab;touch-action:none;
+    background-image:radial-gradient(currentColor 1px,transparent 1px);background-size:4px 4px;
+    background-position:1px 3px;color:var(--color-neutral-400)}
+  .lyr-grip:active{cursor:grabbing}
+  /* Layers the rider brought: the form, the list of them, and their popups. */
+  .ul-lbl{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;
+    font-size:12px;color:var(--color-neutral-700)}
+  .ul-stat{font-size:11.5px;color:var(--color-neutral-600);margin-top:var(--space-2);min-height:1em}
+  .ul-list{margin-top:var(--space-2)}
+  .ul-row{display:flex;align-items:center;gap:7px;padding:6px 0;
+    border-bottom:1px solid var(--color-divider);font-size:12.5px}
+  .ul-dot{flex:none;width:10px;height:10px;border-radius:50%}
+  .ul-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ul-k{flex:none;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-500)}
+  .ul-x{flex:none;font-family:inherit;font-size:11px;cursor:pointer;padding:3px 7px;
+    background:transparent;color:var(--color-accent-700);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .ul-x:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .ul-tbl{border-collapse:collapse;margin-top:4px;font-size:11.5px}
+  .ul-tbl th{text-align:left;padding:1px 8px 1px 0;font-weight:600;
+    color:var(--color-neutral-600);white-space:nowrap;vertical-align:top}
+  .ul-tbl td{padding:1px 0;vertical-align:top}
   .leaflet-control-attribution{background:color-mix(in srgb,var(--color-bg) 82%,transparent);font-size:10px;color:var(--color-neutral-600)}
   .pa-lbl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:9px 0 5px}
   .pa-row{display:flex;flex-wrap:wrap;gap:4px}
@@ -628,6 +654,20 @@
         <select id="simSel" class="input"><option value="">Choose a place…</option></select>
         <div class="set-lbl">Test locations</div>
         <div id="testRows" class="test-list"></div>
+        <div class="set-lbl">Your own layers</div>
+        <div class="poi-band">
+          <label class="ul-lbl">ArcGIS layer URL
+            <input id="ulUrl" type="url" class="input" inputmode="url" autocomplete="off"
+              placeholder="https://\u2026/FeatureServer/0"></label>
+          <button id="ulAdd" type="button" class="poi-band-view">Add</button>
+        </div>
+        <div class="poi-band">
+          <label class="ul-lbl">Or a GPX file
+            <input id="ulGpx" type="file" accept=".gpx,application/gpx+xml,application/xml" class="input"></label>
+        </div>
+        <div id="ulStat" class="ul-stat"></div>
+        <div id="ulList" class="ul-list"></div>
+        <p class="poi-band-note">Anything you add turns up in the map\u2019s layers control, off until you switch it on, and can be dragged into whatever order you want it drawn in. An ArcGIS URL is a single layer\u2019s endpoint \u2014 the one ending in a number. It\u2019s fetched over New York, up to 2,000 features, and stored as the URL so it stays current. A GPX is stored as its points, since there\u2019s nowhere to fetch it back from.</p>
         <div id="locStatus" class="locstat">Tap Locate on the map, tap the map itself, or pick a simulated spot to set where you are.</div>
         <div class="about">
           Route and every trail-mile are measured along the official Empire State Trail GPX (Oct 2025). Facility pins load live from NY State's public service; confirm a specific business before relying on it.<br><br>

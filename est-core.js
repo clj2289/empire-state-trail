@@ -97,11 +97,18 @@ const EST_SRC='https://empiretrail.ny.gov/import-instructions';
 const AADT_URL='https://gis.dot.ny.gov/hostingny/rest/services/Roadways/Traffic_Monitoring/FeatureServer/1/query';
 const AADT_SRC='https://www.dot.ny.gov/tdv';
 const AADT_MINZ=10, AADT_CAP=400;
-// Bands as a bike feels them, not as a traffic engineer files them. The weights are
-// deliberately heavier than the route line: this layer is the answer to "which way
-// round do I go", and a hairline you have to hunt for cannot answer it.
-const AADT_BANDS=[[1000,'#2e7d32','quiet',4],[5000,'#c98a00','moderate',5],
-                  [15000,'#e06c00','busy',6.5],[Infinity,'#b3261e','heavy',8]];
+/* Bands as a bike feels them, not as a traffic engineer files them: five hundred
+   vehicles a day is where a road stops being empty, and fifteen hundred is where
+   most riders would rather be somewhere else. Everything above that is one colour,
+   because past the point you would avoid it, how much worse it gets is somebody
+   else's question. Weights run heavier than the route line — a hairline you have
+   to hunt for cannot answer "which way round do I go".
+   Each band carries two colours: the bright one is the line on the map, the dark
+   one is for type, because yellow that reads well as a 6px stroke is unreadable
+   as 10px text on white. */
+const AADT_BANDS=[[500,'#2e7d32','quiet',4,'#1b5e20'],
+                  [1500,'#f0b400','moderate',5.5,'#8a6100'],
+                  [Infinity,'#d32f2f','heavy',7,'#b3261e']];
 /* Zoomed out, the quiet streets are not what you are looking for and there is not
    the room to draw them anyway, so the floor rises with the scale — the same idea
    as the milepost interval. Where more is in view than will be drawn the busiest
@@ -218,6 +225,55 @@ const AMKEYS=['store','lodging','camp','rail'];
 const AMICON={store:'store',lodging:'bed',camp:'tent',rail:'train'};
 const AMQ={store:'grocery store supermarket',lodging:'hotel motel lodging',camp:'campground',rail:'train station'};
 function iconStrTxt(t){ const c=cats(t); return AMKEYS.filter(k=>c[k]).map(k=>({store:'resupply',lodging:'lodging',camp:'camping',rail:'rail'}[k])).join(' · '); }
+
+/* ---- layers the rider brings themselves ----
+   Two ways in, because these are the two things a trail is published as: an ArcGIS
+   layer endpoint, or a GPX. What is kept differs by kind and that is deliberate —
+   a service URL is four dozen bytes and always current, so it is stored and the
+   features are fetched again; a GPX has no address to go back to, so its points are
+   stored instead. Neither is drawn until the layer is switched on. */
+const USER_KEY='est-layers-v1';
+const USER_CAP=2000;
+const USER_BOX={xmin:-79.95,ymin:40.45,xmax:-73.15,ymax:45.05,spatialReference:{wkid:4326}};
+// Distinct from the trail's cyan and magenta, from the Shoreline's purple, and from
+// the four traffic bands — a borrowed layer should not read as one of ours.
+const USER_COLORS=['#00838f','#ad1457','#5d4037','#3949ab','#00695c','#bf360c'];
+/* Servers older than 10.4 have never heard of GeoJSON and answer in Esri's own
+   shape. It is the same information: a point is x/y, a line is paths, a polygon is
+   rings — the ring winding differs from GeoJSON's but nothing here depends on it. */
+function esriToGeo(j){
+  return (j.features||[]).map(f=>{
+    const g=f.geometry||{};
+    const geom = g.x!=null ? {type:'Point',coordinates:[g.x,g.y]}
+      : g.paths ? {type:'MultiLineString',coordinates:g.paths}
+      : g.rings ? {type:'Polygon',coordinates:g.rings} : null;
+    return geom ? {type:'Feature',geometry:geom,properties:f.attributes||{}} : null;
+  }).filter(Boolean);
+}
+/* A GPX is a track, a route, or a pile of waypoints, and plenty of files are more
+   than one of those. All three are read: the lines get drawn as lines and the loose
+   waypoints as points, which is what the file is saying they are. */
+function parseGpx(text){
+  const doc=new DOMParser().parseFromString(text,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('that file isn\u2019t readable XML');
+  const ll=n=>[+n.getAttribute('lat'), +n.getAttribute('lon')];
+  const good=p=>isFinite(p[0]) && isFinite(p[1]) && abs(p[0])<=90 && abs(p[1])<=180;
+  const lines=[];
+  ['trkseg','rte'].forEach(tag=>{
+    [].slice.call(doc.getElementsByTagName(tag)).forEach(seg=>{
+      const pts=[].slice.call(seg.getElementsByTagName(tag==='rte'?'rtept':'trkpt')).map(ll).filter(good);
+      if(pts.length>1) lines.push(pts);
+    });
+  });
+  const wpts=[].slice.call(doc.getElementsByTagName('wpt')).map(n=>{
+    const p=ll(n); if(!good(p)) return null;
+    const nm=n.getElementsByTagName('name')[0];
+    return {lat:p[0], lng:p[1], name:nm?nm.textContent:''};
+  }).filter(Boolean);
+  const nm=doc.getElementsByTagName('name')[0];
+  if(!lines.length && !wpts.length) throw new Error('no track, route or waypoints in it');
+  return {name:nm?nm.textContent.trim():'', lines, wpts};
+}
 
 /* ---- finding a place ----
    Two questions wear the same box. A pair of numbers is answered here and offline:
@@ -435,6 +491,10 @@ class TrailApp {
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.mileLayer=null; this.mileSig='';
+    // Overlays by key, the order they were registered in, and the order the rider
+    // has dragged them into — the last of these is the only one that is saved.
+    this.lyrByKey={}; this.lyrKeyById={}; this.lyrSeq=[]; this.lyrOrder=[];
+    this.userLayers=[];
     this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
@@ -453,6 +513,7 @@ class TrailApp {
   init(){
     this.loadPrefs();
     this.loadPrices();
+    this.loadUserLayers();
     this.buildDropdowns();
     this.buildTestRows();
     this.wireTabs();
@@ -496,6 +557,7 @@ class TrailApp {
     // types we don't hardcode. Render intersects with what actually arrived, so a
     // retired key is inert rather than needing pruning here.
     if(Array.isArray(p.catOrder)) this.catOrder=p.catOrder.filter(c=>typeof c==='string');
+    if(Array.isArray(p.lyrOrder)) this.lyrOrder=p.lyrOrder.filter(c=>typeof c==='string');
     if(Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     this.renderDirLabels();
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
@@ -513,7 +575,7 @@ class TrailApp {
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxDays:this.wxDays,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
-      catOrder:this.catOrder,catHidden:[...this.catHidden]})); }catch(e){}
+      catOrder:this.catOrder,catHidden:[...this.catHidden],lyrOrder:this.lyrOrder})); }catch(e){}
   }
   /* Summary shown on the collapsed header. A filter you can't see is a filter you
      forget you set, so the closed state has to say when something is narrowing. */
@@ -718,6 +780,13 @@ class TrailApp {
 
   /* ---------- controls ---------- */
   wireControls(){
+    const ua=this.$('ulAdd'); if(ua) ua.addEventListener('click',()=>this.addArcgisLayer((this.$('ulUrl')||{}).value));
+    const uu=this.$('ulUrl'); if(uu) uu.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); this.addArcgisLayer(uu.value); } });
+    const ug=this.$('ulGpx'); if(ug) ug.addEventListener('change',e=>{
+      const f=e.target.files && e.target.files[0];
+      this.addGpxLayer(f); e.target.value='';
+    });
+    document.addEventListener('click',e=>{ const x=e.target.closest('.ul-x'); if(x) this.removeUserLayer(x.dataset.ul); });
     document.addEventListener('click',e=>{ if(e.target.closest('.dir-toggle')) this.flipDir(); });
     const tr=this.$('showTrip'); if(tr) tr.addEventListener('change',e=>{ this.showTrip=e.target.checked; this.savePrefs(); this.applyTripTab(); });
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
@@ -1334,6 +1403,259 @@ class TrailApp {
     if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
   }
 
+  /* ---------- layers the rider adds ---------- */
+  loadUserLayers(){
+    try{ const v=JSON.parse(localStorage.getItem(USER_KEY)||'[]');
+      if(Array.isArray(v)) this.userLayers=v.filter(r=>r&&r.id&&r.kind); }catch(e){}
+  }
+  /* Only the fields that describe the layer. The record also carries the live
+     Leaflet group once it is registered, and that has a reference to the map, which
+     has a reference to every layer on it — stringifying that throws on the circular
+     structure, and the failure would have surfaced as "no room to remember it". */
+  saveUserLayers(){
+    const keep=this.userLayers.map(r=>{
+      const o={id:r.id, kind:r.kind, name:r.name, color:r.color};
+      if(r.url) o.url=r.url;
+      if(r.lines) o.lines=r.lines;
+      if(r.wpts && r.wpts.length) o.wpts=r.wpts;
+      return o;
+    });
+    try{ localStorage.setItem(USER_KEY, JSON.stringify(keep)); return true; }
+    catch(e){ return false; }        // out of room — the caller says so rather than lying
+  }
+  userColor(){ return USER_COLORS[this.userLayers.length % USER_COLORS.length]; }
+  /* The layer's own endpoint, which is the one ending in a number. Anything else —
+     the service root, the portal item page, a query someone copied out of a browser
+     — is a URL that cannot answer a query, so it is refused by name rather than
+     failing later with something unhelpful about JSON. */
+  arcgisBase(u){
+    const s=String(u||'').trim().split('?')[0].replace(/\/+$/,'').replace(/\/query$/i,'');
+    return /\/(FeatureServer|MapServer)\/\d+$/i.test(s) ? s : '';
+  }
+  async arcgisName(base){
+    try{
+      const r=await fetch(base+'?f=json');
+      const j=r.ok?await r.json():null;
+      if(j && j.name) return String(j.name);
+    }catch(e){}
+    return base.split('/').slice(-3).join('/');
+  }
+  async arcgisFeatures(base){
+    const p=new URLSearchParams({where:'1=1', outFields:'*', outSR:'4326', returnGeometry:'true',
+      geometry:JSON.stringify(USER_BOX), geometryType:'esriGeometryEnvelope', inSR:'4326',
+      spatialRel:'esriSpatialRelIntersects', geometryPrecision:'5',
+      resultRecordCount:String(USER_CAP), f:'geojson'});
+    let r=await fetch(base+'/query?'+p.toString());
+    let j=r.ok ? await r.json() : null;
+    if(j && !j.error && j.features) return j.features;
+    p.set('f','json');
+    r=await fetch(base+'/query?'+p.toString());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    j=await r.json();
+    if(j.error) throw new Error(j.error.message||'the service refused the query');
+    return esriToGeo(j);
+  }
+  async addArcgisLayer(url){
+    const base=this.arcgisBase(url);
+    if(!base){ this.userStatus('That needs to be a single layer\u2019s URL \u2014 the one ending in a number, like \u2026/FeatureServer/0.'); return; }
+    if(this.userLayers.some(r=>r.url===base)){ this.userStatus('That layer is already on the list.'); return; }
+    this.userStatus('Asking the service what it holds\u2026');
+    const name=await this.arcgisName(base);
+    const rec={id:'u'+Date.now(), kind:'arcgis', url:base, name, color:this.userColor()};
+    this.userLayers.push(rec);
+    if(!this.saveUserLayers()) this.userStatus('Added, but there wasn\u2019t room to remember it past this session.');
+    else this.userStatus('Added \u201c'+name+'\u201d. Switch it on in the map\u2019s layers control.');
+    this.registerUserLayer(rec);
+    this.renderUserLayers();
+    const inp=this.$('ulUrl'); if(inp) inp.value='';
+  }
+  async addGpxLayer(file){
+    if(!file) return;
+    this.userStatus('Reading '+file.name+'\u2026');
+    let g;
+    try{ g=parseGpx(await file.text()); }
+    catch(e){ this.userStatus('Couldn\u2019t read '+file.name+' \u2014 '+e.message+'.'); return; }
+    const rec={id:'u'+Date.now(), kind:'gpx', name:g.name||file.name.replace(/\.gpx$/i,''),
+      color:this.userColor(), lines:g.lines, wpts:g.wpts};
+    this.userLayers.push(rec);
+    const n=g.lines.reduce((a,l)=>a+l.length,0);
+    if(!this.saveUserLayers()){
+      // Better to draw it now and say it won't survive than to refuse the file.
+      this.userStatus('Drawn, but '+file.name+' is too big to keep \u2014 it will be gone on reload.');
+    } else this.userStatus('Added \u201c'+rec.name+'\u201d: '+n+' points'
+      +(g.wpts.length?' and '+g.wpts.length+' waypoints':'')+'. Switch it on in the layers control.');
+    this.registerUserLayer(rec);
+    this.renderUserLayers();
+  }
+  removeUserLayer(id){
+    const rec=this.userLayers.find(r=>r.id===id); if(!rec) return;
+    this.userLayers=this.userLayers.filter(r=>r.id!==id);
+    this.saveUserLayers();
+    this.unregLayer('user:'+id);
+    this.renderUserLayers();
+    this.userStatus('Removed \u201c'+rec.name+'\u201d.');
+  }
+  userStatus(msg){ const el=this.$('ulStat'); if(el) el.textContent=msg; }
+  /* Registered empty and filled on first switch-on, the same bargain the Shoreline
+     and the traffic counts make: a layer you have not asked to see costs nothing. */
+  registerUserLayer(rec){
+    if(!this.layersCtl) return;
+    const g=L.layerGroup();
+    rec._layer=g; rec._drawn=false;
+    this.regLayer('user:'+rec.id, g,
+      esc(rec.name)+' <span class="lyr-ct">'+(rec.kind==='gpx'?'GPX':'ArcGIS')+'</span>');
+    if(this.map) this.map.on('overlayadd', e=>{ if(e.layer===g) this.fillUserLayer(rec); });
+  }
+  async fillUserLayer(rec){
+    if(rec._drawn) return;
+    rec._drawn=true;
+    if(rec.kind==='gpx'){ this.drawUserGeom(rec, rec.lines, rec.wpts); return; }
+    this.status('Reading \u201c'+rec.name+'\u201d from ArcGIS\u2026');
+    let feats;
+    try{ feats=await this.arcgisFeatures(rec.url); }
+    catch(e){
+      rec._drawn=false;
+      this.status('Couldn\u2019t read \u201c'+rec.name+'\u201d \u2014 '+e.message+'.');
+      return;
+    }
+    const n=this.drawUserFeats(rec, feats);
+    this.status('\u201c'+rec.name+'\u201d: '+n+' feature'+(n===1?'':'s')
+      +(feats.length>=USER_CAP?' (the first '+USER_CAP+' \u2014 there are more)':'')+'.');
+  }
+  drawUserGeom(rec, lines, wpts){
+    const g=rec._layer, col=rec.color;
+    (lines||[]).forEach(l=>L.polyline(l,{color:col,weight:4,opacity:.9}).addTo(g));
+    (wpts||[]).forEach(p=>L.circleMarker([p.lat,p.lng],{radius:5,weight:2,color:'#fff',
+      fillColor:col,fillOpacity:1}).bindPopup(esc(p.name||'Waypoint')).addTo(g));
+    this.applyLyrOrder();
+  }
+  drawUserFeats(rec, feats){
+    const g=rec._layer, col=rec.color;
+    let n=0;
+    feats.forEach(f=>{
+      const gm=f.geometry||{}, pr=f.properties||{};
+      const pop=()=>this.userPopup(rec, pr);
+      const line=ll=>{ if(ll.length>1){ L.polyline(ll,{color:col,weight:3.5,opacity:.9}).bindPopup(pop).addTo(g); n++; } };
+      const flip=path=>path.map(c=>[c[1],c[0]]);
+      if(gm.type==='Point'){
+        const c=gm.coordinates||[];
+        if(isFinite(c[0])&&isFinite(c[1])){
+          L.circleMarker([c[1],c[0]],{radius:5,weight:2,color:'#fff',fillColor:col,fillOpacity:1})
+            .bindPopup(pop).addTo(g); n++;
+        }
+      }
+      else if(gm.type==='LineString') line(flip(gm.coordinates||[]));
+      else if(gm.type==='MultiLineString') (gm.coordinates||[]).forEach(p=>line(flip(p)));
+      else if(gm.type==='Polygon'||gm.type==='MultiPolygon'){
+        const rings = gm.type==='Polygon' ? [gm.coordinates] : gm.coordinates;
+        rings.forEach(poly=>{
+          const ll=(poly||[]).map(flip);
+          if(ll.length && ll[0].length>2){
+            L.polygon(ll,{color:col,weight:2,opacity:.9,fillOpacity:.12}).bindPopup(pop).addTo(g); n++;
+          }
+        });
+      }
+    });
+    this.applyLyrOrder();
+    return n;
+  }
+  /* Whatever the layer happens to carry, since we cannot know which of its fields
+     matters to you. Trimmed to a dozen so a table of forty internal ID columns does
+     not fill the screen, and empties dropped because they say nothing. */
+  userPopup(rec, pr){
+    const keys=Object.keys(pr||{}).filter(k=>pr[k]!=null && pr[k]!=='' && !/^(objectid|globalid|shape[_.])/i.test(k));
+    let h='<b>'+esc(rec.name)+'</b>';
+    if(!keys.length) return h+'<br><span style="opacity:.65">No attributes on this one.</span>';
+    h+='<table class="ul-tbl">'+keys.slice(0,12).map(k=>
+      '<tr><th>'+esc(k)+'</th><td>'+esc(String(pr[k]))+'</td></tr>').join('')+'</table>';
+    if(keys.length>12) h+='<span style="opacity:.65">and '+(keys.length-12)+' more fields</span>';
+    return h;
+  }
+  renderUserLayers(){
+    const el=this.$('ulList'); if(!el) return;
+    if(!this.userLayers.length){ el.innerHTML=''; return; }
+    el.innerHTML=this.userLayers.map(r=>
+      '<div class="ul-row"><span class="ul-dot" style="background:'+r.color+'"></span>'
+      +'<span class="ul-nm">'+esc(r.name)+'</span>'
+      +'<span class="ul-k">'+(r.kind==='gpx'?'GPX':'ArcGIS')+'</span>'
+      +'<button type="button" class="ul-x" data-ul="'+esc(r.id)+'">Remove</button></div>').join('');
+  }
+
+  /* ---------- the layers control ---------- */
+  /* Overlays are registered here rather than handed straight to Leaflet, because a
+     control you can drag needs a name for each row that outlives the page: layer
+     objects don't survive a reload and the labels carry counts that change. */
+  regLayer(key,layer,label){
+    if(!this.layersCtl) return layer;
+    this.lyrByKey[key]=layer;
+    this.lyrKeyById[L.Util.stamp(layer)]=key;
+    if(this.lyrSeq.indexOf(key)<0) this.lyrSeq.push(key);
+    this.layersCtl.addOverlay(layer,label);
+    this.decorateLayers();
+    return layer;
+  }
+  unregLayer(key){
+    const l=this.lyrByKey[key]; if(!l) return;
+    if(this.map && this.map.hasLayer(l)) this.map.removeLayer(l);
+    if(this.layersCtl) this.layersCtl.removeLayer(l);
+    delete this.lyrKeyById[L.Util.stamp(l)];
+    delete this.lyrByKey[key];
+    this.lyrSeq=this.lyrSeq.filter(k=>k!==key);
+    this.lyrOrder=this.lyrOrder.filter(k=>k!==key);
+    this.savePrefs(); this.decorateLayers();
+  }
+  // Dragged order first, then anything registered since, in the order it arrived.
+  lyrOrderList(){
+    const seen={}, out=[];
+    this.lyrOrder.forEach(k=>{ if(this.lyrByKey[k] && !seen[k]){ seen[k]=1; out.push(k); } });
+    this.lyrSeq.forEach(k=>{ if(!seen[k]){ seen[k]=1; out.push(k); } });
+    return out;
+  }
+  /* Leaflet rebuilds the overlay list from scratch on every addOverlay, so the grips
+     and the order are re-applied afterwards rather than set up once. Each row is
+     wrapped so the grip sits outside the label — inside it, a drag would toggle the
+     layer on pointerup. */
+  decorateLayers(){
+    const ctl=this.layersCtl;
+    const box=ctl && ctl._container ? ctl._container.querySelector('.leaflet-control-layers-overlays') : null;
+    if(!box) return;
+    [].slice.call(box.children).forEach(node=>{
+      if(node.tagName!=='LABEL') return;
+      const inp=node.querySelector('input');
+      const key=inp ? this.lyrKeyById[inp.layerId] : null;
+      if(!key) return;
+      const row=document.createElement('div');
+      row.className='lyr-row'; row.dataset.lyr=key;
+      const grip=document.createElement('span');
+      grip.className='lyr-grip'; grip.title='Drag to reorder'; grip.setAttribute('aria-hidden','true');
+      box.insertBefore(row,node);
+      row.appendChild(grip); row.appendChild(node);
+      this.wireDrag(row, box, '.lyr-row', '.lyr-grip', 'y', ()=>{
+        this.lyrOrder=[].slice.call(box.querySelectorAll('.lyr-row')).map(r=>r.dataset.lyr);
+        this.savePrefs(); this.applyLyrOrder();
+      });
+    });
+    this.lyrOrderList().forEach(k=>{
+      const r=box.querySelector('.lyr-row[data-lyr="'+k+'"]');
+      if(r) box.appendChild(r);
+    });
+    this.applyLyrOrder();
+  }
+  /* Painted bottom up, so the row you dragged to the top is drawn last and lands on
+     top. Only lines restack: Leaflet keeps every pin above every line whatever you
+     do, which is the behaviour you want anyway — a pin under a road line is a pin
+     you cannot tap. Re-run after anything that redraws, since a fresh path is
+     always added at the front of its pane. */
+  applyLyrOrder(){
+    const ord=this.lyrOrderList();
+    for(let i=ord.length-1;i>=0;i--){
+      const l=this.lyrByKey[ord[i]];
+      if(!l) continue;
+      if(l.bringToFront) l.bringToFront();
+      else if(l.eachLayer) l.eachLayer(x=>{ if(x.bringToFront) x.bringToFront(); });
+    }
+  }
+
   /* ---------- find a place ---------- */
   openFind(){
     const f=this.$('mapFind'), q=this.$('findQ');
@@ -1478,8 +1800,9 @@ class TrailApp {
     for(let i=0;i<AADT_FLOOR.length;i++) if(z>=AADT_FLOOR[i][0]) return AADT_FLOOR[i][1];
     return AADT_FLOOR[AADT_FLOOR.length-1][1];
   }
+  // Inclusive at the top of each band, because "over 500 is yellow" means 500 is not.
   aadtBand(v){
-    for(let i=0;i<AADT_BANDS.length;i++) if(v<AADT_BANDS[i][0]) return AADT_BANDS[i];
+    for(let i=0;i<AADT_BANDS.length;i++) if(v<=AADT_BANDS[i][0]) return AADT_BANDS[i];
     return AADT_BANDS[AADT_BANDS.length-1];
   }
   // 430, 3.2k, 89k — a count read at a glance, not audited.
@@ -1558,6 +1881,7 @@ class TrailApp {
         name:String(pr.RoadwayName||pr.RouteNumber||'').trim()});
     });
     this.labelAadt(rows);
+    this.applyLyrOrder();
     return rows.length;
   }
   /* One number per road, and only where it fits. Labelling every segment stacks a
@@ -1575,7 +1899,7 @@ class TrailApp {
       placed.push(box); seen[nm]=1;
       g.addLayer(L.marker(r.mid,{interactive:false,keyboard:false,zIndexOffset:-400,
         icon:L.divIcon({className:'aadt-ic',iconSize:[w,h],iconAnchor:[w/2,h/2],
-          html:'<span class="aadt-n" style="border-color:'+r.band[1]+';color:'+r.band[1]+'">'+esc(txt)+'</span>'})}));
+          html:'<span class="aadt-n" style="border-color:'+r.band[1]+';color:'+r.band[4]+'">'+esc(txt)+'</span>'})}));
     });
   }
   aadtPopup(p){
@@ -1583,7 +1907,7 @@ class TrailApp {
     const sign=String(p.RouteSigning||'').trim(), num=String(p.RouteNumber||'').trim();
     const nm=String(p.RoadwayName||'').trim() || (sign+' '+num).trim() || 'Unnamed road';
     let h='<b>'+esc(nm)+'</b>'
-      +'<br><b style="color:'+band[1]+'">'+v.toLocaleString()+' vehicles a day</b> \u00b7 '+band[2]
+      +'<br><b style="color:'+band[4]+'">'+v.toLocaleString()+' vehicles a day</b> \u00b7 '+band[2]
       +'<br><span style="opacity:.65">NYSDOT count'+(p.CalculationYear?', '+p.CalculationYear:'')+'</span>';
     const bits=[];
     if(p.SpeedLimit) bits.push(p.SpeedLimit+' mph limit');
@@ -1646,6 +1970,7 @@ class TrailApp {
       n++;
       g.addLayer(mi%step===0 ? this.mileLabel(mi,p) : this.mileTick(mi,p));
     }
+    this.applyLyrOrder();
   }
   mileLabel(mile,p){
     const c=this.mileColor(mile);
@@ -2206,7 +2531,7 @@ class TrailApp {
        also where the official GPX for a GPS unit lives. One group, so the swap from
        the embedded line to the live ArcGIS one below doesn't lose the row. */
     this.routeLayer=L.layerGroup(this.embLines).addTo(map);
-    this.layersCtl.addOverlay(this.routeLayer,
+    this.regLayer('route', this.routeLayer,
       this.lyrSrc('Empire State Trail', EST_SRC, 'The official route, and the GPX for your GPS')
       +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
     this.stopLayer=L.layerGroup();
@@ -2216,12 +2541,12 @@ class TrailApp {
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
     this.stopLayer.addTo(map);
-    this.layersCtl.addOverlay(this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
+    this.regLayer('stops', this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
     /* On from the start, unlike the weather: it costs a few divs and no requests, and
        a trail map without mileposts makes you guess which end of the line you are
        looking at. Redrawn on moveend — which is also what a zoom ends in. */
     this.mileLayer=L.layerGroup().addTo(map);
-    this.layersCtl.addOverlay(this.mileLayer,'Mileposts');
+    this.regLayer('miles', this.mileLayer,'Mileposts');
     map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
@@ -2229,20 +2554,23 @@ class TrailApp {
     this.shoreLayer=L.polyline([],{color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
     this.shoreLayer.bindPopup('',{maxWidth:270,autoPan:false});
     this.shoreLayer.on('popupopen',()=>this.shoreLayer.setPopupContent(this.shorePopup()));
-    this.layersCtl.addOverlay(this.shoreLayer,
+    this.regLayer('shore', this.shoreLayer,
       this.lyrSrc(SHORE.name, SHORE.src, 'From '+SHORE.srcName+' \u2014 opens the route this line came from')
       +' <span class="lyr-ct">GPX</span>');
     map.on('overlayadd', e=>{ if(e.layer===this.shoreLayer) this.showShore(); });
     this.aadtLayer=L.layerGroup();
-    this.layersCtl.addOverlay(this.aadtLayer,
+    this.regLayer('aadt', this.aadtLayer,
       this.lyrSrc('Traffic counts', AADT_SRC, 'From the NYSDOT Traffic Data Viewer \u2014 opens the source')
       +' <span class="lyr-ct">AADT</span>');
     map.on('overlayadd', e=>{ if(e.layer===this.aadtLayer){ this.aadtSig=''; this.loadAadt(); } });
+    // Whatever the rider brought last time, back in the control in the same order.
+    this.userLayers.forEach(rec=>this.registerUserLayer(rec));
+    this.renderUserLayers();
     map.on('overlayremove', e=>{ if(e.layer===this.aadtLayer) this.aadtLayer.clearLayers(); });
     // Off until asked for: it costs a dozen requests to a public service, so switching
     // it on is the fetch trigger rather than something that happens behind your back.
     this.wxLayer=L.layerGroup();
-    this.layersCtl.addOverlay(this.wxLayer,'Wind &amp; weather');
+    this.regLayer('wx', this.wxLayer,'Wind &amp; weather');
     map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
     map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.renderMapSheet(); } });
     map.on('click',e=>this.tapPopup(e.latlng));
@@ -2357,7 +2685,7 @@ class TrailApp {
         g.addLayer(mk);
       });
       this.poiLayers[asset]=g; if(def) g.addTo(this.map);
-      if(this.layersCtl) this.layersCtl.addOverlay(g, esc(cfg.label)+' <span class="lyr-ct">'+items.length+'</span>');
+      this.regLayer('poi:'+asset, g, esc(cfg.label)+' <span class="lyr-ct">'+items.length+'</span>');
     });
   }
 
@@ -2386,34 +2714,42 @@ class TrailApp {
   }
 
   /* Pointer Events rather than HTML5 drag-and-drop — the latter never fires on
-     touch, and this list is phone-first. Reorders the DOM live, commits on drop. */
-  wireCatDrag(chip){
-    const grip=chip.querySelector('.feat-grip'); if(!grip) return;
+     touch, and these lists are phone-first. Reorders the DOM live, commits on drop.
+     Chips wrap in a row so the test is which side of a neighbour you are on;
+     a stacked list only cares about above or below. */
+  wireDrag(item, list, sel, gripSel, axis, onDrop){
+    const grip=item.querySelector(gripSel); if(!grip) return;
     grip.addEventListener('pointerdown',e=>{
       e.preventDefault();
-      const el=this.$('features');
-      chip.classList.add('dragging');
+      item.classList.add('dragging');
       // Listeners go on document, NOT the grip with setPointerCapture: reordering
-      // re-inserts the chip, and re-inserting a node drops its implicit capture,
+      // re-inserts the item, and re-inserting a node drops its implicit capture,
       // so a grip-bound pointerup never fires and the drag never commits.
       const move=ev=>{
         const under=document.elementFromPoint(ev.clientX,ev.clientY);
-        const over=under&&under.closest?under.closest('.feat'):null;
-        if(!over||over===chip||over.parentElement!==el) return;
+        const over=under&&under.closest?under.closest(sel):null;
+        if(!over||over===item||over.parentElement!==list) return;
         const r=over.getBoundingClientRect();
-        el.insertBefore(chip, (ev.clientX-r.left)>r.width/2 ? over.nextSibling : over);
+        const past = axis==='y' ? (ev.clientY-r.top)>r.height/2 : (ev.clientX-r.left)>r.width/2;
+        list.insertBefore(item, past ? over.nextSibling : over);
       };
       const up=()=>{
         document.removeEventListener('pointermove',move);
         document.removeEventListener('pointerup',up);
         document.removeEventListener('pointercancel',up);
-        chip.classList.remove('dragging');
-        this.catOrder=[...el.querySelectorAll('.feat')].map(c=>c.dataset.cat);
-        this.savePrefs(); this.renderNearby();
+        item.classList.remove('dragging');
+        onDrop();
       };
       document.addEventListener('pointermove',move);
       document.addEventListener('pointerup',up);
       document.addEventListener('pointercancel',up);
+    });
+  }
+  wireCatDrag(chip){
+    const el=this.$('features'); if(!el) return;
+    this.wireDrag(chip, el, '.feat', '.feat-grip', 'x', ()=>{
+      this.catOrder=[...el.querySelectorAll('.feat')].map(c=>c.dataset.cat);
+      this.savePrefs(); this.renderNearby();
     });
   }
   async fetchRouteLine(){
