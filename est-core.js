@@ -519,7 +519,10 @@ async function fetchSource(src){
 const OSM_EPS=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
 const OSM_WIN=25;                 // miles either way along the route
 const OSM_TAGS=[
-  ['tourism','^(hotel|motel|guest_house|hostel)$','Lodging'],
+  // Its own category rather than folded into the State's Lodging: that list is
+  // curated and trail-facing, this one is every motel a surveyor ever tagged, and
+  // a rider picking a bed deserves to know which of the two they are reading.
+  ['tourism','^(hotel|motel|guest_house|hostel)$','Hotels & motels'],
   ['shop','^(supermarket|grocery|greengrocer)$','Groceries'],
   ['shop','^(convenience|general)$','Convenience'],
   ['shop','^(variety_store|department_store|wholesale)$','General store'],
@@ -539,25 +542,41 @@ function osmAddr(t){
   const line=[t['addr:housenumber'],t['addr:street']].filter(Boolean).join(' ');
   return [line, t['addr:city'], t['addr:state'], t['addr:postcode']].filter(Boolean).join(', ');
 }
+/* grp is the parent each category hangs under. The split is by source, because
+   that is the thing a rider actually needs to weigh: the State knows the lock
+   campsites and nothing about where you buy food, OpenStreetMap knows every
+   filling station and is only as current as whoever last surveyed it. */
 const CATCFG={
-  'Lock camping':{icon:'lock',label:'Lock camping'},
-  'Campground':{icon:'tent',label:'Campgrounds'},
-  'Lodging':{icon:'bed',label:'Lodging'},
-  'Attraction':{icon:'star',label:'Attractions'},
-  'Train Station':{icon:'train',label:'Train stations'},
-  'Groceries':{icon:'cart',label:'Groceries'},
-  'Food':{icon:'food',label:'Food'},
-  'Convenience':{icon:'store',label:'Convenience'},
-  'General store':{icon:'store',label:'Dollar / big box'},
-  'Fuel':{icon:'fuel',label:'Fuel / gas'},
-  'Restroom':{icon:'drop',label:'Restrooms / water'},
-  'Parking Area':{icon:'park',label:'Parking'}
+  'Lock camping':{icon:'lock',label:'Lock camping',grp:'trail'},
+  'Campground':{icon:'tent',label:'Campgrounds',grp:'trail'},
+  'Lodging':{icon:'bed',label:'Lodging',grp:'trail'},
+  'Attraction':{icon:'star',label:'Attractions',grp:'trail'},
+  'Train Station':{icon:'train',label:'Train stations',grp:'trail'},
+  'Restroom':{icon:'drop',label:'Restrooms / water',grp:'trail'},
+  'Parking Area':{icon:'park',label:'Parking',grp:'trail'},
+  'Hotels & motels':{icon:'bed',label:'Hotels & motels',grp:'osm'},
+  'Groceries':{icon:'cart',label:'Groceries',grp:'osm'},
+  'Food':{icon:'food',label:'Food',grp:'osm'},
+  'Convenience':{icon:'store',label:'Convenience',grp:'osm'},
+  'General store':{icon:'store',label:'Dollar / big box',grp:'osm'},
+  'Fuel':{icon:'fuel',label:'Fuel / gas',grp:'osm'}
 };
+const CAT_GRP={
+  trail:{label:'On the trail', src:'New York State'},
+  osm:{label:'In town',       src:'OpenStreetMap'}
+};
+const GRP_ORDER=['trail','osm'];
+// An asset type the service invented and we don't hardcode is trail data — that
+// is the only place unknown categories can come from.
+const catGrp=a=>(CATCFG[a]&&CATCFG[a].grp)||'trail';
+// Both of these are somewhere to sleep, so both get the chain wordmark treatment.
+const LODGE_CATS={'Lodging':1,'Hotels & motels':1};
 const CAT_DEFAULT={'Lock camping':true,'Campground':true,'Lodging':true};
 /* Fallback order for the Nearby groups — a rider who hasn't dragged anything yet
-   gets sleeping options first, sightseeing after, logistics last. */
-const CAT_ORDER=['Lock camping','Campground','Lodging','Food','Groceries','Convenience','General store','Fuel',
-                 'Attraction','Train Station','Restroom','Parking Area'];
+   gets sleeping options first, sightseeing after, logistics last. Grouped in the
+   same order the parents render in, so a fresh install reads top to bottom. */
+const CAT_ORDER=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area',
+                 'Hotels & motels','Food','Groceries','Convenience','General store','Fuel'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
 
@@ -608,6 +627,9 @@ class TrailApp {
        to read about. Seeded from CAT_DEFAULT so the map doesn't open under 700 pins. */
     this.catOrder=[...CAT_ORDER];
     this.catHidden=new Set(CAT_ORDER.filter(c=>!CAT_DEFAULT[c]));
+    // Which parent groups are folded shut. Both open — a collapsed group with pins
+    // on the map would be a control the rider can't find.
+    this.grpShut=new Set();
   }
   $(id){ return document.getElementById(id); }
   destName(){ return this.dir==='B2NYC' ? 'NYC' : 'Buffalo'; }
@@ -684,6 +706,7 @@ class TrailApp {
     // one recorded list visibility alone, and replaying it now would switch every map
     // layer on at once — 700-odd pins on the first load after upgrading.
     if(p.catCoupled && Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
+    if(Array.isArray(p.grpShut)) this.grpShut=new Set(p.grpShut.filter(c=>typeof c==='string'));
     this.renderDirLabels();
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
@@ -702,7 +725,8 @@ class TrailApp {
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
-      catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder})); }catch(e){}
+      catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
+      grpShut:[...this.grpShut]})); }catch(e){}
   }
   /* While following, the two boxes are an output, not an input — say so rather than
      leaving a rider typing into fields the next pan silently overwrites. */
@@ -1506,7 +1530,14 @@ class TrailApp {
     // No pager while the list follows the map: panning IS how you move the window,
     // and a stepper for it only repeated what the map already does, three rows deep.
     let h=view?'':this.pagerHTML();
-    keys.forEach(cat=>{
+    // Same parents as the chips above, so "where did this come from" is answered
+    // once per run of categories instead of never.
+    GRP_ORDER.forEach(grp=>{
+    const inGrp=keys.filter(c=>catGrp(c)===grp);
+    if(!inGrp.length) return;
+    const gc=CAT_GRP[grp];
+    h+='<div class="poi-src">'+esc(gc.label)+'<span class="poi-src-s">'+esc(gc.src)+'</span></div>';
+    inGrp.forEach(cat=>{
       const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
       // Absolute range first — it's the one filter that doesn't need a location, so
@@ -1556,6 +1587,7 @@ class TrailApp {
       });
       if(items.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+items.length)+'</button>';
       h+='</div>';
+    });
     });
     list.innerHTML=h;
   }
@@ -1614,15 +1646,21 @@ class TrailApp {
   }
   /* A chain wordmark, a rate, or both, in place of the generic bed — the point being
      that a map of forty identical pins tells you nothing you couldn't already see. */
+  /* Borrowed pins are drawn small and hollow against the State layer's filled
+     circles. Shape and weight, not just colour: it survives a colourblind rider and
+     a phone in sunlight, and at 900 food pins the lighter mark is what keeps the
+     curated ones readable underneath. */
   poiIcon(p, cfg){
-    const pr=this.priceOf(p), br=(p.asset==='Lodging')?brandOf(p.name):null;
+    const osm=catGrp(poiCat(p))==='osm';
+    const pr=this.priceOf(p), br=LODGE_CATS[poiCat(p)]?brandOf(p.name):null;
     // Every pin carries its name. Hidden by CSS until the map is zoomed in past
     // POI_LABEL_Z, or the pin is hovered — a field of identical dots you have to tap
     // one at a time to identify is the thing this is fixing.
     const lbl='<span class="poi-lbl">'+esc(p.name)+'</span>';
-    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>'+lbl,className:'poi-ic',iconSize:[28,28],iconAnchor:[14,14]});
+    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin'+(osm?' is-osm':'')+'">'+icon(cfg.icon,osm?14:18)+'</span>'+lbl,
+      className:'poi-ic'+(osm?' osm-ic':''), iconSize:osm?[22,22]:[28,28], iconAnchor:osm?[11,11]:[14,14]});
     const col=br?br.color:'';
-    let h='<span class="poi-chip'+(pr?' has-price':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
+    let h='<span class="poi-chip'+(pr?' has-price':'')+(osm?' is-osm':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
       + (br ? '<span class="chip-b">'+esc(br.tag)+'</span>' : icon(cfg.icon,13))
       + (pr ? '<span class="chip-p">'+esc(fmtMoney(pr.amt))+'</span>' : '')
       + '</span>';
@@ -1737,6 +1775,11 @@ class TrailApp {
     const have={};
     this.POIS.forEach(p=>{ have[this.osmKey(p.name,p.lat,p.lng)]=1; });
     let added=0, near=0;
+    // Every one of these categories is seeded hidden — the map must not open under
+    // 700 pins. But asking for them IS asking to see them, and without this a rider
+    // pressed the button, fifteen hundred places arrived, and nothing appeared on
+    // the map or in the list. Only categories this fetch actually filled.
+    const lit=new Set();
     els.forEach(el=>{
       const t=el.tags||{};
       const cat=osmCat(t); if(!cat) return;
@@ -1755,9 +1798,14 @@ class TrailApp {
         addr:osmAddr(t), phone:t.phone||t['contact:phone']||'',
         url:t.website||t['contact:website']||'', src:'osm', osmId:el.type+'/'+el.id,
         lat, lng, mile:pr.mile, off:pr.off});
+      lit.add(cat);
       added++;
     });
     this.POIS.forEach((p,i)=>{ p.i=i; });
+    // A category that already existed keeps whatever the rider set — switching Food
+    // back on because they refetched would undo a choice they made on purpose.
+    lit.forEach(c=>{ if(!this.poiLayers[c]) this.catHidden.delete(c); });
+    this.savePrefs();
     this.osmAt=b.mile;
     this.osmBusy=false;
     this.rebuildPOIs();
@@ -1776,12 +1824,20 @@ class TrailApp {
   rebuildPOIs(){
     if(!this.map) return;
     const on={};
+    /* Guarded end to end. Tearing a layer down calls map.removeLayer on a layer the
+       control still knows about, which fires overlayremove — and that handler's whole
+       job is to record "the rider switched this off". Unguarded, every rebuild wrote
+       all the live categories into catHidden, so an OpenStreetMap fetch silently
+       emptied the list of everything the State layer had while its pins stayed on the
+       map. Exactly the drift the coupling exists to prevent. */
+    this._syncCats=true;
     Object.keys(this.poiLayers).forEach(a=>{
       on[a]=this.map.hasLayer(this.poiLayers[a]);
       this.unregLayer('poi:'+a);
     });
     this.poiLayers={}; this.poiMarker={};
     this.buildPOILayers(on);
+    this._syncCats=false;
     this.renderNext(); this.renderCategories(); this.renderNearby();
     this.renderFilterState && this.renderFilterState();
   }
@@ -3166,38 +3222,86 @@ class TrailApp {
   /* The single entry point for showing or hiding a category, wherever the tap came
      from — the chip, or Leaflet's own layers control. Moves the pins and the rows
      together so the two views cannot drift apart. */
-  setCatVisible(cat, on){
+  // The pins-and-rows half, without the redraw — so a whole group can be switched
+  // in one pass and repaint once rather than six times over a 900-row list.
+  applyCatVis(cat, on){
     if(on) this.catHidden.delete(cat); else this.catHidden.add(cat);
     const g=this.poiLayers[cat];
-    if(g && this.map){
-      // Guarded: adding or removing fires overlayadd/overlayremove, which routes
-      // straight back here. Without this the pair ping-pongs on every toggle.
-      this._syncCats=true;
-      if(on && !this.map.hasLayer(g)) g.addTo(this.map);
-      else if(!on && this.map.hasLayer(g)) this.map.removeLayer(g);
-      this._syncCats=false;
-    }
-    this.savePrefs(); this.renderNearby();
+    if(!g || !this.map) return;
+    // Guarded: adding or removing fires overlayadd/overlayremove, which routes
+    // straight back here. Without this the pair ping-pongs on every toggle.
+    this._syncCats=true;
+    if(on && !this.map.hasLayer(g)) g.addTo(this.map);
+    else if(!on && this.map.hasLayer(g)) this.map.removeLayer(g);
+    this._syncCats=false;
+  }
+  setCatVisible(cat, on){
+    this.applyCatVis(cat, on);
+    // The parent's own box and counts are derived from its children, so a child
+    // toggle has to redraw the header above it.
+    this.savePrefs(); this.renderCategories(); this.renderNearby();
+  }
+  /* A whole source at once. Turning OpenStreetMap's fifteen hundred pins off is the
+     common case, and doing it six chips at a time was the reason to group them. */
+  setGrpVisible(grp, on){
+    const byCat=this.poisByCat();
+    Object.keys(byCat).filter(c=>catGrp(c)===grp && byCat[c].length)
+      .forEach(c=>this.applyCatVis(c, on));
+    this.savePrefs(); this.renderCategories(); this.renderNearby();
+  }
+  // Folding only hides the chips. It deliberately does NOT hide the pins: a group
+  // you collapsed is one whose controls you put away, not one you switched off.
+  toggleGrp(grp){
+    if(this.grpShut.has(grp)) this.grpShut.delete(grp); else this.grpShut.add(grp);
+    this.savePrefs(); this.renderCategories();
   }
   renderCategories(){
     const el=this.$('features'); if(!el) return;
     const byCat=this.poisByCat();
+    const ordered=this.orderedCats(Object.keys(byCat)).filter(c=>byCat[c] && byCat[c].length);
     el.innerHTML='';
-    this.orderedCats(Object.keys(byCat)).forEach(cat=>{
-      const items=byCat[cat]; if(!items||!items.length) return;
-      const cfg=catCfg(cat), on=!this.catHidden.has(cat);
-      const chip=document.createElement('div');
-      chip.className='feat'+(on?'':' off'); chip.dataset.cat=cat;
-      chip.innerHTML='<span class="feat-grip" title="Drag to reorder" aria-hidden="true"></span>'
-        +'<label class="feat-tog"><input type="checkbox"'+(on?' checked':'')+'>'
-        +icon(cfg.icon,16)+'<span>'+esc(cfg.label)+'</span>'
-        +'<span class="feat-ct">'+items.length+'</span></label>';
-      chip.querySelector('input').addEventListener('change',ev=>{
-        chip.classList.toggle('off',!ev.target.checked);
-        this.setCatVisible(cat, ev.target.checked);
+    GRP_ORDER.forEach(grp=>{
+      const cats=ordered.filter(c=>catGrp(c)===grp);
+      if(!cats.length) return;   // OpenStreetMap hasn't been asked for yet
+      const gc=CAT_GRP[grp], shut=this.grpShut.has(grp);
+      const lit=cats.filter(c=>!this.catHidden.has(c)).length;
+      const n=cats.reduce((s,c)=>s+byCat[c].length,0);
+      const box=document.createElement('div');
+      box.className='feat-grp'+(shut?' shut':''); box.dataset.grp=grp;
+      box.innerHTML='<div class="fg-h">'
+        +'<button type="button" class="fg-fold" aria-expanded="'+(shut?'false':'true')+'"'
+        +' title="'+(shut?'Show':'Hide')+' these categories"></button>'
+        +'<label class="fg-tog"><input type="checkbox"'+(lit?' checked':'')+'>'
+        +'<span class="fg-nm">'+esc(gc.label)+'</span></label>'
+        +'<span class="fg-src">'+esc(gc.src)+'</span>'
+        +'<span class="fg-ct">'+lit+' of '+cats.length+' · '+n+'</span>'
+        +'</div><div class="feat-list"></div>';
+      const box2=box.querySelector('.fg-h input');
+      // Half-on is a real state and the box should say so rather than rounding to
+      // one of the two — it's the difference between "off" and "you hid four of six".
+      box2.indeterminate = lit>0 && lit<cats.length;
+      box2.addEventListener('change',ev=>this.setGrpVisible(grp, ev.target.checked));
+      box.querySelector('.fg-fold').addEventListener('click',()=>this.toggleGrp(grp));
+      const list=box.querySelector('.feat-list');
+      cats.forEach(cat=>{
+        const items=byCat[cat], cfg=catCfg(cat), on=!this.catHidden.has(cat);
+        const chip=document.createElement('div');
+        chip.className='feat'+(on?'':' off'); chip.dataset.cat=cat;
+        chip.innerHTML='<span class="feat-grip" title="Drag to reorder" aria-hidden="true"></span>'
+          +'<label class="feat-tog"><input type="checkbox"'+(on?' checked':'')+'>'
+          +icon(cfg.icon,16)+'<span>'+esc(cfg.label)+'</span>'
+          +'<span class="feat-ct">'+items.length+'</span></label>';
+        chip.querySelector('input').addEventListener('change',ev=>{
+          chip.classList.toggle('off',!ev.target.checked);
+          this.setCatVisible(cat, ev.target.checked);
+        });
+        // Its own group is the drag container, so a chip can't be dropped into the
+        // other source — the parent it sits under is a fact about where the data
+        // came from, not a preference.
+        this.wireCatDrag(chip, list);
+        list.appendChild(chip);
       });
-      this.wireCatDrag(chip);
-      el.appendChild(chip);
+      el.appendChild(box);
     });
   }
 
@@ -3233,9 +3337,12 @@ class TrailApp {
       document.addEventListener('pointercancel',up);
     });
   }
-  wireCatDrag(chip){
-    const el=this.$('features'); if(!el) return;
-    this.wireDrag(chip, el, '.feat', '.feat-grip', 'x', ()=>{
+  // Order stays one flat list across both groups even though the drag is confined to
+  // one: reading it back in DOM order keeps each group's run contiguous by
+  // construction, and render intersects by group anyway.
+  wireCatDrag(chip, list){
+    this.wireDrag(chip, list, '.feat', '.feat-grip', 'x', ()=>{
+      const el=this.$('features'); if(!el) return;
       this.catOrder=[...el.querySelectorAll('.feat')].map(c=>c.dataset.cat);
       this.savePrefs(); this.renderNearby();
     });

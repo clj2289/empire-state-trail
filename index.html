@@ -347,6 +347,25 @@
   .poi-stat{font-size:11.5px;color:var(--color-neutral-700);margin-bottom:var(--space-3);line-height:1.5}
   .feat-list-lbl,.set-lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);margin:var(--space-3) 0 var(--space-2);font-weight:600}
   .feat-list{display:flex;flex-wrap:wrap;gap:6px}
+  /* ---- categories, grouped under the source they came from ----
+     The parent box switches its whole source at once and goes half-lit when only
+     some children are on; the caret folds the chips away without touching a pin. */
+  .feat-tree{display:flex;flex-direction:column;gap:var(--space-3)}
+  .feat-grp{border-left:2px solid var(--color-divider);padding-left:var(--space-3)}
+  .fg-h{display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:wrap}
+  .fg-fold{flex:none;width:16px;height:16px;padding:0;background:none;border:0;
+    cursor:pointer;color:var(--color-neutral-600);position:relative}
+  .fg-fold::before{content:"";position:absolute;left:4px;top:3px;width:6px;height:6px;
+    border-right:2px solid currentColor;border-bottom:2px solid currentColor;
+    transform:rotate(45deg);transition:transform .15s ease}
+  .feat-grp.shut .fg-fold::before{transform:rotate(-45deg);top:6px}
+  .feat-grp.shut .feat-list{display:none}
+  @media (prefers-reduced-motion:reduce){.fg-fold::before{transition:none}}
+  .fg-tog{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+  .fg-tog input{accent-color:var(--color-accent);width:14px;height:14px;margin:0}
+  .fg-nm{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:13px}
+  .fg-src{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-500)}
+  .fg-ct{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
   .feat{display:inline-flex;align-items:center;gap:5px;user-select:none;font-size:12px;
     background:var(--color-surface);border:1px solid var(--color-divider);border-radius:999px;padding:5px 11px 5px 6px}
   .feat-tog{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
@@ -375,6 +394,13 @@
     font-variant-numeric:tabular-nums}
   .aadt-ln{cursor:pointer}
   .poi-list{display:flex;flex-direction:column;gap:var(--space-3)}
+  /* The same parent, over the run of groups it owns in the list below. */
+  .poi-src{display:flex;align-items:baseline;gap:8px;margin:var(--space-4) 0 var(--space-2);
+    padding-bottom:4px;border-bottom:1px solid var(--color-divider);
+    font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:13px}
+  .poi-src:first-child{margin-top:0}
+  .poi-src-s{font-family:var(--font-body);font-weight:400;font-size:10px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--color-neutral-500)}
   .poi-h{display:flex;align-items:center;gap:7px;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px;margin-bottom:6px}
   .poi-h .ic{color:var(--color-accent)}
   .poi-ct{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-family:var(--font-body);font-weight:400;font-variant-numeric:tabular-nums}
@@ -549,6 +575,16 @@
   .poi-pin{display:grid;place-items:center;width:28px;height:28px;color:#fff;background:var(--color-accent);
     border:2px solid #fff;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.45)}
   .poi-pin .ic{color:#fff;stroke-width:2.2}
+  /* ---- borrowed pins ----
+     OpenStreetMap's are a smaller hollow square against the State layer's filled
+     circles. Shape and weight rather than colour alone: it reads in sunlight, it
+     survives a colourblind rider, and at nine hundred food pins the lighter mark is
+     what keeps the curated ones legible underneath. */
+  .poi-pin.is-osm{width:22px;height:22px;border-radius:var(--radius-sm);
+    background:var(--color-bg);color:var(--color-accent-700);
+    border:1.5px solid var(--color-accent-700);box-shadow:0 1px 3px rgba(0,0,0,.35)}
+  .poi-pin.is-osm .ic{color:var(--color-accent-700);stroke-width:2}
+  .poi-chip.is-osm{border-style:dashed}
   /* ---- pin labels ----
      Off by default, on once the map is zoomed past POI_LABEL_Z, and always on for
      whichever pin the cursor is over — which is the desktop stand-in for the tap a
@@ -560,6 +596,7 @@
     background:color-mix(in srgb,var(--color-bg) 90%,transparent);
     padding:1px 6px;border-radius:var(--radius-sm);box-shadow:var(--shadow-sm)}
   .poi-chip-ic .poi-lbl{left:50%;top:12px;transform:translateX(-50%)}
+  .osm-ic .poi-lbl{left:28px}   /* clears the narrower pin */
   .is-labeled .poi-lbl{display:block}
   .leaflet-marker-icon:hover .poi-lbl{display:block;z-index:2}
   .poi-pin:hover{transform:scale(1.12)}
@@ -573,6 +610,10 @@
   .is-hi .poi-lbl{display:block;color:var(--color-bg);background:var(--color-accent-2)}
   .is-hi .poi-pin{background:var(--color-accent-2);transform:scale(1.35);
     box-shadow:0 0 0 5px color-mix(in srgb,var(--color-accent-2) 30%,transparent),0 2px 6px rgba(0,0,0,.5)}
+  /* Lit, a borrowed pin fills like any other — the hollow mark says "which layer",
+     the magenta says "this one", and the second has to win while you're pointing. */
+  .is-hi .poi-pin.is-osm{border-color:var(--color-accent-2)}
+  .is-hi .poi-pin.is-osm .ic{color:#fff}
   .is-hi .poi-chip{border-color:var(--color-accent-2) !important;color:var(--color-accent-2) !important;
     transform:translate(-50%,-50%) scale(1.2);
     box-shadow:0 0 0 4px color-mix(in srgb,var(--color-accent-2) 28%,transparent),var(--shadow-md)}
@@ -651,8 +692,8 @@
             <span id="filtersState" class="filters-state"></span>
           </summary>
           <div class="feat-list-lbl">Categories</div>
-          <div id="features" class="feat-list"></div>
-          <p class="feat-hint">Drag to reorder · uncheck to hide. Hiding a category takes its pins off the map too, so what you can see is always what this list can show.</p>
+          <div id="features" class="feat-tree"></div>
+          <p class="feat-hint">Grouped by where the data comes from. The parent box switches a whole source at once; the caret just folds the chips away. Drag to reorder within a group · uncheck to hide. Hiding a category takes its pins off the map too, so what you can see is always what this list can show. OpenStreetMap’s pins are drawn as small hollow squares to tell them from the State’s.</p>
           <div class="feat-list-lbl">Trail miles ahead</div>
           <div class="poi-band">
             <label>Min <input id="miMin" type="number" step="5" inputmode="numeric" placeholder="0"></label>
