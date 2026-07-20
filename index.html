@@ -525,6 +525,7 @@
   .ul-tbl th{text-align:left;padding:1px 8px 1px 0;font-weight:600;
     color:var(--color-neutral-600);white-space:nowrap;vertical-align:top}
   .ul-tbl td{padding:1px 0;vertical-align:top}
+  .poi-src{margin-top:5px;font-size:10.5px;line-height:1.45;color:var(--color-neutral-600)}
   .leaflet-control-attribution{background:color-mix(in srgb,var(--color-bg) 82%,transparent);font-size:10px;color:var(--color-neutral-600)}
   .pa-lbl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:9px 0 5px}
   .pa-row{display:flex;flex-wrap:wrap;gap:4px}
@@ -535,6 +536,8 @@
   .poi-pin .ic{color:#fff;stroke-width:2.2}
   /* circleMarker dots: lift them off the map tiles */
   .map-dot{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
+  /* You: the blue dot, with the soft halo every phone map gives it. */
+  .me-dot{filter:drop-shadow(0 0 4px rgba(26,115,232,.55)) drop-shadow(0 1px 3px rgba(0,0,0,.35))}
 </style>
 </head>
 <body class="ds-broadsheet">
@@ -654,6 +657,10 @@
         <select id="simSel" class="input"><option value="">Choose a place…</option></select>
         <div class="set-lbl">Test locations</div>
         <div id="testRows" class="test-list"></div>
+        <div class="set-lbl">Shops, fuel and beds</div>
+        <button id="osmBtn" type="button" class="poi-band-view">Load them from OpenStreetMap</button>
+        <div id="osmStat" class="ul-stat"></div>
+        <p class="poi-band-note">The state\u2019s own layer is a trail layer \u2014 it knows the lock campsites and the canal museum, and next to nothing about where you buy food. This asks OpenStreetMap for the supermarkets, convenience stores, dollar and big-box shops, gas stations and hotels within 5 miles of the route, 25 miles either side of you, and folds them into Nearby and the map with everything else. Overpass is a shared public service and can take a few seconds.</p>
         <div class="set-lbl">Your own layers</div>
         <div class="poi-band">
           <label class="ul-lbl">ArcGIS layer URL
