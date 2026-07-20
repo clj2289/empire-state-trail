@@ -1,0 +1,10 @@
+services:
+  trail:
+    build: .
+    image: empire-state-trail
+    container_name: empire-state-trail
+    # Host 8080 -> nginx 80. Browsers treat localhost as a secure context, so
+    # the service worker and geolocation both work here without TLS.
+    ports:
+      - "8080:80"
+    restart: unless-stopped

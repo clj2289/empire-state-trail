@@ -1,0 +1,10 @@
+.git
+.github
+.gitignore
+.nojekyll
+Dockerfile
+.dockerignore
+docker-compose.yml
+*.md
+
+# nginx.conf is deliberately NOT ignored — the Dockerfile copies it into the image.
