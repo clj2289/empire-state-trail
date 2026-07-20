@@ -132,7 +132,20 @@ function projectRoute(lat,lng){
   return {mile, off:Math.sqrt(best)*69};
 }
 const projectMile=(lat,lng)=>projectRoute(lat,lng).mile;
-function mapsLink(t,q){ return 'https://www.google.com/maps/search/'+encodeURIComponent(q)+'/@'+t.lat+','+t.lng+',14z'; }
+// With a known rider position this asks Google for a bicycling route from where you
+// are to the amenity, so you get a drawn line and an ETA instead of a map you have to
+// orient yourself on. Qualifying the query with the town keeps the geocode near the
+// stop rather than near you — they can be a dozen trail miles apart. With no position
+// there is no origin to route from, so it falls back to the search centred on town.
+function mapsLink(t,q,from){
+  if(from) return 'https://www.google.com/maps/dir/?api=1&origin='+from.lat+','+from.lng
+    +'&destination='+encodeURIComponent(q+' '+t.n+' NY')+'&travelmode=bicycling';
+  return 'https://www.google.com/maps/search/'+encodeURIComponent(q)+'/@'+t.lat+','+t.lng+',14z';
+}
+// Hands the query off to Google Hotels rather than fetching rates ourselves: nightly
+// price is date- and occupancy-dependent, needs a keyed API behind a proxy, and the
+// small trail-town inns in the ArcGIS layer mostly aren't in bookable inventory anyway.
+function ratesLink(q){ return 'https://www.google.com/travel/search?q='+encodeURIComponent(q); }
 
 /* ---- live POI service (NY State ArcGIS) ---- */
 const ARC="https://services.arcgis.com/1xFZPtKn1wKC6POA/arcgis/rest/services/";
@@ -178,6 +191,8 @@ const LEG_URL=ARC+"EST_Public/FeatureServer/3/query";
 class TrailApp {
   constructor(){
     this.dir='B2NYC'; this.myMile=null; this.myLL=null; this.showPassed=false; this.destIdx=-1;
+    // Nearby list: optional day-planning band (trail miles ahead) + per-category expansion.
+    this.miMin=null; this.miMax=null; this.poiOpen={};
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.POIS=[]; this.embLines=[];
   }
@@ -213,11 +228,15 @@ class TrailApp {
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
     }
+    if(isFinite(p.miMin)&&p.miMin>=0) this.miMin=p.miMin;
+    if(isFinite(p.miMax)&&p.miMax>=0) this.miMax=p.miMax;
     const lbl=this.$('dirLbl'); if(lbl) lbl.textContent = this.dir==='B2NYC' ? 'Buffalo → NYC' : 'NYC → Buffalo';
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
+    const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
+    const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,myLL:this.myLL})); }catch(e){}
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,myLL:this.myLL,miMin:this.miMin,miMax:this.miMax})); }catch(e){}
   }
 
   /* ---------- tabs ---------- */
@@ -245,6 +264,19 @@ class TrailApp {
       const el=e.target.closest('[data-lat]'); if(!el || e.target.closest('a')) return;
       this.zoomTo(+el.dataset.lat, +el.dataset.lng, +el.dataset.z||13, el.dataset.town);
     });
+    document.addEventListener('click',e=>{
+      const t=e.target.closest('.poi-toggle'); if(!t) return;
+      const c=t.dataset.cat; this.poiOpen[c]=!this.poiOpen[c]; this.renderNearby();
+    });
+    const readBand=()=>{
+      const g=id=>{ const el=this.$(id); if(!el) return null; const v=el.value.trim(); if(v==='') return null;
+        const n=+v; return isFinite(n)&&n>=0 ? n : null; };
+      this.miMin=g('miMin'); this.miMax=g('miMax');
+      this.savePrefs(); this.renderNearby();
+    };
+    ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readBand); });
+    const mc=this.$('miClear');
+    if(mc) mc.addEventListener('click',()=>{ ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readBand(); });
   }
   status(msg){ const el=this.$('locStatus'); if(el) el.textContent=msg; }
   flipDir(){
@@ -373,7 +405,7 @@ class TrailApp {
     const body=this.$('itinBody'); if(!body) return;
     const amCell=(t,key)=>{
       if(!cats(t)[key]) return '<td class="am am-off">·</td>';
-      return '<td class="am"><a href="'+mapsLink(t,AMQ[key])+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Find '+key+' near '+esc(t.n)+'">'+icon(AMICON[key],17)+'</a></td>';
+      return '<td class="am"><a href="'+mapsLink(t,AMQ[key],this.myLL)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="'+(this.myLL?'Bike directions to ':'Find ')+key+' near '+esc(t.n)+'">'+icon(AMICON[key],17)+'</a></td>';
     };
     body.innerHTML = this.visibleStops().map(t=>{
       let cls='irow', from='—';
@@ -390,23 +422,55 @@ class TrailApp {
     }).join('');
   }
 
+  // Signed trail distance from the rider to p along the current direction of
+  // travel: positive is ahead, negative is already passed. Nearby used to sort on
+  // abs(), which is symmetric — so flipping direction re-rendered an identical
+  // list. Everything below keys off this instead.
+  aheadMi(p){
+    if(this.myMile==null || p.mile==null) return null;
+    return this.dir==='B2NYC' ? this.myMile-p.mile : p.mile-this.myMile;
+  }
+  // The day-planning band: "I'll ride at least min and at most max today." Only
+  // ever narrows to what's ahead — a motel 40 mi behind you is not a day plan.
+  inBand(d){
+    if(this.miMin==null && this.miMax==null) return true;
+    if(d==null) return true;
+    if(d < -0.3) return false;
+    if(this.miMin!=null && d < this.miMin) return false;
+    if(this.miMax!=null && d > this.miMax) return false;
+    return true;
+  }
   renderNearby(){
     const list=this.$('poiList'); if(!list) return;
     if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
+    const CAP=6, banded=(this.miMin!=null||this.miMax!=null) && this.myMile!=null;
     const byCat={}; this.POIS.forEach(p=>{ const k=poiCat(p); (byCat[k]=byCat[k]||[]).push(p); });
     const order=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area'];
     const keys=Object.keys(byCat).sort((a,b)=>{const ia=order.indexOf(a),ib=order.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);});
     let h='';
     keys.forEach(cat=>{
-      const cfg=catCfg(cat);
+      const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
-      if(this.myMile!=null){ items=[...items].sort((a,b)=>abs(a.mile-this.myMile)-abs(b.mile-this.myMile)); }
-      h+='<div class="poi-group"><div class="poi-h">'+icon(cfg.icon,18)+'<span>'+esc(cfg.label)+'</span><span class="poi-ct">'+items.length+'</span></div>';
-      items.slice(0,6).forEach(p=>{
-        const dist=(this.myMile!=null&&p.mile!=null)?'~'+fmtMi(abs(p.mile-this.myMile))+' mi':'';
-        h+='<button class="poi-item" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'+(dist?'<span class="poi-mi">'+dist+'</span>':'')+'</button>';
+      if(this.myMile!=null){
+        items=items.filter(p=>this.inBand(this.aheadMi(p)));
+        // Ahead first, nearest first; anything already passed sinks to the bottom.
+        items=[...items].sort((a,b)=>{
+          const da=this.aheadMi(a), db=this.aheadMi(b);
+          if((da>=0)!==(db>=0)) return da>=0?-1:1;
+          return da>=0 ? da-db : db-da;
+        });
+      }
+      const open=!!this.poiOpen[cat], shown=open?items:items.slice(0,CAP);
+      const ct=banded ? items.length+' of '+total : String(total);
+      h+='<div class="poi-group"><div class="poi-h">'+icon(cfg.icon,18)+'<span>'+esc(cfg.label)+'</span><span class="poi-ct">'+ct+'</span></div>';
+      if(!items.length) h+='<div class="poi-more">Nothing in this mileage range.</div>';
+      shown.forEach(p=>{
+        const d=this.aheadMi(p), back=(d!=null&&d<-0.3);
+        const dist = d==null ? '' : (back ? fmtMi(abs(d))+' mi back' : '~'+fmtMi(d)+' mi');
+        h+='<button class="poi-item" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'
+          +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
-      if(items.length>6) h+='<div class="poi-more">+'+(items.length-6)+' more on the map</div>';
+      if(items.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+items.length)+'</button>';
       h+='</div>';
     });
     list.innerHTML=h;
@@ -464,13 +528,14 @@ class TrailApp {
     const dist = this.myMile==null ? '<br><i>Set your location for trail distance.</i>'
       : '<br><b>~'+fmtMi(abs(t.mi-this.myMile))+' trail-mi from you</b>';
     const ic=iconStrTxt(t); const icl= ic?'<br><span style="opacity:.7">'+ic+'</span>':'';
-    const b=(q,lbl)=>'<a href="'+mapsLink(t,q)+'" target="_blank" rel="noopener" class="pa">'+lbl+'</a>';
+    const b=(q,lbl)=>'<a href="'+mapsLink(t,q,this.myLL)+'" target="_blank" rel="noopener" class="pa">'+lbl+'</a>';
     return '<b>'+esc(t.n)+'</b><br><span style="opacity:.65">mi '+t.mi+' · '+esc(t.tags)+'</span>'+dist+icl
       +'<br><br><b>Food:</b> '+esc(t.food)+'<br><b>Lodging:</b> '+esc(t.lodge)+'<br><b>See:</b> '+esc(t.see)
       +'<div class="pa-lbl">Find nearby:</div><div class="pa-row">'
       +b('gas station convenience store','Gas / C-store')+b('grocery store supermarket','Groceries')
-      +b('restaurant cafe','Food')+b('hotel motel lodging','Lodging')+b('campground','Camping')
-      +b('bicycle shop','Bike shop')+'</div>';
+      +b('restaurant cafe','Food')+b('hotel motel lodging','Lodging')
+      +'<a href="'+ratesLink(t.n+' NY')+'" target="_blank" rel="noopener" class="pa">Rates</a>'
+      +b('campground','Camping')+b('bicycle shop','Bike shop')+'</div>';
   }
   poiPopup(p){
     const dist=(this.myMile!=null&&p.mile!=null)?' · ~'+fmtMi(abs(p.mile-this.myMile))+' trail-mi':'';
@@ -479,7 +544,10 @@ class TrailApp {
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
     const lk=[]; const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
-    lk.push('<a href="https://www.google.com/maps/dir/?api=1&destination='+p.lat+','+p.lng+'" target="_blank" rel="noopener">Directions</a>');
+    if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '))+'" target="_blank" rel="noopener">Check rates</a>');
+    // Exact coords here, so this routes precisely — no geocoding guess involved.
+    lk.push('<a href="https://www.google.com/maps/dir/?api=1'+(this.myLL?'&origin='+this.myLL.lat+','+this.myLL.lng:'')
+      +'&destination='+p.lat+','+p.lng+'&travelmode=bicycling" target="_blank" rel="noopener">Directions</a>');
     return h+'<br>'+lk.join(' · ');
   }
   async fetchAllPOIs(){

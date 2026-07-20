@@ -7,4 +7,19 @@ services:
     # the service worker and geolocation both work here without TLS.
     ports:
       - "8080:80"
+    # The Dockerfile COPYs the shell in, so without these the container serves a
+    # snapshot from build time and edits stay invisible until `up --build` — an
+    # easy hour to lose debugging a change that was never actually served. These
+    # overlay the built-in copies so a save is live on reload. Read-only: nginx
+    # has no business writing back into the working tree.
+    #
+    # The image is still self-contained — `docker run empire-state-trail` needs
+    # no mounts. nginx.conf is deliberately absent: it lives outside the web root
+    # and needs a reload, not just a re-read, to take effect.
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./est-core.js:/usr/share/nginx/html/est-core.js:ro
+      - ./manifest.json:/usr/share/nginx/html/manifest.json:ro
+      - ./sw.js:/usr/share/nginx/html/sw.js:ro
+      - ./broadsheet:/usr/share/nginx/html/broadsheet:ro
     restart: unless-stopped
