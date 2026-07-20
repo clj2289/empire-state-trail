@@ -62,6 +62,44 @@ const TEST=[
    All three design-system apps load this; only their CSS differs.
    ============================================================ */
 const TOTAL = ROUTE[ROUTE.length-1][2];
+
+/* ---- the Shoreline Trail: imported, not adopted -----------------------------
+   Somebody's GPX off RideWithGPS — Buffalo's Outer Harbor up the Niagara to
+   Youngstown by way of the West River path on Grand Island. It is drawn and
+   nothing else. Trail miles are what make a line part of this app's arithmetic:
+   give it mileposts and it starts turning up in Nearby, in the day planner and in
+   every distance quoted, off a stranger's track nobody has checked against the
+   ground. So the geometry lands now and the mileage decision waits.
+   The file in gpx/ is the line — it is parsed at the moment the layer is first
+   switched on rather than pasted into this file as a second copy that can drift,
+   and its length is measured from those same points rather than quoted. */
+const SHORE={
+  name:'Shoreline Trail',
+  sub:'Buffalo \u2192 Youngstown, via the West River path',
+  file:'gpx/Total_Shoreline_Trail_via_West_River.gpx',
+  src:'https://ridewithgps.com/routes/38214982',
+  srcName:'RideWithGPS',
+  drawn:'2021-12-20',           // the GPX's own stamp, not the day it was imported
+  color:'#6b3fa0'
+};
+
+// The trail's own home page, which is also where the official GPX for a GPS unit
+// lives — the layers control links to it the same way the borrowed layers link to
+// theirs, because "where did this line come from" is the same question either way.
+const EST_SRC='https://empiretrail.ny.gov/import-instructions';
+
+/* ---- NYSDOT traffic counts -------------------------------------------------
+   The AADT layer behind the state's Traffic Data Viewer: annual average daily
+   traffic, which is the number that answers the question a rider actually has
+   about a road — how much of it will be going past me. Off by default and drawn
+   only from close in, because a square mile of Syracuse holds about a thousand
+   of these segments and half a megabyte a pan is worse than no layer at all. */
+const AADT_URL='https://gis.dot.ny.gov/hostingny/rest/services/Roadways/Traffic_Monitoring/FeatureServer/1/query';
+const AADT_SRC='https://www.dot.ny.gov/tdv';
+const AADT_MINZ=13, AADT_CAP=400;
+// Bands as a bike feels them, not as a traffic engineer files them.
+const AADT_BANDS=[[1000,'#2e7d32','quiet',2.5],[5000,'#c98a00','moderate',3],
+                  [15000,'#e06c00','busy',4],[Infinity,'#b3261e','heavy',5]];
 const abs = Math.abs;
 const fmtMi = m => m < 10 ? m.toFixed(1) : String(Math.round(m));
 // Window bounds are typed by hand and land on round numbers, so they read as
@@ -275,6 +313,14 @@ function windMph(s){
   return n.reduce((a,b)=>a+ +b,0)/n.length;
 }
 // Initial great-circle bearing, degrees clockwise from north.
+// Great-circle miles. projectRoute's flat-earth is fine inside one 300 m leg;
+// adding up a 47-mile track is not that, so this one is spherical.
+function miBetween(a,b){
+  const p=Math.PI/180;
+  const h=Math.sin((b[0]-a[0])*p/2)**2
+    + Math.cos(a[0]*p)*Math.cos(b[0]*p)*Math.sin((b[1]-a[1])*p/2)**2;
+  return 2*3958.7613*Math.asin(Math.sqrt(h));
+}
 function bearing(a1,o1,a2,o2){
   const R=Math.PI/180, dl=(o2-o1)*R;
   const y=Math.sin(dl)*Math.cos(a2*R);
@@ -344,6 +390,8 @@ class TrailApp {
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.mileLayer=null; this.mileSig='';
+    this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
+    this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
     // Nearby-list shape only. Map pin visibility is the layers control's job.
     this.catOrder=[...CAT_ORDER]; this.catHidden=new Set();
@@ -1233,6 +1281,167 @@ class TrailApp {
     if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
   }
 
+  /* ---------- borrowed layers ---------- */
+  /* A layer's name in the control doubles as its provenance: tap it and you get the
+     page its data came from. The checkbox still toggles, and so does the chip after
+     the name — an anchor inside a label doesn't trip the label's own activation, so
+     nothing has to be intercepted for both to work. */
+  lyrSrc(label,url,note){
+    return '<a class="lyr-src" href="'+url+'" target="_blank" rel="noopener" title="'+esc(note)+'">'
+      +esc(label)+'</a>';
+  }
+  /* Parsed once, on the first switch-on: 170 KB of XML is not worth spending on
+     every load for a layer that is off by default. A GPX is a list of trkpt, and
+     that is all this needs from it — no elevation, no timestamps, no waypoints. */
+  async loadShore(){
+    if(this.shorePts) return this.shorePts;
+    const r=await fetch(SHORE.file);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const doc=new DOMParser().parseFromString(await r.text(),'application/xml');
+    const pts=[].slice.call(doc.getElementsByTagName('trkpt'))
+      .map(n=>[+n.getAttribute('lat'), +n.getAttribute('lon')])
+      .filter(p=>isFinite(p[0]) && isFinite(p[1]));
+    if(pts.length<2) throw new Error('no track in the file');
+    let d=0;
+    for(let i=1;i<pts.length;i++) d+=miBetween(pts[i-1],pts[i]);
+    this.shorePts=pts; this.shoreMi=d;
+    return pts;
+  }
+  async showShore(){
+    if(this.shorePts || !this.shoreLayer) return;
+    this.status('Reading '+SHORE.name+' from its GPX\u2026');
+    try{
+      this.shoreLayer.setLatLngs(await this.loadShore());
+      this.status(SHORE.name+': '+fmtMi(this.shoreMi)+' mi from '+SHORE.srcName
+        +', drawn only \u2014 it carries no trail miles here.');
+    }catch(e){
+      this.status('Couldn\u2019t read '+SHORE.file+', so the '+SHORE.name+' layer stays empty.');
+    }
+  }
+  shorePopup(){
+    return '<b>'+esc(SHORE.name)+'</b>'
+      +'<br><span style="opacity:.65">'+esc(SHORE.sub)+'</span>'
+      +(this.shoreMi?'<br><b>'+fmtMi(this.shoreMi)+' mi</b>':'')
+      +'<br><span style="opacity:.65">From a GPX on <a href="'+SHORE.src+'" target="_blank" rel="noopener">'
+      +esc(SHORE.srcName)+'</a>, '+esc(SHORE.drawn)+'.</span>'
+      +'<br><span style="opacity:.65">Drawn only: it carries no trail miles, so it stays out of '
+      +'Nearby, the outlook, and every distance this app quotes.</span>';
+  }
+
+  /* ---------- traffic counts ---------- */
+  aadtBand(v){
+    for(let i=0;i<AADT_BANDS.length;i++) if(v<AADT_BANDS[i][0]) return AADT_BANDS[i];
+    return AADT_BANDS[AADT_BANDS.length-1];
+  }
+  // 430, 3.2k, 89k — a count read at a glance, not audited.
+  fmtAadt(v){ return v>=10000 ? Math.round(v/1000)+'k' : v>=1000 ? (v/1000).toFixed(1)+'k' : String(Math.round(v)); }
+  async loadAadt(){
+    const m=this.map, g=this.aadtLayer;
+    if(!m||!g||!m.hasLayer(g)) return;
+    if(m.getZoom()<AADT_MINZ){
+      g.clearLayers(); this.aadtSig='';
+      this.status('Traffic counts draw from zoom '+AADT_MINZ+' in \u2014 further out there are more road segments than anyone can read.');
+      return;
+    }
+    const b=m.getBounds();
+    const sig=[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(v=>v.toFixed(4)).join(',');
+    if(sig===this.aadtSig) return;
+    this.aadtSig=sig;
+    // A pan that outruns its own fetch must not have the older answer land on top
+    // of the newer one, so only the most recent request is allowed to draw.
+    const my=++this.aadtReq;
+    // Generalised to about two pixels at this zoom: past that the detail is being
+    // downloaded to be thrown away by the screen.
+    const tol=2*360/(256*Math.pow(2,m.getZoom()));
+    const q=new URLSearchParams({
+      where:'AADT>0',
+      geometry:JSON.stringify({xmin:b.getWest(),ymin:b.getSouth(),xmax:b.getEast(),ymax:b.getNorth(),spatialReference:{wkid:4326}}),
+      geometryType:'esriGeometryEnvelope', inSR:'4326', outSR:'4326',
+      spatialRel:'esriSpatialRelIntersects',
+      outFields:'AADT,RoadwayName,RouteNumber,RouteSigning,SpeedLimit,AvgTruckPercent,CalculationYear',
+      returnGeometry:'true', geometryPrecision:'5', maxAllowableOffset:String(tol),
+      // When more is in view than will be drawn, the busiest survive: a quiet street
+      // you can guess at, a truck route you cannot.
+      orderByFields:'AADT DESC', resultRecordCount:String(AADT_CAP), f:'geojson'
+    });
+    this.status('Reading traffic counts from NYSDOT\u2026');
+    let feats;
+    try{
+      const r=await fetch(AADT_URL+'?'+q.toString());
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const j=await r.json();
+      if(j.error) throw new Error(j.error.message||'service error');
+      feats=j.features||[];
+    }catch(e){
+      if(my!==this.aadtReq) return;
+      this.aadtSig='';
+      this.status('No answer from the NYSDOT traffic service. The rest of the map is unaffected.');
+      return;
+    }
+    if(my!==this.aadtReq) return;
+    const n=this.drawAadt(feats);
+    this.status(feats.length>=AADT_CAP
+      ? 'Traffic counts: the '+n+' busiest roads in view. Zoom in for the quieter ones.'
+      : 'Traffic counts on '+n+' road segments in view.');
+  }
+  drawAadt(feats){
+    const g=this.aadtLayer; g.clearLayers();
+    const rows=[];
+    feats.forEach(f=>{
+      const gm=f.geometry||{}, pr=f.properties||{}, v=+pr.AADT;
+      if(!isFinite(v) || v<=0) return;
+      // ArcGIS hands back a MultiLineString whenever a segment has more than one path.
+      const paths = gm.type==='LineString' ? [gm.coordinates]
+                  : gm.type==='MultiLineString' ? gm.coordinates : [];
+      const band=this.aadtBand(v);
+      let longest=null;
+      paths.forEach(path=>{
+        if(!path || path.length<2) return;
+        const ll=path.map(c=>[c[1],c[0]]);
+        const ln=L.polyline(ll,{color:band[1],weight:band[3],opacity:.8,className:'aadt-ln'});
+        ln.bindPopup('',{maxWidth:250,autoPan:false});
+        ln.on('popupopen',()=>ln.setPopupContent(this.aadtPopup(pr)));
+        ln.addTo(g);
+        if(!longest || ll.length>longest.length) longest=ll;
+      });
+      if(longest) rows.push({v, band, mid:longest[Math.floor(longest.length/2)],
+        name:String(pr.RoadwayName||pr.RouteNumber||'').trim()});
+    });
+    this.labelAadt(rows);
+    return rows.length;
+  }
+  /* One number per road, and only where it fits. Labelling every segment stacks a
+     dozen copies of the same count down one street; going busiest-first means that
+     when two labels compete, the road you most need to know about keeps its number. */
+  labelAadt(rows){
+    const m=this.map, g=this.aadtLayer, placed=[], seen={};
+    rows.slice().sort((a,b)=>b.v-a.v).forEach(r=>{
+      const nm=r.name||('#'+Math.round(r.v));
+      if(seen[nm]) return;
+      const pt=m.latLngToContainerPoint(r.mid);
+      const txt=this.fmtAadt(r.v), w=txt.length*7+10, h=16;
+      const box={l:pt.x-w/2, t:pt.y-h/2, r:pt.x+w/2, b:pt.y+h/2};
+      if(placed.some(q=>!(box.r<q.l||box.l>q.r||box.b<q.t||box.t>q.b))) return;
+      placed.push(box); seen[nm]=1;
+      g.addLayer(L.marker(r.mid,{interactive:false,keyboard:false,zIndexOffset:-400,
+        icon:L.divIcon({className:'aadt-ic',iconSize:[w,h],iconAnchor:[w/2,h/2],
+          html:'<span class="aadt-n" style="border-color:'+r.band[1]+';color:'+r.band[1]+'">'+esc(txt)+'</span>'})}));
+    });
+  }
+  aadtPopup(p){
+    const v=+p.AADT, band=this.aadtBand(v);
+    const sign=String(p.RouteSigning||'').trim(), num=String(p.RouteNumber||'').trim();
+    const nm=String(p.RoadwayName||'').trim() || (sign+' '+num).trim() || 'Unnamed road';
+    let h='<b>'+esc(nm)+'</b>'
+      +'<br><b style="color:'+band[1]+'">'+v.toLocaleString()+' vehicles a day</b> \u00b7 '+band[2]
+      +'<br><span style="opacity:.65">NYSDOT count'+(p.CalculationYear?', '+p.CalculationYear:'')+'</span>';
+    const bits=[];
+    if(p.SpeedLimit) bits.push(p.SpeedLimit+' mph limit');
+    if(p.AvgTruckPercent) bits.push(Math.round(p.AvgTruckPercent)+'% trucks');
+    if(bits.length) h+='<br>'+esc(bits.join(' \u00b7 '));
+    return h;
+  }
+
   /* ---------- mileposts ---------- */
   /* A number every mile is right over a town and unreadable over the state, so the
      interval is picked from how many pixels a mile is actually worth at the zoom you
@@ -1840,8 +2049,16 @@ class TrailApp {
     this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright',collapsed:true}).addTo(map);
     const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
     const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
-    this.embLines=[ L.polyline(rHV,{color:accent,weight:4,opacity:.85}).addTo(map),
-                    L.polyline(rER,{color:accent2,weight:4,opacity:.85}).addTo(map) ];
+    this.embLines=[ L.polyline(rHV,{color:accent,weight:4,opacity:.85}),
+                    L.polyline(rER,{color:accent2,weight:4,opacity:.85}) ];
+    /* The trail itself gets a row in the control like everything else, and like the
+       borrowed layers it names where it comes from — the state's own page, which is
+       also where the official GPX for a GPS unit lives. One group, so the swap from
+       the embedded line to the live ArcGIS one below doesn't lose the row. */
+    this.routeLayer=L.layerGroup(this.embLines).addTo(map);
+    this.layersCtl.addOverlay(this.routeLayer,
+      this.lyrSrc('Empire State Trail', EST_SRC, 'The official route, and the GPX for your GPS')
+      +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
     this.stopLayer=L.layerGroup();
     TOWNS.forEach(t=>{
       const mk=L.circleMarker([t.lat,t.lng],{radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
@@ -1855,8 +2072,23 @@ class TrailApp {
        looking at. Redrawn on moveend — which is also what a zoom ends in. */
     this.mileLayer=L.layerGroup().addTo(map);
     this.layersCtl.addOverlay(this.mileLayer,'Mileposts');
-    map.on('moveend',()=>this.renderMileposts());
+    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
+    /* Both off until asked for, and both borrowed, so both name their source in the
+       control. The Shoreline is free to draw; the counts cost a request per view. */
+    this.shoreLayer=L.polyline([],{color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
+    this.shoreLayer.bindPopup('',{maxWidth:270,autoPan:false});
+    this.shoreLayer.on('popupopen',()=>this.shoreLayer.setPopupContent(this.shorePopup()));
+    this.layersCtl.addOverlay(this.shoreLayer,
+      this.lyrSrc(SHORE.name, SHORE.src, 'From '+SHORE.srcName+' \u2014 opens the route this line came from')
+      +' <span class="lyr-ct">GPX</span>');
+    map.on('overlayadd', e=>{ if(e.layer===this.shoreLayer) this.showShore(); });
+    this.aadtLayer=L.layerGroup();
+    this.layersCtl.addOverlay(this.aadtLayer,
+      this.lyrSrc('Traffic counts', AADT_SRC, 'From the NYSDOT Traffic Data Viewer \u2014 opens the source')
+      +' <span class="lyr-ct">AADT</span>');
+    map.on('overlayadd', e=>{ if(e.layer===this.aadtLayer){ this.aadtSig=''; this.loadAadt(); } });
+    map.on('overlayremove', e=>{ if(e.layer===this.aadtLayer) this.aadtLayer.clearLayers(); });
     // Off until asked for: it costs a dozen requests to a public service, so switching
     // it on is the fetch trigger rather than something that happens behind your back.
     this.wxLayer=L.layerGroup();
@@ -2041,15 +2273,20 @@ class TrailApp {
     const j=await r.json(); return j.features||[];
   }
   drawLiveRoute(feats){
-    const g=L.layerGroup();
+    const lines=[];
     feats.forEach(f=>{
       const sec=(f.properties||{}).Section, col = sec==='Hudson Valley' ? this.accent : this.accent2;
       const geom=f.geometry||{};
       const parts = geom.type==='MultiLineString' ? geom.coordinates : [geom.coordinates||[]];
-      parts.forEach(line=>{ const ll=line.map(c=>[c[1],c[0]]); if(ll.length>1) L.polyline(ll,{color:col,weight:4,opacity:.9}).addTo(g); });
+      parts.forEach(line=>{ const ll=line.map(c=>[c[1],c[0]]); if(ll.length>1) lines.push(L.polyline(ll,{color:col,weight:4,opacity:.9})); });
     });
-    g.addTo(this.map);
-    this.embLines.forEach(pl=>this.map.removeLayer(pl));
+    // An empty answer used to clear the embedded line and draw nothing over it,
+    // leaving a map with no trail on it. Keep what we have unless there is a
+    // replacement in hand.
+    if(!lines.length || !this.routeLayer) return;
+    this.routeLayer.clearLayers();
+    lines.forEach(pl=>this.routeLayer.addLayer(pl));
+    this.embLines=lines;
   }
 }
 window.TrailApp = TrailApp;
