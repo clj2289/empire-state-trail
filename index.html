@@ -35,17 +35,17 @@
      numbers) is deliberately left out of this so it stays selectable. */
   button,.leaflet-control,.leaflet-control a,.leaflet-bar a{
     -webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-  .phone-app{height:100%;height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--color-bg)}
+  /* Height the floating tab bar reserves: 6 top + 34 tab + 8 bottom, plus the home
+     indicator when installed. Screens pad by it; the map sheet sits on top of it. */
+  :root{--tabbar-h:calc(48px + env(safe-area-inset-bottom))}
+  .phone-app{height:100%;height:100dvh;position:relative;display:flex;flex-direction:column;overflow:hidden;background:var(--color-bg)}
   .ic{display:block;flex:none}
 
-  /* ---- app bar ---- */
-  /* Broadsheet takes extra top air and no bottom border — whitespace separates.
-     Insets keep the bar clear of the notch when installed to the home screen. */
-  .appbar{flex:none;display:flex;align-items:center;gap:var(--space-3);
-    padding:calc(var(--space-4) + env(safe-area-inset-top)) calc(var(--space-4) + env(safe-area-inset-right)) var(--space-3) calc(var(--space-4) + env(safe-area-inset-left))}
-  .brand{display:flex;flex-direction:column;line-height:1.05;min-width:0}
-  .brand .kick{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--color-accent);font-family:var(--font-body);font-weight:600}
-  .brand .nm{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:19px;letter-spacing:-.01em}
+  /* ---- direction control ----
+     There is no app bar. It cost 65px (112 installed, once the notch inset is in)
+     on every screen including the map, to show a title the rider had already read
+     and one live control. That control now rides in each screen's existing title
+     row, which was already occupying the height, and becomes a FAB on the map. */
   .dir-toggle{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:6px;cursor:pointer;
     font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:12.5px;
     background:var(--color-accent);color:var(--color-bg);border:1px solid var(--color-accent);
@@ -59,7 +59,13 @@
   .screen{position:absolute;inset:0;display:none}
   .screen.active{display:block}
   .screen:not([data-screen="map"]){overflow-y:auto;-webkit-overflow-scrolling:touch}
-  .screen-pad{padding:var(--space-4) calc(var(--space-4) + env(safe-area-inset-right)) var(--space-8) calc(var(--space-4) + env(safe-area-inset-left))}
+  /* Top inset moves here from the deleted app bar — the screens are the top of the
+     app now. Bottom clears the tab bar, which floats over them rather than sitting
+     in the flex column, so that hiding it actually reveals map and list underneath. */
+  .screen-pad{padding:calc(var(--space-4) + env(safe-area-inset-top)) calc(var(--space-4) + env(safe-area-inset-right))
+    calc(var(--space-8) + var(--tabbar-h)) calc(var(--space-4) + env(safe-area-inset-left))}
+  .title-row{display:flex;align-items:center;gap:var(--space-3);margin:2px 0 var(--space-3)}
+  .title-row .screen-title{flex:1;min-width:0;margin:0}
   .screen-title{font-size:27px;margin:2px 0 var(--space-3)}
   .dir-note{font-size:13px;font-family:var(--font-body);color:var(--color-neutral-600);font-weight:400}
 
@@ -72,7 +78,7 @@
      drags in the gap beside them. */
   /* Centred: Leaflet owns both top corners (zoom left, layers right). Above their
      z-index too, so it can never end up buried under a control it overlaps. */
-  .map-back{position:absolute;top:var(--space-3);left:50%;transform:translateX(-50%);z-index:1100;
+  .map-back{position:absolute;top:calc(var(--space-3) + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:1100;
     display:flex;align-items:center;gap:6px;cursor:pointer;max-width:calc(100% - 120px);
     padding:8px var(--space-3) 8px var(--space-2);font-size:13px;font-weight:600;line-height:1;
     background:var(--color-bg);color:var(--color-accent-700);border:1px solid var(--color-divider);
@@ -80,7 +86,8 @@
   .map-back[hidden]{display:none}
   .map-back:hover{background:var(--color-accent-100)}
   .map-back:active{background:var(--color-accent-200)}
-  .map-overlay{position:absolute;left:0;right:0;bottom:0;z-index:500;display:flex;flex-direction:column;align-items:flex-end;pointer-events:none}
+  /* Sits above the floating tab bar — the map itself runs edge to edge behind it. */
+  .map-overlay{position:absolute;left:0;right:0;bottom:var(--tabbar-h);z-index:500;display:flex;flex-direction:column;align-items:flex-end;pointer-events:none}
   .map-overlay > *{pointer-events:auto}
   .map-fabs{display:flex;flex-direction:column;gap:var(--space-2);
     margin:0 calc(var(--space-3) + env(safe-area-inset-right)) var(--space-3) 0}
@@ -89,6 +96,15 @@
     border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
   .fab:hover{background:var(--color-accent-100)}
   .fab:active{background:var(--color-accent-200)}
+  /* Direction is the one FAB that has to state its value, not just its action —
+     "flip" means nothing without knowing which way you're pointed. So it widens
+     to a pill and carries the short label the app bar used to show in full. */
+  .fab-dir{width:auto;height:40px;display:inline-flex;align-items:center;gap:6px;padding:0 12px;
+    font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:12px;
+    background:var(--color-accent);color:var(--color-bg);border-color:var(--color-accent);white-space:nowrap}
+  .fab-dir .ic{color:var(--color-bg)}
+  .fab-dir:hover{background:var(--color-accent-600)}
+  .fab-dir:active{background:var(--color-accent-700)}
   .map-sheet{width:100%;background:var(--color-bg);
     padding:var(--space-3) calc(var(--space-4) + env(safe-area-inset-right)) var(--space-4) calc(var(--space-4) + env(safe-area-inset-left));
     box-shadow:0 -6px 24px color-mix(in srgb,var(--color-neutral-900) 14%,transparent);
@@ -237,13 +253,25 @@
   .about a{color:var(--color-accent)}
 
   /* ---- tab bar ---- */
-  .tabbar{flex:none;display:flex;background:var(--color-bg);border-top:1px solid var(--color-divider);
+  /* Floats over the screens instead of sitting in the flex column, so sliding it
+     away genuinely hands its height back to the list rather than just moving it.
+     Icon-only: five labels bought nothing that five distinct glyphs don't, and cost
+     ~19px on every screen. Translucent so the map reads continuously underneath. */
+  .tabbar{position:absolute;left:0;right:0;bottom:0;z-index:900;display:flex;
+    background:color-mix(in srgb,var(--color-bg) 92%,transparent);
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    border-top:1px solid var(--color-divider);
+    transition:transform .22s ease;
     padding:6px calc(4px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left))}
-  .tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;
-    background:transparent;border:0;color:var(--color-neutral-600);font-family:var(--font-body);font-size:10px;padding:4px 2px}
+  .tabbar.is-hidden{transform:translateY(100%)}
+  .tab{flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer;
+    background:transparent;border:0;color:var(--color-neutral-600);padding:4px 2px}
+  /* `hidden` alone loses to display:flex, and the Trip tab is hidden by default. */
+  .tab[hidden]{display:none}
   .tab .tab-ic{width:34px;height:26px;display:grid;place-items:center;border-radius:999px;background:transparent}
   .tab.active{color:var(--color-accent)}
   .tab.active .tab-ic{color:var(--color-accent)}
+  @media (prefers-reduced-motion:reduce){ .tabbar{transition:none} }
 
   /* ---- leaflet, themed to the system rather than left at its defaults ---- */
   .leaflet-popup-content-wrapper{background:var(--color-bg);color:var(--color-text);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);font-family:var(--font-body)}
@@ -291,17 +319,13 @@
 </head>
 <body class="ds-broadsheet">
 <div class="phone-app">
-  <header class="appbar">
-    <div class="brand"><span class="kick">Trail Companion</span><span class="nm">Empire State Trail</span></div>
-    <button id="dirBtn" type="button" class="dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span id="dirLbl">Buffalo → NYC</span></button>
-  </header>
-
   <main class="screens">
     <section data-screen="map" class="screen active">
       <div id="map"></div>
       <button id="mapBack" type="button" class="map-back" hidden></button>
       <div class="map-overlay">
         <div class="map-fabs">
+          <button type="button" class="fab fab-dir dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span class="dir-lbl-s">B→NYC</span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
         </div>
@@ -311,7 +335,7 @@
 
     <section data-screen="next" class="screen">
       <div class="screen-pad">
-        <h1 class="screen-title">Next up</h1>
+        <div class="title-row"><h1 class="screen-title">Next up</h1><button type="button" class="dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span class="dir-lbl">Buffalo → NYC</span></button></div>
         <div id="hero" class="hero"></div>
         <div id="nextSummary" class="up-list"></div>
         <div class="field track">
@@ -323,7 +347,7 @@
 
     <section data-screen="itin" class="screen">
       <div class="screen-pad">
-        <h1 class="screen-title">Itinerary <span id="cuDir" class="dir-note"></span></h1>
+        <div class="title-row"><h1 class="screen-title">Itinerary <span id="cuDir" class="dir-note"></span></h1><button type="button" class="dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span class="dir-lbl">Buffalo → NYC</span></button></div>
         <div class="table-wrap">
           <table class="itin">
             <thead><tr><th>TM</th><th>Stop</th><th>Shop</th><th>Stay</th><th>Camp</th><th>Rail</th><th class="frcell">From you</th></tr></thead>
@@ -336,7 +360,7 @@
 
     <section data-screen="nearby" class="screen">
       <div class="screen-pad">
-        <h1 class="screen-title">Nearby</h1>
+        <div class="title-row"><h1 class="screen-title">Nearby</h1><button type="button" class="dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span class="dir-lbl">Buffalo → NYC</span></button></div>
         <div id="poiStat" class="poi-stat"></div>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
@@ -374,6 +398,7 @@
         <h1 class="screen-title">More</h1>
         <label class="switch"><input type="checkbox" id="showPassed"> Show stops I’ve already passed</label>
         <label class="switch"><input type="checkbox" id="tapToSet" checked> Tapping the map can move my location</label>
+        <label class="switch"><input type="checkbox" id="showTrip"> Show the Trip tab</label>
         <div class="set-lbl"><label for="simSel">Simulate a location</label></div>
         <select id="simSel" class="input"><option value="">Choose a place…</option></select>
         <div class="set-lbl">Test locations</div>
@@ -387,12 +412,12 @@
     </section>
   </main>
 
-  <nav class="tabbar">
-    <button data-tab="map" type="button" class="tab active" aria-current="page"><span class="tab-ic" data-ic="map"></span>Map</button>
-    <button data-tab="next" type="button" class="tab" aria-current="false"><span class="tab-ic" data-ic="next"></span>Next up</button>
-    <button data-tab="itin" type="button" class="tab" aria-current="false"><span class="tab-ic" data-ic="list"></span>Trip</button>
-    <button data-tab="nearby" type="button" class="tab" aria-current="false"><span class="tab-ic" data-ic="near"></span>Nearby</button>
-    <button data-tab="settings" type="button" class="tab" aria-current="false"><span class="tab-ic" data-ic="gear"></span>More</button>
+  <nav id="tabbar" class="tabbar">
+    <button data-tab="map" type="button" class="tab active" aria-current="page" title="Map" aria-label="Map"><span class="tab-ic" data-ic="map"></span></button>
+    <button data-tab="next" type="button" class="tab" aria-current="false" title="Next up" aria-label="Next up"><span class="tab-ic" data-ic="next"></span></button>
+    <button data-tab="itin" type="button" class="tab" aria-current="false" title="Trip" aria-label="Trip" hidden><span class="tab-ic" data-ic="list"></span></button>
+    <button data-tab="nearby" type="button" class="tab" aria-current="false" title="Nearby" aria-label="Nearby"><span class="tab-ic" data-ic="near"></span></button>
+    <button data-tab="settings" type="button" class="tab" aria-current="false" title="More" aria-label="More"><span class="tab-ic" data-ic="gear"></span></button>
   </nav>
 </div>
 

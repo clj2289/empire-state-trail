@@ -236,6 +236,7 @@ class TrailApp {
     // moving the rider re-sorts Nearby, the itinerary, and every distance on screen.
     // On by default so nothing changes for anyone who hasn't gone looking for it.
     this.tapToSet=true;
+    this.showTrip=false; this.screen='map';
     // Absolute stretch of trail to list, independent of the rider. The mileage band
     // above it asks "how far from me", which needs a location and moves as you ride;
     // this asks "what's between mile X and Y", which answers the map-shaped question
@@ -263,7 +264,9 @@ class TrailApp {
     this.buildDropdowns();
     this.buildTestRows();
     this.wireTabs();
+    this.applyTripTab();
     this.wireControls();
+    this.wireTabAutohide();
     this.initMap();
     this.renderAll();
   }
@@ -278,6 +281,7 @@ class TrailApp {
     if(p.dir==='B2NYC'||p.dir==='NYC2B') this.dir=p.dir;
     this.showPassed=!!p.showPassed;
     if('tapToSet' in p) this.tapToSet=!!p.tapToSet;
+    this.showTrip=!!p.showTrip;
     if(p.myLL && isFinite(p.myLL.lat) && isFinite(p.myLL.lng)){
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
@@ -291,9 +295,10 @@ class TrailApp {
     // retired key is inert rather than needing pruning here.
     if(Array.isArray(p.catOrder)) this.catOrder=p.catOrder.filter(c=>typeof c==='string');
     if(Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
-    const lbl=this.$('dirLbl'); if(lbl) lbl.textContent = this.dir==='B2NYC' ? 'Buffalo → NYC' : 'NYC → Buffalo';
+    this.renderDirLabels();
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
+    const tr=this.$('showTrip'); if(tr) tr.checked=this.showTrip;
     this.filtersOpen=!!p.filtersOpen;
     const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
     const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
@@ -302,7 +307,7 @@ class TrailApp {
     const fl=this.$('poiFilters'); if(fl) fl.open=this.filtersOpen;
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,myLL:this.myLL,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,myLL:this.myLL,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
       catOrder:this.catOrder,catHidden:[...this.catHidden],
       filtersOpen:this.filtersOpen})); }catch(e){}
@@ -339,6 +344,24 @@ class TrailApp {
     // one — only the programmatic showTab in zoomTo should leave the offer standing.
     this.tabs.forEach(btn=>btn.addEventListener('click',()=>{ this.clearReturn(); this.showTab(btn.dataset.tab); }));
   }
+  /* The bar floats over the screens, so hiding it hands its height to the list.
+     Only a deliberate downward pull hides it; any upward scroll brings it straight
+     back, and it never hides on the map, which has nothing to scroll. */
+  setTabsHidden(h){
+    const b=this.$('tabbar'); if(b) b.classList.toggle('is-hidden', !!h);
+  }
+  wireTabAutohide(){
+    this.screens.forEach(sc=>{
+      if(sc.dataset.screen==='map') return;
+      let last=0;
+      sc.addEventListener('scroll',()=>{
+        const y=sc.scrollTop;
+        if(abs(y-last)<8) return;          // ignore jitter and rubber-band
+        this.setTabsHidden(y>last && y>48); // never hide near the top
+        last=y;
+      },{passive:true});
+    });
+  }
   /* Tapping a list row throws you onto the map, which was a one-way trip: the way
      back was the tab bar, and a 264-row list reopened at the top, nowhere near the
      row you'd been reading. Remember the screen and its scroll offset instead. */
@@ -364,6 +387,8 @@ class TrailApp {
     if(sc) requestAnimationFrame(()=>{ sc.scrollTop=r.top; });
   }
   showTab(name){
+    this.screen=name;
+    this.setTabsHidden(false);
     this.tabs.forEach(b=>{ const on=b.dataset.tab===name; b.classList.toggle('active',on); b.setAttribute('aria-current', on?'page':'false'); });
     this.screens.forEach(s=>{ s.classList.toggle('active', s.dataset.screen===name); });
     if(name==='map' && this.map){ setTimeout(()=>{ this.map.invalidateSize(); if(this.myLL) this.map.setView([this.myLL.lat,this.myLL.lng]); },60); }
@@ -371,7 +396,8 @@ class TrailApp {
 
   /* ---------- controls ---------- */
   wireControls(){
-    const dirBtn=this.$('dirBtn'); if(dirBtn) dirBtn.addEventListener('click',()=>this.flipDir());
+    document.addEventListener('click',e=>{ if(e.target.closest('.dir-toggle')) this.flipDir(); });
+    const tr=this.$('showTrip'); if(tr) tr.addEventListener('change',e=>{ this.showTrip=e.target.checked; this.savePrefs(); this.applyTripTab(); });
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
     const rc=this.$('recenterBtn'); if(rc) rc.addEventListener('click',()=>this.recenter());
     const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.savePrefs(); this.renderItin(); });
@@ -424,9 +450,25 @@ class TrailApp {
     if(fl) fl.addEventListener('toggle',()=>{ this.filtersOpen=fl.open; this.savePrefs(); });
   }
   status(msg){ const el=this.$('locStatus'); if(el) el.textContent=msg; }
+  /* The direction control is no longer one button in a bar that no longer exists —
+     it repeats in every screen's title row plus a map FAB, so they all restate the
+     same value on every flip. The FAB only has room for the short form. */
+  renderDirLabels(){
+    const full = this.dir==='B2NYC' ? 'Buffalo → NYC' : 'NYC → Buffalo';
+    const shrt = this.dir==='B2NYC' ? 'B→NYC' : 'NYC→B';
+    document.querySelectorAll('.dir-lbl').forEach(el=>{ el.textContent=full; });
+    document.querySelectorAll('.dir-lbl-s').forEach(el=>{ el.textContent=shrt; });
+  }
+  /* Trip duplicates what Next up and Nearby already answer, so it is off by default
+     and its tab is simply absent — not greyed, not reordered. */
+  applyTripTab(){
+    const btn=document.querySelector('[data-tab="itin"]');
+    if(btn) btn.hidden=!this.showTrip;
+    if(!this.showTrip && this.screen==='itin') this.showTab('map');
+  }
   flipDir(){
     this.dir = this.dir==='B2NYC' ? 'NYC2B' : 'B2NYC';
-    const lbl=this.$('dirLbl'); if(lbl) lbl.textContent = this.dir==='B2NYC' ? 'Buffalo → NYC' : 'NYC → Buffalo';
+    this.renderDirLabels();
     this.savePrefs();
     this.renderAll();
   }
@@ -521,7 +563,11 @@ class TrailApp {
 
   renderMapSheet(){
     const el=this.$('mapSheet'); if(!el) return;
-    if(this.myMile==null){ el.innerHTML='<div class="sheet-empty">Tap <b>Locate</b>, tap the map, or pick a simulated spot in Settings to see your position and what’s next.</div>'; return; }
+    // With no location the sheet had nothing to report and said so in three lines of
+    // prose, over the map, permanently. It now collapses entirely — the Locate FAB is
+    // right there and states the same thing by being the only lit control.
+    if(this.myMile==null){ el.innerHTML=''; el.hidden=true; return; }
+    el.hidden=false;
     const ahead=this.travelOrder().filter(t=>this.isAhead(t));
     const nx=ahead[0];
     // Mileposts run from the NYC end, so "to NYC" IS the milepost when heading south
