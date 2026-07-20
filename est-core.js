@@ -64,6 +64,14 @@ const TEST=[
 const TOTAL = ROUTE[ROUTE.length-1][2];
 const abs = Math.abs;
 const fmtMi = m => m < 10 ? m.toFixed(1) : String(Math.round(m));
+/* A distance answers "how far", a milepost answers "where" — and the milepost is
+   the number on the trail sign, in the itinerary column, and in whatever else the
+   rider is cross-checking against. Anything that prints a distance prints the mile
+   it refers to too. Kept to a tenth throughout, including the rider's own position:
+   fmtMi rounds anything over 10 to whole miles, which read as a different scale
+   sitting next to the one-decimal mileposts the TOWNS table has always used. */
+const fmtMp = m => (m==null || !isFinite(m)) ? '' : m.toFixed(1);
+const mpTxt = m => { const s=fmtMp(m); return s ? 'TM '+s : ''; };
 
 /* Facility names/addresses come from a third-party service and land in innerHTML
    and in data-* attributes, so everything interpolated goes through esc() first.
@@ -92,7 +100,8 @@ const P = {
   park:'M7 4h6a4 4 0 0 1 0 8H7z|M7 4v16',
   lock:'M6 10V7a6 6 0 0 1 12 0v3|M5 10h14v10H5z',
   pin:'M12 21s-7-6-7-12a7 7 0 0 1 14 0c0 6-7 12-7 12Z|c12 9 2.5',
-  chevR:'M9 6l6 6-6 6'
+  chevR:'M9 6l6 6-6 6',
+  chevL:'M15 6l-6 6 6 6'
 };
 function icon(name, size){
   size = size || 20;
@@ -146,6 +155,25 @@ function mapsLink(t,q,from){
 // price is date- and occupancy-dependent, needs a keyed API behind a proxy, and the
 // small trail-town inns in the ArcGIS layer mostly aren't in bookable inventory anyway.
 function ratesLink(q){ return 'https://www.google.com/travel/search?q='+encodeURIComponent(q); }
+// Same reasoning for star ratings and reviews: reading them out of the Places API
+// needs a key and a proxy, and the ArcGIS layer carries none of its own. The map
+// search lands on the place card, where the rating and the reviews already sit.
+// Anchored to the facility's own coordinates so a chain name that repeats up the
+// trail — three Comfort Inns — resolves to the one the rider actually tapped.
+/* The town popups' "find nearby" chips, but anchored to a coordinate instead of a
+   town name — so a bare tap on the map gets them too, where there is no name to
+   hand the query. Tighter than a name search even where there is one. */
+const FINDQ=[['gas station convenience store','Gas / C-store'],['grocery store supermarket','Groceries'],
+  ['restaurant cafe','Food'],['hotel motel lodging','Lodging'],['campground','Camping'],['bicycle shop','Bike shop']];
+function searchAt(q,lat,lng){ return 'https://www.google.com/maps/search/'+encodeURIComponent(q)+'/@'+lat+','+lng+',14z'; }
+function findNearbyRow(lat,lng){
+  return '<div class="pa-lbl">Find nearby:</div><div class="pa-row">'
+    +FINDQ.map(f=>'<a href="'+searchAt(f[0],lat,lng)+'" target="_blank" rel="noopener" class="pa">'+f[1]+'</a>').join('')+'</div>';
+}
+function reviewsLink(q,lat,lng){
+  const u='https://www.google.com/maps/search/'+encodeURIComponent(q);
+  return (lat!=null&&lng!=null&&isFinite(lat)&&isFinite(lng)) ? u+'/@'+lat+','+lng+',17z' : u;
+}
 // How far off the route a facility sits. projectRoute already computes this to
 // filter POIs to within 5 mi, it was just never shown. Straight-line from the
 // nearest route vertex — the real pedal distance up whatever side road serves it
@@ -203,6 +231,16 @@ const LEG_URL=ARC+"EST_Public/FeatureServer/3/query";
 class TrailApp {
   constructor(){
     this.dir='B2NYC'; this.myMile=null; this.myLL=null; this.showPassed=false; this.destIdx=-1;
+    // Tapping the map to place yourself is how you set a location without GPS, but
+    // it fires on every stray tap while panning or reading a pin — and silently
+    // moving the rider re-sorts Nearby, the itinerary, and every distance on screen.
+    // On by default so nothing changes for anyone who hasn't gone looking for it.
+    this.tapToSet=true;
+    // Absolute stretch of trail to list, independent of the rider. The mileage band
+    // above it asks "how far from me", which needs a location and moves as you ride;
+    // this asks "what's between mile X and Y", which answers the map-shaped question
+    // — that cluster around Syracuse, what is it — and works with no GPS at all.
+    this.mpFrom=null; this.mpTo=null;
     // Nearby list: optional day-planning band (trail miles ahead) + per-category
     // expansion. Filters start collapsed — the list is the reason you opened the tab.
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
@@ -239,12 +277,15 @@ class TrailApp {
     try{ p=JSON.parse(localStorage.getItem(PREFS)||'{}') || {}; }catch(e){ return; }
     if(p.dir==='B2NYC'||p.dir==='NYC2B') this.dir=p.dir;
     this.showPassed=!!p.showPassed;
+    if('tapToSet' in p) this.tapToSet=!!p.tapToSet;
     if(p.myLL && isFinite(p.myLL.lat) && isFinite(p.myLL.lng)){
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
     }
     if(isFinite(p.miMin)&&p.miMin>=0) this.miMin=p.miMin;
     if(isFinite(p.miMax)&&p.miMax>=0) this.miMax=p.miMax;
+    if(isFinite(p.mpFrom)&&p.mpFrom>=0) this.mpFrom=p.mpFrom;
+    if(isFinite(p.mpTo)&&p.mpTo>=0) this.mpTo=p.mpTo;
     // Stored keys aren't checked against CAT_ORDER — the service can serve asset
     // types we don't hardcode. Render intersects with what actually arrived, so a
     // retired key is inert rather than needing pruning here.
@@ -252,14 +293,18 @@ class TrailApp {
     if(Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     const lbl=this.$('dirLbl'); if(lbl) lbl.textContent = this.dir==='B2NYC' ? 'Buffalo → NYC' : 'NYC → Buffalo';
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
+    const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
     this.filtersOpen=!!p.filtersOpen;
     const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
     const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
+    const c=this.$('mpFrom'); if(c && this.mpFrom!=null) c.value=this.mpFrom;
+    const d=this.$('mpTo'); if(d && this.mpTo!=null) d.value=this.mpTo;
     const fl=this.$('poiFilters'); if(fl) fl.open=this.filtersOpen;
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,myLL:this.myLL,
-      miMin:this.miMin,miMax:this.miMax,catOrder:this.catOrder,catHidden:[...this.catHidden],
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,myLL:this.myLL,
+      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
+      catOrder:this.catOrder,catHidden:[...this.catHidden],
       filtersOpen:this.filtersOpen})); }catch(e){}
   }
   /* Summary shown on the collapsed header. A filter you can't see is a filter you
@@ -271,6 +316,7 @@ class TrailApp {
     const bits=[];
     bits.push(on===all.length ? 'all categories' : on+' of '+all.length+' categories');
     if(this.miMin!=null||this.miMax!=null) bits.push((this.miMin!=null?this.miMin:0)+'–'+(this.miMax!=null?this.miMax:'∞')+' mi');
+    if(this.mpFrom!=null||this.mpTo!=null) bits.push('TM '+(this.mpFrom!=null?this.mpFrom:0)+'–'+(this.mpTo!=null?this.mpTo:Math.round(TOTAL)));
     el.textContent=bits.join(' · ');
   }
   /* Stored order first, then anything it doesn't mention — a newly shipped
@@ -289,7 +335,33 @@ class TrailApp {
   wireTabs(){
     this.tabs=[...document.querySelectorAll('[data-tab]')];
     this.screens=[...document.querySelectorAll('[data-screen]')];
-    this.tabs.forEach(btn=>btn.addEventListener('click',()=>this.showTab(btn.dataset.tab)));
+    // Pressing a tab yourself is its own way back, and it invalidates the remembered
+    // one — only the programmatic showTab in zoomTo should leave the offer standing.
+    this.tabs.forEach(btn=>btn.addEventListener('click',()=>{ this.clearReturn(); this.showTab(btn.dataset.tab); }));
+  }
+  /* Tapping a list row throws you onto the map, which was a one-way trip: the way
+     back was the tab bar, and a 264-row list reopened at the top, nowhere near the
+     row you'd been reading. Remember the screen and its scroll offset instead. */
+  markReturn(el){
+    const sc=el.closest('[data-screen]');
+    if(!sc || sc.dataset.screen==='map') return;
+    const tab=this.tabs.find(b=>b.dataset.tab===sc.dataset.screen);
+    this.ret={screen:sc.dataset.screen, top:sc.scrollTop, label:(tab?tab.textContent.trim():'the list')};
+    this.renderReturn();
+  }
+  clearReturn(){ if(this.ret){ this.ret=null; this.renderReturn(); } }
+  renderReturn(){
+    const b=this.$('mapBack'); if(!b) return;
+    b.hidden=!this.ret;
+    if(this.ret) b.innerHTML=icon('chevL',16)+'<span>Back to '+esc(this.ret.label)+'</span>';
+  }
+  goBack(){
+    const r=this.ret; if(!r) return;
+    this.clearReturn();
+    this.showTab(r.screen);
+    const sc=document.querySelector('[data-screen="'+r.screen+'"]');
+    // display:none can zero scrollTop, so this has to land after the screen is back
+    if(sc) requestAnimationFrame(()=>{ sc.scrollTop=r.top; });
   }
   showTab(name){
     this.tabs.forEach(b=>{ const on=b.dataset.tab===name; b.classList.toggle('active',on); b.setAttribute('aria-current', on?'page':'false'); });
@@ -303,24 +375,49 @@ class TrailApp {
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
     const rc=this.$('recenterBtn'); if(rc) rc.addEventListener('click',()=>this.recenter());
     const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.savePrefs(); this.renderItin(); });
+    const tp=this.$('tapToSet'); if(tp) tp.addEventListener('change',e=>{ this.tapToSet=e.target.checked; this.savePrefs();
+      this.status(this.tapToSet?'Tapping the map will offer to move you there.':'Map taps no longer move you — use Locate or a simulated spot.'); });
     const dest=this.$('destSel'); if(dest) dest.addEventListener('change',()=>{ this.destIdx=dest.value===''?-1:+dest.value; this.renderNext(); });
     const sim=this.$('simSel'); if(sim) sim.addEventListener('change',()=>{ if(sim.value==='')return; const t=TOWNS[+sim.value]; this.setMyLocation(t.lat+0.03,t.lng+0.02); this.status('Simulating near '+t.n+'.'); });
     // delegated: any [data-lat] element zooms the map
     document.addEventListener('click',e=>{
       const el=e.target.closest('[data-lat]'); if(!el || e.target.closest('a')) return;
+      this.markReturn(el);
       this.zoomTo(+el.dataset.lat, +el.dataset.lng, +el.dataset.z||13, el.dataset.town);
     });
+    const mb=this.$('mapBack'); if(mb) mb.addEventListener('click',()=>this.goBack());
+    // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
+    document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
     document.addEventListener('click',e=>{
       const t=e.target.closest('.poi-toggle'); if(!t) return;
       const c=t.dataset.cat; this.poiOpen[c]=!this.poiOpen[c]; this.renderNearby();
     });
+    const g=id=>{ const el=this.$(id); if(!el) return null; const v=el.value.trim(); if(v==='') return null;
+      const n=+v; return isFinite(n)&&n>=0 ? n : null; };
     const readBand=()=>{
-      const g=id=>{ const el=this.$(id); if(!el) return null; const v=el.value.trim(); if(v==='') return null;
-        const n=+v; return isFinite(n)&&n>=0 ? n : null; };
       this.miMin=g('miMin'); this.miMax=g('miMax');
       this.savePrefs(); this.renderNearby();
     };
     ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readBand); });
+    const readRange=()=>{
+      this.mpFrom=g('mpFrom'); this.mpTo=g('mpTo');
+      this.savePrefs(); this.renderNearby();
+    };
+    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readRange); });
+    const pc=this.$('mpClear');
+    if(pc) pc.addEventListener('click',()=>{ ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readRange(); });
+    const pv=this.$('mpFromMap');
+    if(pv) pv.addEventListener('click',()=>{
+      const r=this.mileRangeInView();
+      if(!r){ this.status('No trail in the map view — pan to a stretch of the route first.'); return; }
+      // Round outward, so a facility right at the edge of the view isn't filtered out
+      // of a range the rider set by looking at it.
+      const lo=Math.floor(r.lo), hi=Math.ceil(r.hi);
+      const a=this.$('mpFrom'); if(a) a.value=lo;
+      const b=this.$('mpTo'); if(b) b.value=hi;
+      readRange();
+      this.status('Showing trail mile '+lo+' to '+hi+' — the stretch on the map.');
+    });
     const mc=this.$('miClear');
     if(mc) mc.addEventListener('click',()=>{ ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readBand(); });
     const fl=this.$('poiFilters');
@@ -345,6 +442,37 @@ class TrailApp {
   recenter(){
     if(this.myLL && this.map){ this.showTab('map'); this.map.setView([this.myLL.lat,this.myLL.lng],13); }
     else this.status('Set your location first — tap Locate or pick a simulated spot.');
+  }
+  /* A tap used to move the rider outright, with no confirmation and no clue what it
+     was about to do. Everything on screen keys off myMile, so a stray tap while
+     panning silently re-sorted Nearby, the itinerary and every distance in the app.
+     The popup anchors the decision to the point you actually hit and names the mile
+     before you commit — dismissing it costs nothing, which is the common case. */
+  askMove(ll){
+    if(!this.map) return;
+    const pr=projectRoute(ll.lat,ll.lng);
+    this.pendingLL={lat:ll.lat,lng:ll.lng};
+    // How far the tap landed from the route matters here in a way it doesn't
+    // elsewhere: the further off, the looser the milepost it snapped to.
+    const off=pr.off>=0.1 ? '<div class="mv-s">'+fmtMi(pr.off)+' mi off the route</div>' : '';
+    const delta=this.myMile==null ? '' : '<div class="mv-s">'+fmtMi(abs(pr.mile-this.myMile))+' mi from where you are now</div>';
+    L.popup({className:'mv-pop'}).setLatLng(ll).setContent(
+      '<div class="mv"><div class="mv-k">Move your location here?</div>'
+      +'<div class="mv-v">Trail mile '+fmtMp(pr.mile)+'</div>'+off+delta
+      +'<button type="button" class="mv-go">Move me here</button>'
+      // Same chips the town popups carry — a tap anywhere is often about "what's
+      // around here", not "put me here", and that shouldn't need a known town.
+      +'<div class="mv-find">'+findNearbyRow(ll.lat,ll.lng)+'</div></div>'
+    ).openOn(this.map);
+  }
+  // Town buttons carry their own coordinates; a bare map tap uses the armed point.
+  confirmMove(btn){
+    const ll = (btn && btn.dataset.mvlat) ? {lat:+btn.dataset.mvlat, lng:+btn.dataset.mvlng} : this.pendingLL;
+    if(!ll || !isFinite(ll.lat) || !isFinite(ll.lng)) return;
+    this.pendingLL=null;
+    this.map.closePopup();
+    this.setMyLocation(ll.lat,ll.lng);
+    this.status('Location set from your map tap.');
   }
   setMyLocation(lat,lng){
     this.myMile=projectMile(lat,lng); this.myLL={lat,lng};
@@ -372,7 +500,7 @@ class TrailApp {
       const og2=dest?document.createElement('optgroup'):null; if(og2) og2.label=label;
       TOWNS.forEach((t,i)=>{ if(t.s===s){
         if(og1){ const o=document.createElement('option'); o.value=i; o.textContent='Near '+t.n; og1.appendChild(o); }
-        if(og2){ const o=document.createElement('option'); o.value=i; o.textContent=t.n+' (mi '+t.mi+')'; og2.appendChild(o); }
+        if(og2){ const o=document.createElement('option'); o.value=i; o.textContent=t.n+' ('+mpTxt(t.mi)+')'; og2.appendChild(o); }
       }});
       if(og1) sim.appendChild(og1); if(og2) dest.appendChild(og2);
     });
@@ -401,9 +529,9 @@ class TrailApp {
     // that stays distinct whichever way you're travelling.
     const ridden = this.dir==='B2NYC' ? TOTAL-this.myMile : this.myMile;
     const pct = Math.max(0,Math.min(100,(ridden/TOTAL)*100));
-    let h='<div class="sheet-row"><div><div class="sheet-k">Trail mile</div><div class="sheet-v">'+fmtMi(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
+    let h='<div class="sheet-row"><div><div class="sheet-k">Trail mile</div><div class="sheet-v">'+fmtMp(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
       +'<div class="sheet-r"><div class="sheet-k">ridden</div><div class="sheet-v">'+Math.round(pct)+'%</div></div></div>';
-    if(nx){ h+='<button class="sheet-next" data-lat="'+nx.lat+'" data-lng="'+nx.lng+'" data-town="'+esc(nx.n)+'"><span class="sheet-k">Next stop</span><span class="sheet-nm">'+esc(nx.n)+' · ~'+fmtMi(abs(nx.mi-this.myMile))+' mi</span>'+icon('chevR',18)+'</button>'; }
+    if(nx){ h+='<button class="sheet-next" data-lat="'+nx.lat+'" data-lng="'+nx.lng+'" data-town="'+esc(nx.n)+'"><span class="sheet-k">Next stop</span><span class="sheet-nm">'+esc(nx.n)+' · '+mpTxt(nx.mi)+' · ~'+fmtMi(abs(nx.mi-this.myMile))+' mi</span>'+icon('chevR',18)+'</button>'; }
     el.innerHTML=h;
   }
 
@@ -419,15 +547,17 @@ class TrailApp {
     const ridden = this.dir==='B2NYC' ? TOTAL-this.myMile : this.myMile;
     const remain = this.dir==='B2NYC' ? this.myMile : TOTAL-this.myMile;
     const pct = Math.max(0,Math.min(100, (ridden/TOTAL)*100));
-    let h='<div class="hero-k">You’re at</div><div class="hero-big">Trail mile '+fmtMi(this.myMile)+' <span class="hero-of">of '+Math.round(TOTAL)+'</span></div>'
+    let h='<div class="hero-k">You’re at</div><div class="hero-big">Trail mile '+fmtMp(this.myMile)+' <span class="hero-of">of '+Math.round(TOTAL)+'</span></div>'
       +'<div class="progress"><span style="width:'+pct.toFixed(1)+'%"></span></div>'
       +'<div class="hero-sub">~'+fmtMi(ridden)+' mi ridden · ~'+fmtMi(remain)+' mi to '+this.destName()+'</div>';
     if(this.destIdx>=0){ const t=TOWNS[this.destIdx];
-      h+='<div class="hero-dest" data-lat="'+t.lat+'" data-lng="'+t.lng+'" data-town="'+esc(t.n)+'"><div class="hero-k">Tracking</div><div class="hero-big2">'+esc(t.n)+' — ~'+fmtMi(abs(t.mi-this.myMile))+' mi</div><div class="hero-sub">milepost ~'+t.mi+' · tap to view on map</div></div>';
+      h+='<div class="hero-dest" data-lat="'+t.lat+'" data-lng="'+t.lng+'" data-town="'+esc(t.n)+'"><div class="hero-k">Tracking</div><div class="hero-big2">'+esc(t.n)+' — ~'+fmtMi(abs(t.mi-this.myMile))+' mi</div><div class="hero-sub">'+mpTxt(t.mi)+' · tap to view on map</div></div>';
     }
     hero.innerHTML=h;
     if(!sum) return;
-    const md=m=>'~'+fmtMi(abs(m-this.myMile))+' mi';
+    // Distance on top, the milepost it lands on underneath — same pairing the Nearby
+    // rows and the facility popups use, so one stop reads the same wherever you meet it.
+    const md=m=>'~'+fmtMi(abs(m-this.myMile))+' mi'+(mpTxt(m)?'<span class="up-mp">'+mpTxt(m)+'</span>':'');
     const line=(ic,label,name,lat,lng,m,town)=>'<button class="up-row" data-lat="'+lat+'" data-lng="'+lng+'"'+(town?' data-town="'+esc(town)+'"':'')+'><span class="up-ic">'+icon(ic,20)+'</span><span class="up-txt"><span class="up-lbl">'+label+'</span><span class="up-nm">'+esc(name)+'</span></span><span class="up-mi">'+md(m)+'</span></button>';
     let lines='';
     const s=this.travelOrder().filter(t=>this.isAhead(t)).find(t=>cats(t).store);
@@ -482,6 +612,37 @@ class TrailApp {
     if(this.myMile==null || p.mile==null) return null;
     return this.dir==='B2NYC' ? this.myMile-p.mile : p.mile-this.myMile;
   }
+  // The detour off the route, or 0. Under a tenth of a mile reads as on-trail.
+  spurMi(p){ return (p.off!=null && isFinite(p.off) && p.off>=0.1) ? p.off : 0; }
+  // What you'd actually ride to reach p: trail miles plus the spur off them. This
+  // is the number the list leads with, so an off-trail bed is comparable to an
+  // on-trail one instead of looking closer than it is. Direction still comes from
+  // aheadMi alone — a spur is a detour, not a reason to call something passed.
+  rideMi(p){
+    const d=this.aheadMi(p); if(d==null) return null;
+    const s=this.spurMi(p);
+    return d>=-0.3 ? d+s : d-s;
+  }
+  // The absolute stretch: "show me what sits between mile X and mile Y." Order-
+  // insensitive, so typing 400 then 373 means the same as 373 then 400.
+  inMileRange(p){
+    if(this.mpFrom==null && this.mpTo==null) return true;
+    if(p.mile==null || !isFinite(p.mile)) return false;
+    const lo=this.mpFrom!=null?this.mpFrom:-Infinity, hi=this.mpTo!=null?this.mpTo:Infinity;
+    return p.mile >= Math.min(lo,hi) && p.mile <= Math.max(lo,hi);
+  }
+  /* The mileposts the map is currently showing. Bridges "constrain this to what I'm
+     looking at" to the two boxes — you pan to a town, tap the button, and the range
+     is the stretch of trail on screen rather than a number you had to know. */
+  mileRangeInView(){
+    if(!this.map) return null;
+    const b=this.map.getBounds(); let lo=Infinity, hi=-Infinity;
+    for(let i=0;i<ROUTE.length;i++){
+      const v=ROUTE[i];
+      if(b.contains([v[0],v[1]])){ if(v[2]<lo) lo=v[2]; if(v[2]>hi) hi=v[2]; }
+    }
+    return isFinite(lo) ? {lo,hi} : null;
+  }
   // The day-planning band: "I'll ride at least min and at most max today." Only
   // ever narrows to what's ahead — a motel 40 mi behind you is not a day plan.
   inBand(d){
@@ -497,7 +658,10 @@ class TrailApp {
     if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
     // The two controls are orthogonal: the chips decide which groups appear and in
     // what order, the band filters the items inside each one.
-    const CAP=6, banded=(this.miMin!=null||this.miMax!=null) && this.myMile!=null;
+    // "X of Y" whenever anything is narrowing, so a filtered count never reads as the
+    // full one. The band needs a location to mean anything; the range never does.
+    const CAP=6, banded=((this.miMin!=null||this.miMax!=null) && this.myMile!=null)
+      || this.mpFrom!=null || this.mpTo!=null;
     const byCat=this.poisByCat();
     this.renderFilterState();
     const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length);
@@ -506,11 +670,25 @@ class TrailApp {
     keys.forEach(cat=>{
       const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
+      // Absolute range first — it's the one filter that doesn't need a location, so
+      // it has to bite even when nothing below it can.
+      if(this.mpFrom!=null||this.mpTo!=null) items=items.filter(p=>this.inMileRange(p));
+      if(this.myMile==null){
+        // No rider to sort around, so fall back to trail order in the direction of
+        // travel. Matters most with a range set: that IS the list you asked for.
+        items=[...items].sort((a,b)=>{
+          const ma=a.mile, mb=b.mile;
+          if(ma==null||mb==null) return ma==null?1:-1;
+          return this.dir==='B2NYC' ? mb-ma : ma-mb;
+        });
+      }
       if(this.myMile!=null){
-        items=items.filter(p=>this.inBand(this.aheadMi(p)));
+        // Band and sort both key off the ridden total, not the trail leg — otherwise
+        // the leading numbers run out of order and a 30-mile band lists a ~34.
+        items=items.filter(p=>this.inBand(this.rideMi(p)));
         // Ahead first, nearest first; anything already passed sinks to the bottom.
         items=[...items].sort((a,b)=>{
-          const da=this.aheadMi(a), db=this.aheadMi(b);
+          const da=this.rideMi(a), db=this.rideMi(b);
           if((da>=0)!==(db>=0)) return da>=0?-1:1;
           return da>=0 ? da-db : db-da;
         });
@@ -520,10 +698,17 @@ class TrailApp {
       h+='<div class="poi-group"><div class="poi-h">'+icon(cfg.icon,18)+'<span>'+esc(cfg.label)+'</span><span class="poi-ct">'+ct+'</span></div>';
       if(!items.length) h+='<div class="poi-more">Nothing in this mileage range.</div>';
       shown.forEach(p=>{
-        const d=this.aheadMi(p), back=(d!=null&&d<-0.3);
-        const dist = d==null ? '' : (back ? fmtMi(abs(d))+' mi back' : '~'+fmtMi(d)+' mi');
-        const off = (p.off!=null&&isFinite(p.off)&&p.off>=0.1) ? '<span class="poi-off">+'+fmtMi(p.off)+' off</span>' : '';
-        h+='<button class="poi-item" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'+off
+        const d=this.aheadMi(p), back=(d!=null&&d<-0.3), s=this.spurMi(p), tot=this.rideMi(p);
+        // Three numbers when there's a detour — trail leg, spur, and the total they
+        // add to — with the total last so it shares a column with the on-trail rows,
+        // where the leg IS the total and the breakdown would just repeat itself.
+        const brk = (tot!=null&&s) ? '<span class="poi-off">'+fmtMi(abs(d))+' + '+fmtMi(s)+' off</span>' : '';
+        const dist = tot==null ? '' : (back ? fmtMi(abs(tot))+' mi back' : '~'+fmtMi(tot)+' mi');
+        // The milepost sits in the middle column, which on-trail rows leave empty —
+        // so every row carries one whether or not it has a detour to break down.
+        const mp = mpTxt(p.mile);
+        h+='<button class="poi-item" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'
+          +(mp?'<span class="poi-mp">'+mp+'</span>':'')+brk
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
       if(items.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+items.length)+'</button>';
@@ -563,7 +748,9 @@ class TrailApp {
     });
     this.stopLayer.addTo(map);
     this.layersCtl.addOverlay(this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
-    map.on('click',e=>{ this.setMyLocation(e.latlng.lat,e.latlng.lng); this.status('Location set from your map tap.'); });
+    map.on('click',e=>{ if(this.tapToSet) this.askMove(e.latlng); });
+    // Dismissing the prompt is a decision too — don't leave the point armed.
+    map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
     setTimeout(()=>map.invalidateSize(),120);
     if(this.myLL){ // restored from a previous session — place the marker and zoom in
       this.setMyLocation(this.myLL.lat,this.myLL.lng);
@@ -588,25 +775,43 @@ class TrailApp {
       : '<br><b>~'+fmtMi(abs(t.mi-this.myMile))+' trail-mi from you</b>';
     const ic=iconStrTxt(t); const icl= ic?'<br><span style="opacity:.7">'+ic+'</span>':'';
     const b=(q,lbl)=>'<a href="'+mapsLink(t,q,this.myLL)+'" target="_blank" rel="noopener" class="pa">'+lbl+'</a>';
-    return '<b>'+esc(t.n)+'</b><br><span style="opacity:.65">mi '+t.mi+' · '+esc(t.tags)+'</span>'+dist+icl
+    return '<b>'+esc(t.n)+'</b><br><span style="opacity:.65">'+mpTxt(t.mi)+' · '+esc(t.tags)+'</span>'+dist+icl
       +'<br><br><b>Food:</b> '+esc(t.food)+'<br><b>Lodging:</b> '+esc(t.lodge)+'<br><b>See:</b> '+esc(t.see)
       +'<div class="pa-lbl">Find nearby:</div><div class="pa-row">'
       +b('gas station convenience store','Gas / C-store')+b('grocery store supermarket','Groceries')
       +b('restaurant cafe','Food')+b('hotel motel lodging','Lodging')
       +'<a href="'+ratesLink(t.n+' NY')+'" target="_blank" rel="noopener" class="pa">Rates</a>'
-      +b('campground','Camping')+b('bicycle shop','Bike shop')+'</div>';
+      +b('campground','Camping')+b('bicycle shop','Bike shop')+'</div>'
+      // Same offer a bare map tap gets, gated on the same setting — a known town is
+      // the likeliest place to want it, and it beats hunting the simulate dropdown.
+      +(this.tapToSet?'<button type="button" class="mv-go mv-go-town" data-mvlat="'+t.lat+'" data-mvlng="'+t.lng+'">Move me to '+esc(t.n)+'</button>':'');
   }
   poiPopup(p){
-    const dist=(this.myMile!=null&&p.mile!=null)?' · ~'+fmtMi(abs(p.mile-this.myMile))+' trail-mi':'';
+    const mp=p.mile!=null?' · '+mpTxt(p.mile):'';
     const sub=p.sub?' · '+p.sub:'';
-    // Straight-line from the nearest point on the route, not a routed distance —
-    // labelled so it can't be mistaken for one. See offTrailTxt.
-    const off=offTrailTxt(p.off);
-    let h='<b>'+esc(p.name)+'</b><br><span style="opacity:.65">'+esc(p.asset)+esc(sub)+dist+off+'</span>';
+    let h='<b>'+esc(p.name)+'</b><br><span style="opacity:.65">'+esc(p.asset)+esc(sub)+mp+'</span>';
+    /* The popup used to print the trail leg and the spur side by side and leave the
+       addition to the reader — so the one number a rider actually wants, what this
+       costs them to reach, was the one number missing. It now leads with the total
+       and breaks it down underneath, the same total and the same wording the Nearby
+       list shows, computed the same way. The spur stays labelled as straight-line
+       (see offTrailTxt): the real pedal up whatever side road serves it is longer. */
+    const d=this.aheadMi(p), tot=this.rideMi(p);
+    if(tot!=null){
+      const s=this.spurMi(p), back=d<-0.3;
+      h+='<br><b>~'+fmtMi(abs(tot))+' mi to ride'+(back?' — back the way you came':'')+'</b>';
+      if(s) h+='<br><span style="opacity:.65">'+fmtMi(abs(d))+' mi along the trail + '+fmtMi(s)+' mi off it, straight-line</span>';
+    } else {
+      const off=offTrailTxt(p.off);
+      if(off) h+='<br><span style="opacity:.65">'+esc(off.replace(/^ · /,''))+'</span>';
+    }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
     const lk=[]; const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
+    // Campgrounds get reviews too — same question a rider is asking of a motel.
+    const stay=(p.asset==='Lodging'||p.asset==='Campground');
     if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '))+'" target="_blank" rel="noopener">Check rates</a>');
+    if(stay) lk.push('<a href="'+reviewsLink([p.name,p.addr].filter(Boolean).join(' '),p.lat,p.lng)+'" target="_blank" rel="noopener">Reviews</a>');
     // Exact coords here, so this routes precisely — no geocoding guess involved.
     lk.push('<a href="https://www.google.com/maps/dir/?api=1'+(this.myLL?'&origin='+this.myLL.lat+','+this.myLL.lng:'')
       +'&destination='+p.lat+','+p.lng+'&travelmode=bicycling" target="_blank" rel="noopener">Directions</a>');

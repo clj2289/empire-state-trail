@@ -64,6 +64,16 @@
      name). Anchoring them at a fixed offset instead only holds for one sheet
      height. The wrapper is click-through; its children are not, so the map still
      drags in the gap beside them. */
+  /* Centred: Leaflet owns both top corners (zoom left, layers right). Above their
+     z-index too, so it can never end up buried under a control it overlaps. */
+  .map-back{position:absolute;top:var(--space-3);left:50%;transform:translateX(-50%);z-index:1100;
+    display:flex;align-items:center;gap:6px;cursor:pointer;max-width:calc(100% - 120px);
+    padding:8px var(--space-3) 8px var(--space-2);font-size:13px;font-weight:600;line-height:1;
+    background:var(--color-bg);color:var(--color-accent-700);border:1px solid var(--color-divider);
+    border-radius:999px;box-shadow:var(--shadow-md);white-space:nowrap}
+  .map-back[hidden]{display:none}
+  .map-back:hover{background:var(--color-accent-100)}
+  .map-back:active{background:var(--color-accent-200)}
   .map-overlay{position:absolute;left:0;right:0;bottom:0;z-index:500;display:flex;flex-direction:column;align-items:flex-end;pointer-events:none}
   .map-overlay > *{pointer-events:auto}
   .map-fabs{display:flex;flex-direction:column;gap:var(--space-2);
@@ -113,7 +123,9 @@
   .up-txt{flex:1;min-width:0;display:flex;flex-direction:column}
   .up-lbl{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600)}
   .up-nm{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px;line-height:1.15}
-  .up-mi{flex:none;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:14px;color:var(--color-accent-700)}
+  .up-mi{flex:none;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:14px;color:var(--color-accent-700);text-align:right}
+  .up-mp{display:block;font-family:var(--font-body);font-weight:400;font-size:11px;
+    color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
   .up-empty{font-size:13px;color:var(--color-neutral-700);padding:var(--space-3) 0}
   .track{margin-top:var(--space-4)}
   .track > label{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:6px}
@@ -172,6 +184,10 @@
   .poi-mi{flex:none;font-size:12px;color:var(--color-accent-700);font-weight:600;font-variant-numeric:tabular-nums}
   .poi-back{color:var(--color-neutral-500);font-weight:400}
   .poi-off{flex:none;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
+  /* Milepost is reference, not the answer to "how far" — muted so the total still
+     leads. Shrinks before the name does when a long name meets a long breakdown. */
+  .poi-mp{flex:0 1 auto;min-width:0;overflow:hidden;font-size:11px;color:var(--color-neutral-500);
+    font-variant-numeric:tabular-nums;white-space:nowrap}
   .poi-more{font-size:11px;color:var(--color-neutral-500);padding:6px 2px}
   button.poi-more{display:block;width:100%;text-align:left;background:transparent;border:0;cursor:pointer;
     font-family:inherit;font-weight:600;color:var(--color-accent-700)}
@@ -182,6 +198,10 @@
     color:var(--color-text);border:1px solid var(--color-divider);border-radius:var(--radius-md)}
   .poi-band-clear{font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;background:transparent;
     border:0;color:var(--color-accent-700);padding:5px 2px}
+  .poi-band-view{margin-top:var(--space-2);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;
+    background:transparent;border:1px solid var(--color-divider);border-radius:var(--radius-md);
+    color:var(--color-accent-700);padding:6px var(--space-2)}
+  .poi-band-view:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
   /* Collapsible filter block. Closed by default so the list starts near the top;
      the summary carries a live state line so a filter can't be silently on. */
@@ -223,6 +243,22 @@
   .leaflet-popup-content-wrapper{background:var(--color-bg);color:var(--color-text);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);font-family:var(--font-body)}
   .leaflet-popup-content{margin:12px 14px;font-size:12.5px;line-height:1.5}
   .leaflet-popup-tip{background:var(--color-bg)}
+  /* Move-here confirm. The mile is the headline — it's the thing you're being asked
+     to judge, and the reason the tap is worth confirming at all. */
+  .mv{min-width:170px;text-align:center}
+  .mv-k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600)}
+  .mv-v{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:17px;
+    margin-top:2px;font-variant-numeric:tabular-nums}
+  .mv-s{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
+  .mv-go{margin-top:var(--space-3);width:100%;cursor:pointer;padding:9px var(--space-3);
+    font-family:var(--font-body);font-size:13px;font-weight:600;line-height:1;color:#fff;
+    background:var(--color-accent);border:0;border-radius:var(--radius-md)}
+  .mv-go:hover{background:var(--color-accent-700)}
+  .mv-go:active{background:var(--color-accent-900)}
+  /* Chips are a left-reading list, so they opt out of the dialog's centred column. */
+  .mv-find{text-align:left}
+  .mv-find .pa-row{justify-content:flex-start}
+  .mv-go-town{display:block;width:100%;margin-top:var(--space-3)}
   .leaflet-popup-content b{font-family:var(--font-heading);font-weight:var(--font-heading-weight)}
   .leaflet-container{font-family:var(--font-body)}
   .leaflet-container a{color:var(--color-accent)}
@@ -257,6 +293,7 @@
   <main class="screens">
     <section data-screen="map" class="screen active">
       <div id="map"></div>
+      <button id="mapBack" type="button" class="map-back" hidden></button>
       <div class="map-overlay">
         <div class="map-fabs">
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
@@ -283,7 +320,7 @@
         <h1 class="screen-title">Itinerary <span id="cuDir" class="dir-note"></span></h1>
         <div class="table-wrap">
           <table class="itin">
-            <thead><tr><th>Mi</th><th>Stop</th><th>Shop</th><th>Stay</th><th>Camp</th><th>Rail</th><th class="frcell">From you</th></tr></thead>
+            <thead><tr><th>TM</th><th>Stop</th><th>Shop</th><th>Stay</th><th>Camp</th><th>Rail</th><th class="frcell">From you</th></tr></thead>
             <tbody id="itinBody"></tbody>
           </table>
         </div>
@@ -313,6 +350,14 @@
             <button id="miClear" type="button" class="poi-band-clear">Clear</button>
           </div>
           <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. Needs your location.</p>
+          <div class="feat-list-lbl">Trail mile range</div>
+          <div class="poi-band">
+            <label>From <input id="mpFrom" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
+            <label>To <input id="mpTo" type="number" min="0" step="5" inputmode="numeric" placeholder="end"></label>
+            <button id="mpClear" type="button" class="poi-band-clear">Clear</button>
+          </div>
+          <button id="mpFromMap" type="button" class="poi-band-view">Use the stretch shown on the map</button>
+          <p class="poi-band-note"><b>TM</b> is trail mile — the fixed milepost a place sits at, measured along the route from the NYC end. Unlike the band above it, this is absolute rather than relative to you, so it works without your location.</p>
         </details>
         <div id="poiList" class="poi-list"></div>
       </div>
@@ -322,6 +367,7 @@
       <div class="screen-pad">
         <h1 class="screen-title">More</h1>
         <label class="switch"><input type="checkbox" id="showPassed"> Show stops I’ve already passed</label>
+        <label class="switch"><input type="checkbox" id="tapToSet" checked> Tapping the map can move my location</label>
         <div class="set-lbl"><label for="simSel">Simulate a location</label></div>
         <select id="simSel" class="input"><option value="">Choose a place…</option></select>
         <div class="set-lbl">Test locations</div>
