@@ -144,12 +144,23 @@
   /* ---- nearby ---- */
   .poi-stat{font-size:11.5px;color:var(--color-neutral-700);margin-bottom:var(--space-3);line-height:1.5}
   .feat-list-lbl,.set-lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);margin:var(--space-3) 0 var(--space-2);font-weight:600}
-  .feat-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--space-4)}
-  .feat{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font-size:12px;
-    background:var(--color-surface);border:1px solid var(--color-divider);border-radius:999px;padding:5px 11px}
+  .feat-list{display:flex;flex-wrap:wrap;gap:6px}
+  .feat{display:inline-flex;align-items:center;gap:5px;user-select:none;font-size:12px;
+    background:var(--color-surface);border:1px solid var(--color-divider);border-radius:999px;padding:5px 11px 5px 6px}
+  .feat-tog{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
   .feat .ic{color:var(--color-accent)}
   .feat input{accent-color:var(--color-accent);width:14px;height:14px;margin:0}
   .feat-ct{color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
+  /* grip: two columns of dots, drawn in CSS so it needs no icon entry */
+  .feat-grip{flex:none;width:12px;height:16px;cursor:grab;touch-action:none;border-radius:3px;
+    background-image:radial-gradient(currentColor 1px,transparent 1px);background-size:4px 4px;
+    background-position:1px 3px;color:var(--color-neutral-400)}
+  .feat-grip:active{cursor:grabbing}
+  .feat.off{opacity:.5}
+  .feat.off .ic{color:var(--color-neutral-500)}
+  .feat.dragging{opacity:.9;border-color:var(--color-accent);box-shadow:0 2px 8px rgba(0,0,0,.18)}
+  .feat-hint{font-size:11px;color:var(--color-neutral-500);margin:var(--space-2) 0 var(--space-4);line-height:1.5}
+  .lyr-ct{color:var(--color-neutral-500);font-variant-numeric:tabular-nums;font-size:11px}
   .poi-list{display:flex;flex-direction:column;gap:var(--space-3)}
   .poi-h{display:flex;align-items:center;gap:7px;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px;margin-bottom:6px}
   .poi-h .ic{color:var(--color-accent)}
@@ -194,7 +205,11 @@
     border:1px solid var(--color-divider);border-radius:var(--radius-md);box-shadow:var(--shadow-sm)}
   .leaflet-bar a{border-radius:0}
   .leaflet-bar a:hover{background:var(--color-accent-100);color:var(--color-accent-700)}
-  .leaflet-control-layers-expanded{padding:var(--space-2) var(--space-3);font-size:12px}
+  /* 3 basemaps + 8 facility overlays overflow a phone screen, so cap and scroll */
+  .leaflet-control-layers-expanded{padding:var(--space-2) var(--space-3);font-size:12px;
+    max-height:calc(100vh - 200px);overflow-y:auto}
+  .leaflet-control-layers-selector{accent-color:var(--color-accent)}
+  .leaflet-control-layers label{line-height:1.9;white-space:nowrap}
   .leaflet-control-attribution{background:color-mix(in srgb,var(--color-bg) 82%,transparent);font-size:10px;color:var(--color-neutral-600)}
   .pa-lbl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:9px 0 5px}
   .pa-row{display:flex;flex-wrap:wrap;gap:4px}
@@ -255,8 +270,9 @@
       <div class="screen-pad">
         <h1 class="screen-title">Nearby</h1>
         <div id="poiStat" class="poi-stat"></div>
-        <div class="feat-list-lbl">Map layers</div>
+        <div class="feat-list-lbl">Categories</div>
         <div id="features" class="feat-list"></div>
+        <p class="feat-hint">Drag to reorder · uncheck to hide from this list. Map pins are separate — toggle those from the layers control in the top-right of the map.</p>
         <div id="poiList" class="poi-list"></div>
       </div>
     </section>

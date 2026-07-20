@@ -167,6 +167,9 @@ const CATCFG={
   'Parking Area':{icon:'park',label:'Parking'}
 };
 const CAT_DEFAULT={'Lock camping':true,'Campground':true,'Lodging':true};
+/* Fallback order for the Nearby groups — a rider who hasn't dragged anything yet
+   gets sleeping options first, sightseeing after, logistics last. */
+const CAT_ORDER=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
 
@@ -180,6 +183,8 @@ class TrailApp {
     this.dir='B2NYC'; this.myMile=null; this.myLL=null; this.showPassed=false; this.destIdx=-1;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.POIS=[]; this.embLines=[];
+    // Nearby-list shape only. Map pin visibility is the layers control's job.
+    this.catOrder=[...CAT_ORDER]; this.catHidden=new Set();
   }
   $(id){ return document.getElementById(id); }
   destName(){ return this.dir==='B2NYC' ? 'NYC' : 'Buffalo'; }
@@ -213,11 +218,28 @@ class TrailApp {
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
     }
+    // Stored keys aren't checked against CAT_ORDER — the service can serve asset
+    // types we don't hardcode. Render intersects with what actually arrived, so a
+    // retired key is inert rather than needing pruning here.
+    if(Array.isArray(p.catOrder)) this.catOrder=p.catOrder.filter(c=>typeof c==='string');
+    if(Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     const lbl=this.$('dirLbl'); if(lbl) lbl.textContent = this.dir==='B2NYC' ? 'Buffalo → NYC' : 'NYC → Buffalo';
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,myLL:this.myLL})); }catch(e){}
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,myLL:this.myLL,
+      catOrder:this.catOrder,catHidden:[...this.catHidden]})); }catch(e){}
+  }
+  /* Stored order first, then anything it doesn't mention — a newly shipped
+     category, or an asset type the service returned that we don't hardcode. */
+  orderedCats(present){
+    const seen=new Set(this.catOrder);
+    const rest=[...new Set([...CAT_ORDER, ...(present||[])])];
+    return [...this.catOrder, ...rest.filter(c=>!seen.has(c))];
+  }
+  poisByCat(){
+    const by={}; this.POIS.forEach(p=>{ const k=poiCat(p); (by[k]=by[k]||[]).push(p); });
+    return by;
   }
 
   /* ---------- tabs ---------- */
@@ -393,9 +415,9 @@ class TrailApp {
   renderNearby(){
     const list=this.$('poiList'); if(!list) return;
     if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
-    const byCat={}; this.POIS.forEach(p=>{ const k=poiCat(p); (byCat[k]=byCat[k]||[]).push(p); });
-    const order=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area'];
-    const keys=Object.keys(byCat).sort((a,b)=>{const ia=order.indexOf(a),ib=order.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);});
+    const byCat=this.poisByCat();
+    const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length);
+    if(!keys.length){ list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
     let h='';
     keys.forEach(cat=>{
       const cfg=catCfg(cat);
@@ -428,7 +450,9 @@ class TrailApp {
     const roads=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19});
     const hybrid=L.layerGroup([sat,roads,labels]);
     osm.addTo(map);
-    L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright'}).addTo(map);
+    // Held onto so buildPOILayers can hang facility overlays off it once the
+    // live data lands — this control is now the only place map pins get toggled.
+    this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright',collapsed:true}).addTo(map);
     const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
     const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
     this.embLines=[ L.polyline(rHV,{color:accent,weight:4,opacity:.85}).addTo(map),
@@ -440,6 +464,7 @@ class TrailApp {
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
     this.stopLayer.addTo(map);
+    this.layersCtl.addOverlay(this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
     map.on('click',e=>{ this.setMyLocation(e.latlng.lat,e.latlng.lng); this.status('Location set from your map tap.'); });
     setTimeout(()=>map.invalidateSize(),120);
     if(this.myLL){ // restored from a previous session — place the marker and zoom in
@@ -457,7 +482,7 @@ class TrailApp {
         const rmsg = route.status==='fulfilled' ? 'route line live from ArcGIS' : 'route from embedded GPX';
         stat.textContent = pmsg+' · '+rmsg+'.';
       }
-      this.renderNext(); this.renderNearby();
+      this.renderNext(); this.renderCategories(); this.renderNearby();
     });
   }
   popupHtml(t){
@@ -493,32 +518,80 @@ class TrailApp {
     this.POIS = res.flatMap(r=> r.status==='fulfilled'? r.value : []);
     return this.POIS.length;
   }
+  /* Map pins. These feed Leaflet's own layers control — deliberately independent
+     of the Nearby chips, so a rider can narrow the browse list down to campsites
+     without also blanking the pins they're navigating by. */
   buildPOILayers(){
-    const featEl=this.$('features');
-    const byCat={}; this.POIS.forEach(p=>{ const k=poiCat(p); (byCat[k]=byCat[k]||[]).push(p);});
-    const order=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area'];
-    Object.keys(byCat).sort((a,b)=>{const ia=order.indexOf(a),ib=order.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);}).forEach(asset=>{
+    const byCat=this.poisByCat();
+    // Fixed order, NOT the rider's Nearby order — the map control stays put even
+    // as they rearrange the browse list.
+    [...new Set([...CAT_ORDER, ...Object.keys(byCat)])].forEach(asset=>{
+      const items=byCat[asset]; if(!items||!items.length) return;
       const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
-      byCat[asset].forEach(p=>{
+      items.forEach(p=>{
         const mk=L.marker([p.lat,p.lng],{icon:L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]})});
         mk.bindPopup('',{maxWidth:280,minWidth:200}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
         g.addLayer(mk);
       });
       this.poiLayers[asset]=g; if(def) g.addTo(this.map);
-      if(featEl){
-        const lb=document.createElement('label'); lb.className='feat';
-        lb.innerHTML='<input type="checkbox" '+(def?'checked':'')+'> '+icon(cfg.icon,16)+'<span>'+esc(cfg.label)+'</span><span class="feat-ct">'+byCat[asset].length+'</span>';
-        lb.querySelector('input').addEventListener('change',ev=>{ ev.target.checked?g.addTo(this.map):this.map.removeLayer(g); });
-        featEl.appendChild(lb);
-      }
+      if(this.layersCtl) this.layersCtl.addOverlay(g, esc(cfg.label)+' <span class="lyr-ct">'+items.length+'</span>');
     });
-    // stops toggle
-    if(featEl){
-      const lb=document.createElement('label'); lb.className='feat';
-      lb.innerHTML='<input type="checkbox" checked> '+icon('pin',16)+'<span>Trail stops</span><span class="feat-ct">'+TOWNS.length+'</span>';
-      lb.querySelector('input').addEventListener('change',ev=>{ ev.target.checked?this.stopLayer.addTo(this.map):this.map.removeLayer(this.stopLayer); });
-      featEl.appendChild(lb);
-    }
+  }
+
+  /* Nearby chips: which groups appear in the list below, and in what order. */
+  renderCategories(){
+    const el=this.$('features'); if(!el) return;
+    const byCat=this.poisByCat();
+    el.innerHTML='';
+    this.orderedCats(Object.keys(byCat)).forEach(cat=>{
+      const items=byCat[cat]; if(!items||!items.length) return;
+      const cfg=catCfg(cat), on=!this.catHidden.has(cat);
+      const chip=document.createElement('div');
+      chip.className='feat'+(on?'':' off'); chip.dataset.cat=cat;
+      chip.innerHTML='<span class="feat-grip" title="Drag to reorder" aria-hidden="true"></span>'
+        +'<label class="feat-tog"><input type="checkbox"'+(on?' checked':'')+'>'
+        +icon(cfg.icon,16)+'<span>'+esc(cfg.label)+'</span>'
+        +'<span class="feat-ct">'+items.length+'</span></label>';
+      chip.querySelector('input').addEventListener('change',ev=>{
+        if(ev.target.checked) this.catHidden.delete(cat); else this.catHidden.add(cat);
+        chip.classList.toggle('off',!ev.target.checked);
+        this.savePrefs(); this.renderNearby();
+      });
+      this.wireCatDrag(chip);
+      el.appendChild(chip);
+    });
+  }
+
+  /* Pointer Events rather than HTML5 drag-and-drop — the latter never fires on
+     touch, and this list is phone-first. Reorders the DOM live, commits on drop. */
+  wireCatDrag(chip){
+    const grip=chip.querySelector('.feat-grip'); if(!grip) return;
+    grip.addEventListener('pointerdown',e=>{
+      e.preventDefault();
+      const el=this.$('features');
+      chip.classList.add('dragging');
+      // Listeners go on document, NOT the grip with setPointerCapture: reordering
+      // re-inserts the chip, and re-inserting a node drops its implicit capture,
+      // so a grip-bound pointerup never fires and the drag never commits.
+      const move=ev=>{
+        const under=document.elementFromPoint(ev.clientX,ev.clientY);
+        const over=under&&under.closest?under.closest('.feat'):null;
+        if(!over||over===chip||over.parentElement!==el) return;
+        const r=over.getBoundingClientRect();
+        el.insertBefore(chip, (ev.clientX-r.left)>r.width/2 ? over.nextSibling : over);
+      };
+      const up=()=>{
+        document.removeEventListener('pointermove',move);
+        document.removeEventListener('pointerup',up);
+        document.removeEventListener('pointercancel',up);
+        chip.classList.remove('dragging');
+        this.catOrder=[...el.querySelectorAll('.feat')].map(c=>c.dataset.cat);
+        this.savePrefs(); this.renderNearby();
+      };
+      document.addEventListener('pointermove',move);
+      document.addEventListener('pointerup',up);
+      document.addEventListener('pointercancel',up);
+    });
   }
   async fetchRouteLine(){
     const where=encodeURIComponent("Section IN ('Erie Canal','Hudson Valley')");
