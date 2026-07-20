@@ -576,6 +576,19 @@
   .is-labeled .poi-lbl{display:block}
   .leaflet-marker-icon:hover .poi-lbl{display:block;z-index:2}
   .poi-pin:hover{transform:scale(1.12)}
+  /* ---- hovering a list row lights its pin ----
+     Magenta is the app's rare second accent, so a lit pin reads as the one you are
+     pointing at even in a field of forty cyan ones. Label comes on with it at any
+     zoom: the ring says where, the name says which. */
+  .leaflet-marker-icon.is-hi{z-index:1000 !important}
+  .is-hi .poi-lbl{display:block;color:var(--color-bg);background:var(--color-accent-2)}
+  .is-hi .poi-pin{background:var(--color-accent-2);transform:scale(1.35);
+    box-shadow:0 0 0 5px color-mix(in srgb,var(--color-accent-2) 30%,transparent),0 2px 6px rgba(0,0,0,.5)}
+  .is-hi .poi-chip{border-color:var(--color-accent-2) !important;color:var(--color-accent-2) !important;
+    transform:translate(-50%,-50%) scale(1.2);
+    box-shadow:0 0 0 4px color-mix(in srgb,var(--color-accent-2) 28%,transparent),var(--shadow-md)}
+  /* The row itself, so the link reads in both directions. */
+  .poi-item:hover{background:var(--color-accent-100)}
   /* circleMarker dots: lift them off the map tiles */
   .map-dot{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
   /* You: the blue dot, with the soft halo every phone map gives it. */

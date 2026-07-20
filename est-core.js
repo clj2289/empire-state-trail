@@ -940,6 +940,7 @@ class TrailApp {
     const tr=this.$('showTrip'); if(tr) tr.addEventListener('change',e=>{ this.showTrip=e.target.checked; this.savePrefs(); this.applyTripTab(); });
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
     const rc=this.$('recenterBtn'); if(rc) rc.addEventListener('click',()=>this.recenter());
+    this.wirePoiHover();
     const zi=this.$('zoomInBtn'); if(zi) zi.addEventListener('click',()=>{ if(this.map) this.map.zoomIn(); });
     const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ if(this.map) this.map.zoomOut(); });
     const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.savePrefs(); this.renderItin(); });
@@ -1593,6 +1594,25 @@ class TrailApp {
       + (pr ? '<span class="chip-p">'+esc(fmtMoney(pr.amt))+'</span>' : '')
       + '</span>';
     return L.divIcon({html:h+lbl, className:'poi-chip-ic', iconSize:[0,0], iconAnchor:[0,0]});
+  }
+  /* Hovering a row lights its pin — the list answers "what is near me" and the map
+     answers "where", and without this you had to read a name here and then hunt for
+     it among forty identical dots there. Delegated, so it survives every re-render.
+     Also lights the label, which is the part that actually identifies the pin. */
+  wirePoiHover(){
+    const mark=(el,on)=>{
+      const id=el&&el.dataset?el.dataset.poi:null; if(id==null) return;
+      const mk=this.poiMarker[id]; if(!mk||!mk.getElement) return;
+      const node=mk.getElement(); if(node) node.classList.toggle('is-hi',on);
+    };
+    // pointerover/out rather than mouseenter/leave: those don't bubble, and the rows
+    // are replaced wholesale on every filter change.
+    document.addEventListener('pointerover',e=>{
+      const el=e.target.closest?e.target.closest('.poi-item'):null; if(el) mark(el,true);
+    });
+    document.addEventListener('pointerout',e=>{
+      const el=e.target.closest?e.target.closest('.poi-item'):null; if(el) mark(el,false);
+    });
   }
   /* Labels are a zoom-level decision, not a per-pin one: at state scale they would be
      a solid wall of text, and close in they are the whole point. */
