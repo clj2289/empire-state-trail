@@ -232,16 +232,6 @@ function icon(name, size){
   const spec = P[name]; if(!spec) return '';
   return '<svg class="ic" viewBox="0 0 24 24" width="'+size+'" height="'+size+'" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+iconInner(spec)+'</svg>';
 }
-/* The same glyphs placed inside a drawing rather than inline in text: a group with
-   its own scale, centred on a point. The stroke width is divided back out so a
-   shrunk icon keeps the weight of a full-size one instead of turning to hairline. */
-function glyph(name,x,y,size,color){
-  const spec=P[name]; if(!spec) return '';
-  const k=size/24, n=v=>(Math.round(v*100)/100);
-  return '<g transform="translate('+n(x-size/2)+' '+n(y-size/2)+') scale('+n(k)+')"'
-    +' fill="none" stroke="'+(color||'currentColor')+'" stroke-width="'+n(1.9/k)
-    +'" stroke-linecap="round" stroke-linejoin="round">'+iconInner(spec)+'</g>';
-}
 /* NWS writes the sky as a sentence. These are the five pictures worth drawing, and
    the order matters: "Mostly Cloudy" is cloud, "Partly Sunny" is the sun behind one,
    and only a plain "Sunny" or "Clear" gets the bare sun. */
@@ -323,6 +313,8 @@ function parseGpx(text){
 
 // The forecast office's own page for a point: the discussion, the radar and the
 // warnings, none of which fit on a dial.
+// "an 8am start", "an 11am start", "a 9am start" — spoken, not spelled.
+const aOrAn = w => (/^(8|11|18)/.test(String(w)) ? 'an ' : 'a ') + w;
 function nwsLink(lat,lng){
   return 'https://forecast.weather.gov/MapClick.php?lat='+lat.toFixed(4)+'&lon='+lng.toFixed(4);
 }
@@ -1720,24 +1712,24 @@ class TrailApp {
       +(feats.length>=USER_CAP?' (the first '+USER_CAP+' \u2014 there are more)':'')+'.');
   }
   drawUserGeom(rec, lines, wpts){
-    const g=rec._layer, col=rec.color;
-    (lines||[]).forEach(l=>L.polyline(l,{color:col,weight:4,opacity:.9}).addTo(g));
-    (wpts||[]).forEach(p=>L.circleMarker([p.lat,p.lng],{radius:5,weight:2,color:'#fff',
+    const g=rec._layer, col=rec.color, pane=this.lyrPane('user:'+rec.id);
+    (lines||[]).forEach(l=>L.polyline(l,{pane,color:col,weight:4,opacity:.9}).addTo(g));
+    (wpts||[]).forEach(p=>L.circleMarker([p.lat,p.lng],{pane,radius:5,weight:2,color:'#fff',
       fillColor:col,fillOpacity:1}).bindPopup(esc(p.name||'Waypoint')).addTo(g));
     this.applyLyrOrder();
   }
   drawUserFeats(rec, feats){
-    const g=rec._layer, col=rec.color;
+    const g=rec._layer, col=rec.color, pane=this.lyrPane('user:'+rec.id);
     let n=0;
     feats.forEach(f=>{
       const gm=f.geometry||{}, pr=f.properties||{};
       const pop=()=>this.userPopup(rec, pr);
-      const line=ll=>{ if(ll.length>1){ L.polyline(ll,{color:col,weight:3.5,opacity:.9}).bindPopup(pop).addTo(g); n++; } };
+      const line=ll=>{ if(ll.length>1){ L.polyline(ll,{pane,color:col,weight:3.5,opacity:.9}).bindPopup(pop).addTo(g); n++; } };
       const flip=path=>path.map(c=>[c[1],c[0]]);
       if(gm.type==='Point'){
         const c=gm.coordinates||[];
         if(isFinite(c[0])&&isFinite(c[1])){
-          L.circleMarker([c[1],c[0]],{radius:5,weight:2,color:'#fff',fillColor:col,fillOpacity:1})
+          L.circleMarker([c[1],c[0]],{pane,radius:5,weight:2,color:'#fff',fillColor:col,fillOpacity:1})
             .bindPopup(pop).addTo(g); n++;
         }
       }
@@ -1748,7 +1740,7 @@ class TrailApp {
         rings.forEach(poly=>{
           const ll=(poly||[]).map(flip);
           if(ll.length && ll[0].length>2){
-            L.polygon(ll,{color:col,weight:2,opacity:.9,fillOpacity:.12}).bindPopup(pop).addTo(g); n++;
+            L.polygon(ll,{pane,color:col,weight:2,opacity:.9,fillOpacity:.12}).bindPopup(pop).addTo(g); n++;
           }
         });
       }
@@ -1784,6 +1776,7 @@ class TrailApp {
      objects don't survive a reload and the labels carry counts that change. */
   regLayer(key,layer,label){
     if(!this.layersCtl) return layer;
+    this.lyrPane(key);          // so the order has something to set, even if empty
     this.lyrByKey[key]=layer;
     this.lyrKeyById[L.Util.stamp(layer)]=key;
     if(this.lyrSeq.indexOf(key)<0) this.lyrSeq.push(key);
@@ -1800,6 +1793,19 @@ class TrailApp {
     this.lyrSeq=this.lyrSeq.filter(k=>k!==key);
     this.lyrOrder=this.lyrOrder.filter(k=>k!==key);
     this.savePrefs(); this.decorateLayers();
+  }
+  /* One pane per overlay. bringToFront was never going to be enough: it shuffles a
+     layer within its own pane, and Leaflet puts every marker in one pane and every
+     vector in another — so dragging the weather above lodging moved nothing, because
+     both are markers and L.Marker has no bringToFront to call in the first place.
+     With a pane each, the dragged order is just a list of z-indexes. */
+  lyrPaneName(key){ return 'lyr-'+String(key).replace(/[^A-Za-z0-9]+/g,'_'); }
+  lyrPane(key){
+    const m=this.map;
+    if(!m || !m.createPane || !m.getPane) return undefined;
+    const nm=this.lyrPaneName(key);
+    if(!m.getPane(nm)){ const p=m.createPane(nm); if(p) p.style.zIndex='600'; }
+    return nm;
   }
   // Dragged order first, then anything registered since, in the order it arrived.
   lyrOrderList(){
@@ -1838,15 +1844,22 @@ class TrailApp {
     });
     this.applyLyrOrder();
   }
-  /* Painted bottom up, so the row you dragged to the top is drawn last and lands on
-     top. Only lines restack: Leaflet keeps every pin above every line whatever you
-     do, which is the behaviour you want anyway — a pin under a road line is a pin
-     you cannot tap. Re-run after anything that redraws, since a fresh path is
-     always added at the front of its pane. */
+  /* Top of the list gets the highest pane, so it draws over everything below it —
+     pins as well as lines, which is the whole point. The band runs under the "you
+     are here" pane at 655 and well over Leaflet's own overlay pane at 400, and it
+     is clamped so a very long list cannot walk out the bottom of it.
+     A layer whose pane never got made (an older map, or a stub) falls back to
+     bringToFront from the bottom up, which is right for lines and does nothing for
+     markers — the same as before, but now only in the case that cannot be helped. */
   applyLyrOrder(){
-    const ord=this.lyrOrderList();
-    for(let i=ord.length-1;i>=0;i--){
-      const l=this.lyrByKey[ord[i]];
+    const ord=this.lyrOrderList(), m=this.map, loose=[];
+    ord.forEach((k,i)=>{
+      const p=(m&&m.getPane)?m.getPane(this.lyrPaneName(k)):null;
+      if(p) p.style.zIndex=String(Math.max(410, 640-i*4));
+      else loose.push(k);
+    });
+    for(let i=loose.length-1;i>=0;i--){
+      const l=this.lyrByKey[loose[i]];
       if(!l) continue;
       if(l.bringToFront) l.bringToFront();
       else if(l.eachLayer) l.eachLayer(x=>{ if(x.bringToFront) x.bringToFront(); });
@@ -2068,7 +2081,7 @@ class TrailApp {
       paths.forEach(path=>{
         if(!path || path.length<2) return;
         const ll=path.map(c=>[c[1],c[0]]);
-        const ln=L.polyline(ll,{color:band[1],weight:band[3],opacity:.85,className:'aadt-ln'});
+        const ln=L.polyline(ll,{pane:this.lyrPane('aadt'),color:band[1],weight:band[3],opacity:.85,className:'aadt-ln'});
         ln.bindPopup('',{maxWidth:250,autoPan:false});
         ln.on('popupopen',()=>ln.setPopupContent(this.aadtPopup(pr)));
         ln.addTo(g);
@@ -2094,7 +2107,7 @@ class TrailApp {
       const box={l:pt.x-w/2, t:pt.y-h/2, r:pt.x+w/2, b:pt.y+h/2};
       if(placed.some(q=>!(box.r<q.l||box.l>q.r||box.b<q.t||box.t>q.b))) return;
       placed.push(box); seen[nm]=1;
-      g.addLayer(L.marker(r.mid,{interactive:false,keyboard:false,zIndexOffset:-400,
+      g.addLayer(L.marker(r.mid,{pane:this.lyrPane('aadt'),interactive:false,keyboard:false,zIndexOffset:-400,
         icon:L.divIcon({className:'aadt-ic',iconSize:[w,h],iconAnchor:[w/2,h/2],
           html:'<span class="aadt-n" style="border-color:'+r.band[1]+';color:'+r.band[4]+'">'+esc(txt)+'</span>'})}));
     });
@@ -2176,15 +2189,15 @@ class TrailApp {
       +'<i class="mp-dot"></i></div>';
     // Under everything else in the z-order: a milepost is a reference, not a
     // destination, and it should never be the thing your thumb lands on.
-    const mk=L.marker(p,{keyboard:false, zIndexOffset:-500,
+    const mk=L.marker(p,{pane:this.lyrPane('miles'), keyboard:false, zIndexOffset:-500,
       icon:L.divIcon({className:'mp-ic',html,iconSize:[46,26],iconAnchor:[23,26]})});
     mk.bindPopup('',{maxWidth:250,autoPan:false});
     mk.on('popupopen',()=>mk.setPopupContent(this.milePopup(mile,p)));
     return mk;
   }
   mileTick(mile,p){
-    return L.circleMarker(p,{radius:2.2,weight:0,fillColor:this.mileColor(mile),
-      fillOpacity:.9,interactive:false,className:'mp-tick'});
+    return L.circleMarker(p,{pane:this.lyrPane('miles'),radius:2.2,weight:0,
+      fillColor:this.mileColor(mile),fillOpacity:.9,interactive:false,className:'mp-tick'});
   }
   milePopup(mile,p){
     // Not mpTxt: these are whole miles by construction, and a trailing .0 on every
@@ -2343,7 +2356,7 @@ class TrailApp {
     this.status(got.length<pts.length
       ? 'Forecast in for '+got.length+' of '+pts.length+' points along your route.'
       : 'Forecast in for '+fmtWin(Math.round(ride))+' mi from TM '+fmtMp(pts[0].mile)
-        +', at '+this.avgSpeed+' mph from a '+this.wxClock(this.wxDepart(0))+' start.');
+        +', at '+this.avgSpeed+' mph from '+aOrAn(this.wxClock(this.wxDepart(0)))+' start.');
   }
   // One reading, in the units a rider thinks in.
   wxRead(g){
@@ -2361,69 +2374,58 @@ class TrailApp {
   }
   wxKindColor(k){ return k==='head' ? '#b3261e' : k==='tail' ? '#146c2e' : '#5f6368'; }
   wxKindGlyph(k){ return k==='head' ? 'whead' : k==='tail' ? 'wtail' : 'wcross'; }
-  /* A dial, so the map answers without being tapped. The ring fills clockwise with
-     the wind's strength and takes the colour of what that wind is doing to you — red
-     in your face, green at your back, grey when it only crosses — and the arrow on
-     the rim still flies the way it blows for anyone who wants the direction. Sky at
-     the top, temperature in the middle because that is what the eye goes to first,
-     the wind's shape and speed underneath. The hour hangs below in a pill, with the
-     rain chance beside it when there is one: a forecast with no time on it is a
-     rumour, and 40% is a thing you plan around. */
-  wxDial(r, kind){
-    const R=21, C=2*Math.PI*R, col=this.wxKindColor(kind);
-    const mph=r.mph==null?0:Math.max(0,Math.min(30,r.mph));
-    const on=(mph/30)*C;
-    let g='<svg class="wx-dial" viewBox="0 0 52 52" width="52" height="52" aria-hidden="true">'
-      +'<circle class="wx-d-bg" cx="26" cy="26" r="18.5"/>'
-      +'<circle class="wx-d-tr" cx="26" cy="26" r="'+R+'"/>';
-    if(on>1) g+='<circle class="wx-d-arc" cx="26" cy="26" r="'+R+'" stroke="'+col+'"'
-      +' stroke-dasharray="'+on.toFixed(1)+' '+C.toFixed(1)+'" transform="rotate(-90 26 26)"/>';
-    if(r.from!=null) g+='<path class="wx-d-ar" fill="'+col+'" d="M26 2.2l3.8 6.6h-7.6z"'
-      +' transform="rotate('+Math.round((r.from+180)%360)+' 26 26)"/>';
-    g+=glyph(skyIcon(r.short), 26, 17, 14, '#5f6368');
-    g+='<text class="wx-d-t" x="26" y="34" text-anchor="middle">'
-      +(r.temp==null?'—':r.temp+'°')+'</text>';
-    if(r.mph!=null && mph>=1){
-      g+=glyph(this.wxKindGlyph(kind), 21, 41, 10, col);
-      g+='<text class="wx-d-w" x="27" y="43.5" fill="'+col+'">'+Math.round(r.mph)+'</text>';
-    }
-    return g+'</svg>';
+  wxKindWord(k){ return k==='head' ? 'HEAD' : k==='tail' ? 'TAIL' : 'CROSS'; }
+  /* A dial asked you to read a thin ring against a scale nobody published. This is
+     a card: sky and temperature on top at a size you can read at arm's length, then
+     a full-width band in the colour of what the wind is doing to you with the word
+     on it, so head or tail lands before you have focused on anything. The bearing is
+     gone from the map pin entirely — it was the number that had to be worked out. */
+  wxCard(r, kind){
+    const mph=r.mph==null?null:Math.round(r.mph);
+    const calm=mph==null || mph<3;
+    const col=calm?'#5f6368':this.wxKindColor(kind);
+    return '<div class="wxc" style="border-color:'+col+'">'
+      +'<div class="wxc-hd">'+icon(skyIcon(r.short),20)
+        +'<b>'+(r.temp==null?'\u2014':r.temp+'\u00b0')+'</b></div>'
+      +'<div class="wxc-w" style="background:'+col+'">'
+        +(calm?'<span>CALM</span>'
+              :icon(this.wxKindGlyph(kind),13)+'<span>'+this.wxKindWord(kind)+'</span><b>'+mph+'</b>')
+      +'</div></div>';
   }
   addWxMarker(g){
     const r=this.wxRead(g), kind=this.wxKind(r);
     const wet=r.pop!=null && r.pop>=20;
-    const html='<div class="wx-pin wx-'+kind+'">'+this.wxDial(r,kind)
+    const html='<div class="wx-pin wx-'+kind+'">'+this.wxCard(r,kind)
       +'<span class="wx-when">'+esc(this.wxClock(g.when||Date.now()))
       +(wet?'<i class="wx-wet">'+r.pop+'%</i>':'')+'</span></div>';
-    const mk=L.marker([g.lat,g.lng],{icon:L.divIcon({className:'wx-ic',html,iconSize:[68,72],iconAnchor:[34,26]})});
+    const mk=L.marker([g.lat,g.lng],{pane:this.lyrPane('wx'),
+      icon:L.divIcon({className:'wx-ic',html,iconSize:[96,74],iconAnchor:[48,29]})});
     mk.bindPopup('',{maxWidth:270,autoPan:false});
     mk.on('popupopen',()=>mk.setPopupContent(this.wxPopup(g)));
     mk.addTo(this.wxLayer);
   }
+  /* Rows, not sentences. Every line is a label and a value, so the eye can go
+     straight to the one it wants instead of reading to the end of a paragraph to
+     find out whether the wind is a problem. */
   wxPopup(g){
-    const r=this.wxRead(g), w=g.w;
-    const hh=Math.round(g.h*10)/10;
-    // The hour leads: the whole point of sampling by riding-time is that this is the
-    // weather at the moment you would be standing in it.
-    let h='<b>'+esc(this.wxClock(g.when||Date.parse(w.startTime)))+' \u00b7 '+mpTxt(g.mile)+'</b>'
-      +'<br><span style="opacity:.65">'+(g.h===0?'where the day starts'
-        :fmtWin(hh)+'h in, at '+this.avgSpeed+' mph')+'</span>'
-      +'<br>'+esc(r.short)+(r.temp!=null?' · <b>'+r.temp+'\u00b0'+esc(r.unit)+'</b>':'');
-    if(r.pop!=null) h+='<br>Rain '+r.pop+'%';
-    if(r.mph!=null){
-      h+='<br>Wind '+Math.round(r.mph)+' mph from the '+esc(w.windDirection||'?');
-      if(r.parts){
-        const hd=r.parts.head, cr=r.parts.cross;
-        h+='<br>'+(hd>3 ? '<b>'+Math.round(hd)+' mph headwind</b>'
-          : hd<-3 ? '<b>'+Math.round(-hd)+' mph tailwind</b>'
-          : 'nothing much head-on')
-          +(cr>=5?' · '+Math.round(cr)+' mph across':'');
-      } else h+='<br><span style="opacity:.65">No heading here to call it head or tail.</span>';
+    const r=this.wxRead(g), w=g.w, kind=this.wxKind(r);
+    const mph=r.mph==null?null:Math.round(r.mph);
+    const rows=[['Sky', r.short||'\u2014'],
+                ['Temp', r.temp==null?'\u2014':r.temp+'\u00b0'+r.unit],
+                ['Rain', r.pop==null?'\u2014':r.pop+'%']];
+    if(mph==null) rows.push(['Wind','\u2014']);
+    else if(!r.parts) rows.push(['Wind', mph+' mph']);
+    else {
+      const word = mph<3 ? 'calm' : kind==='head' ? 'headwind' : kind==='tail' ? 'tailwind' : 'crosswind';
+      rows.push(['Wind', mph+' mph <b style="color:'+(mph<3?'#5f6368':this.wxKindColor(kind))+'">'+word+'</b>', 1]);
+      if(kind!=='cross' && r.parts.cross>=5) rows.push(['Across', Math.round(r.parts.cross)+' mph']);
     }
-    // Ours is six numbers off a grid point; theirs is the discussion, the radar and
-    // any warning in force.
-    h+='<br><a href="'+nwsLink(g.lat,g.lng)+'" target="_blank" rel="noopener">Full forecast at weather.gov</a>';
-    return h;
+    const hh=Math.round(g.h*10)/10;
+    return '<b>'+esc(this.wxClock(g.when||Date.parse(w.startTime)))+' \u00b7 '+mpTxt(g.mile)+'</b>'
+      +'<div class="wxp-s">'+(g.h===0?'the day starts here':fmtWin(hh)+'h in at '+this.avgSpeed+' mph')+'</div>'
+      +'<table class="wxp">'+rows.map(x=>'<tr><th>'+x[0]+'</th><td>'
+        +(x[2]?x[1]:esc(String(x[1])))+'</td></tr>').join('')+'</table>'
+      +'<a href="'+nwsLink(g.lat,g.lng)+'" target="_blank" rel="noopener">weather.gov \u2197</a>';
   }
   // The one-line version for the map sheet.
   wxLine(){
@@ -2803,8 +2805,9 @@ class TrailApp {
     this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright',collapsed:true}).addTo(map);
     const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
     const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
-    this.embLines=[ L.polyline(rHV,{color:accent,weight:4,opacity:.85}),
-                    L.polyline(rER,{color:accent2,weight:4,opacity:.85}) ];
+    const rtPane=this.lyrPane('route');
+    this.embLines=[ L.polyline(rHV,{pane:rtPane,color:accent,weight:4,opacity:.85}),
+                    L.polyline(rER,{pane:rtPane,color:accent2,weight:4,opacity:.85}) ];
     /* The trail itself gets a row in the control like everything else, and like the
        borrowed layers it names where it comes from — the state's own page, which is
        also where the official GPX for a GPS unit lives. One group, so the swap from
@@ -2815,7 +2818,7 @@ class TrailApp {
       +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
     this.stopLayer=L.layerGroup();
     TOWNS.forEach(t=>{
-      const mk=L.circleMarker([t.lat,t.lng],{radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
+      const mk=L.circleMarker([t.lat,t.lng],{pane:this.lyrPane('stops'),radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
       mk.bindPopup('',{maxWidth:300,minWidth:230,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
@@ -2830,7 +2833,7 @@ class TrailApp {
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
        control. The Shoreline is free to draw; the counts cost a request per view. */
-    this.shoreLayer=L.polyline([],{color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
+    this.shoreLayer=L.polyline([],{pane:this.lyrPane('shore'),color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
     this.shoreLayer.bindPopup('',{maxWidth:270,autoPan:false});
     this.shoreLayer.on('popupopen',()=>this.shoreLayer.setPopupContent(this.shorePopup()));
     this.regLayer('shore', this.shoreLayer,
@@ -2963,8 +2966,9 @@ class TrailApp {
     [...new Set([...CAT_ORDER, ...Object.keys(byCat)])].forEach(asset=>{
       const items=byCat[asset]; if(!items||!items.length) return;
       const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
+      const pane=this.lyrPane('poi:'+asset);
       items.forEach(p=>{
-        const mk=L.marker([p.lat,p.lng],{icon:this.poiIcon(p,cfg)});
+        const mk=L.marker([p.lat,p.lng],{pane, icon:this.poiIcon(p,cfg)});
         mk.bindPopup('',{maxWidth:280,minWidth:200,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
         this.poiMarker[p.i]=mk;
         g.addLayer(mk);
@@ -3051,7 +3055,8 @@ class TrailApp {
       const sec=(f.properties||{}).Section, col = sec==='Hudson Valley' ? this.accent : this.accent2;
       const geom=f.geometry||{};
       const parts = geom.type==='MultiLineString' ? geom.coordinates : [geom.coordinates||[]];
-      parts.forEach(line=>{ const ll=line.map(c=>[c[1],c[0]]); if(ll.length>1) lines.push(L.polyline(ll,{color:col,weight:4,opacity:.9})); });
+      parts.forEach(line=>{ const ll=line.map(c=>[c[1],c[0]]);
+        if(ll.length>1) lines.push(L.polyline(ll,{pane:this.lyrPane('route'),color:col,weight:4,opacity:.9})); });
     });
     // An empty answer used to clear the embedded line and draw nothing over it,
     // leaving a map with no trail on it. Keep what we have unless there is a
