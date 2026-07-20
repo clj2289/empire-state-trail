@@ -7,19 +7,19 @@ services:
     # the service worker and geolocation both work here without TLS.
     ports:
       - "8080:80"
-    # The Dockerfile COPYs the shell in, so without these the container serves a
-    # snapshot from build time and edits stay invisible until `up --build` — an
-    # easy hour to lose debugging a change that was never actually served. These
-    # overlay the built-in copies so a save is live on reload. Read-only: nginx
-    # has no business writing back into the working tree.
+    # The Dockerfile COPYs the shell in, so without a mount the container serves a
+    # build-time snapshot and edits stay invisible until `up --build` — an easy
+    # hour to lose debugging a change that was never actually served.
     #
-    # The image is still self-contained — `docker run empire-state-trail` needs
-    # no mounts. nginx.conf is deliberately absent: it lives outside the web root
-    # and needs a reload, not just a re-read, to take effect.
+    # Mount the DIRECTORY, never the individual files. A single-file bind mount
+    # resolves to that file's inode once; editors save atomically (write temp,
+    # rename), which swaps the inode, and the container then serves the original
+    # for the rest of its life — silently, with no error anywhere. A directory
+    # mount resolves each path at access time, so replacements are picked up.
+    #
+    # This puts the repo at the web root, so nginx denies dotfiles to keep .git
+    # unreachable. The image stays self-contained: `docker run empire-state-trail`
+    # needs no mounts.
     volumes:
-      - ./index.html:/usr/share/nginx/html/index.html:ro
-      - ./est-core.js:/usr/share/nginx/html/est-core.js:ro
-      - ./manifest.json:/usr/share/nginx/html/manifest.json:ro
-      - ./sw.js:/usr/share/nginx/html/sw.js:ro
-      - ./broadsheet:/usr/share/nginx/html/broadsheet:ro
+      - .:/usr/share/nginx/html:ro
     restart: unless-stopped

@@ -146,6 +146,15 @@ function mapsLink(t,q,from){
 // price is date- and occupancy-dependent, needs a keyed API behind a proxy, and the
 // small trail-town inns in the ArcGIS layer mostly aren't in bookable inventory anyway.
 function ratesLink(q){ return 'https://www.google.com/travel/search?q='+encodeURIComponent(q); }
+// How far off the route a facility sits. projectRoute already computes this to
+// filter POIs to within 5 mi, it was just never shown. Straight-line from the
+// nearest route vertex — the real pedal distance up whatever side road serves it
+// is longer, so this is a floor, and the wording says so rather than implying a
+// routed number we don't have. Under a tenth of a mile reads as on-trail.
+function offTrailTxt(off){
+  if(off==null || !isFinite(off) || off<0.1) return '';
+  return ' · '+fmtMi(off)+' mi off trail';
+}
 
 /* ---- live POI service (NY State ArcGIS) ---- */
 const ARC="https://services.arcgis.com/1xFZPtKn1wKC6POA/arcgis/rest/services/";
@@ -194,8 +203,9 @@ const LEG_URL=ARC+"EST_Public/FeatureServer/3/query";
 class TrailApp {
   constructor(){
     this.dir='B2NYC'; this.myMile=null; this.myLL=null; this.showPassed=false; this.destIdx=-1;
-    // Nearby list: optional day-planning band (trail miles ahead) + per-category expansion.
-    this.miMin=null; this.miMax=null; this.poiOpen={};
+    // Nearby list: optional day-planning band (trail miles ahead) + per-category
+    // expansion. Filters start collapsed — the list is the reason you opened the tab.
+    this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.POIS=[]; this.embLines=[];
     // Nearby-list shape only. Map pin visibility is the layers control's job.
@@ -242,12 +252,26 @@ class TrailApp {
     if(Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     const lbl=this.$('dirLbl'); if(lbl) lbl.textContent = this.dir==='B2NYC' ? 'Buffalo → NYC' : 'NYC → Buffalo';
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
+    this.filtersOpen=!!p.filtersOpen;
     const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
     const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
+    const fl=this.$('poiFilters'); if(fl) fl.open=this.filtersOpen;
   }
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,myLL:this.myLL,
-      miMin:this.miMin,miMax:this.miMax,catOrder:this.catOrder,catHidden:[...this.catHidden]})); }catch(e){}
+      miMin:this.miMin,miMax:this.miMax,catOrder:this.catOrder,catHidden:[...this.catHidden],
+      filtersOpen:this.filtersOpen})); }catch(e){}
+  }
+  /* Summary shown on the collapsed header. A filter you can't see is a filter you
+     forget you set, so the closed state has to say when something is narrowing. */
+  renderFilterState(){
+    const el=this.$('filtersState'); if(!el) return;
+    const byCat=this.poisByCat(), all=Object.keys(byCat).filter(c=>byCat[c].length);
+    const on=all.filter(c=>!this.catHidden.has(c)).length;
+    const bits=[];
+    bits.push(on===all.length ? 'all categories' : on+' of '+all.length+' categories');
+    if(this.miMin!=null||this.miMax!=null) bits.push((this.miMin!=null?this.miMin:0)+'–'+(this.miMax!=null?this.miMax:'∞')+' mi');
+    el.textContent=bits.join(' · ');
   }
   /* Stored order first, then anything it doesn't mention — a newly shipped
      category, or an asset type the service returned that we don't hardcode. */
@@ -299,6 +323,8 @@ class TrailApp {
     ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readBand); });
     const mc=this.$('miClear');
     if(mc) mc.addEventListener('click',()=>{ ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readBand(); });
+    const fl=this.$('poiFilters');
+    if(fl) fl.addEventListener('toggle',()=>{ this.filtersOpen=fl.open; this.savePrefs(); });
   }
   status(msg){ const el=this.$('locStatus'); if(el) el.textContent=msg; }
   flipDir(){
@@ -370,9 +396,13 @@ class TrailApp {
     if(this.myMile==null){ el.innerHTML='<div class="sheet-empty">Tap <b>Locate</b>, tap the map, or pick a simulated spot in Settings to see your position and what’s next.</div>'; return; }
     const ahead=this.travelOrder().filter(t=>this.isAhead(t));
     const nx=ahead[0];
-    const remain = this.dir==='B2NYC' ? this.myMile : TOTAL-this.myMile;
+    // Mileposts run from the NYC end, so "to NYC" IS the milepost when heading south
+    // — the sheet was printing 525 twice. Percent ridden is the one companion stat
+    // that stays distinct whichever way you're travelling.
+    const ridden = this.dir==='B2NYC' ? TOTAL-this.myMile : this.myMile;
+    const pct = Math.max(0,Math.min(100,(ridden/TOTAL)*100));
     let h='<div class="sheet-row"><div><div class="sheet-k">Trail mile</div><div class="sheet-v">'+fmtMi(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
-      +'<div class="sheet-r"><div class="sheet-k">to '+this.destName()+'</div><div class="sheet-v">~'+fmtMi(remain)+' mi</div></div></div>';
+      +'<div class="sheet-r"><div class="sheet-k">ridden</div><div class="sheet-v">'+Math.round(pct)+'%</div></div></div>';
     if(nx){ h+='<button class="sheet-next" data-lat="'+nx.lat+'" data-lng="'+nx.lng+'" data-town="'+esc(nx.n)+'"><span class="sheet-k">Next stop</span><span class="sheet-nm">'+esc(nx.n)+' · ~'+fmtMi(abs(nx.mi-this.myMile))+' mi</span>'+icon('chevR',18)+'</button>'; }
     el.innerHTML=h;
   }
@@ -469,6 +499,7 @@ class TrailApp {
     // what order, the band filters the items inside each one.
     const CAP=6, banded=(this.miMin!=null||this.miMax!=null) && this.myMile!=null;
     const byCat=this.poisByCat();
+    this.renderFilterState();
     const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length);
     if(!keys.length){ list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
     let h='';
@@ -491,7 +522,8 @@ class TrailApp {
       shown.forEach(p=>{
         const d=this.aheadMi(p), back=(d!=null&&d<-0.3);
         const dist = d==null ? '' : (back ? fmtMi(abs(d))+' mi back' : '~'+fmtMi(d)+' mi');
-        h+='<button class="poi-item" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'
+        const off = (p.off!=null&&isFinite(p.off)&&p.off>=0.1) ? '<span class="poi-off">+'+fmtMi(p.off)+' off</span>' : '';
+        h+='<button class="poi-item" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'+off
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
       if(items.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+items.length)+'</button>';
@@ -567,7 +599,10 @@ class TrailApp {
   poiPopup(p){
     const dist=(this.myMile!=null&&p.mile!=null)?' · ~'+fmtMi(abs(p.mile-this.myMile))+' trail-mi':'';
     const sub=p.sub?' · '+p.sub:'';
-    let h='<b>'+esc(p.name)+'</b><br><span style="opacity:.65">'+esc(p.asset)+esc(sub)+dist+'</span>';
+    // Straight-line from the nearest point on the route, not a routed distance —
+    // labelled so it can't be mistaken for one. See offTrailTxt.
+    const off=offTrailTxt(p.off);
+    let h='<b>'+esc(p.name)+'</b><br><span style="opacity:.65">'+esc(p.asset)+esc(sub)+dist+off+'</span>';
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
     const lk=[]; const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');

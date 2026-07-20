@@ -171,6 +171,7 @@
   .poi-nm{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .poi-mi{flex:none;font-size:12px;color:var(--color-accent-700);font-weight:600;font-variant-numeric:tabular-nums}
   .poi-back{color:var(--color-neutral-500);font-weight:400}
+  .poi-off{flex:none;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
   .poi-more{font-size:11px;color:var(--color-neutral-500);padding:6px 2px}
   button.poi-more{display:block;width:100%;text-align:left;background:transparent;border:0;cursor:pointer;
     font-family:inherit;font-weight:600;color:var(--color-accent-700)}
@@ -182,6 +183,19 @@
   .poi-band-clear{font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;background:transparent;
     border:0;color:var(--color-accent-700);padding:5px 2px}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
+  /* Collapsible filter block. Closed by default so the list starts near the top;
+     the summary carries a live state line so a filter can't be silently on. */
+  .filters{margin-bottom:var(--space-3);border-bottom:1px solid var(--color-divider)}
+  .filters-sum{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none;padding:var(--space-2) 0;
+    font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);font-weight:600}
+  .filters-sum::-webkit-details-marker{display:none}
+  .filters-sum:hover{color:var(--color-accent-700)}
+  .filters-caret{flex:none;width:0;height:0;border-left:5px solid currentColor;
+    border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+  .filters[open] .filters-caret{transform:rotate(90deg)}
+  .filters-state{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400;
+    font-size:11px;color:var(--color-neutral-500)}
+  .filters[open] .filters-state{opacity:0}
 
   /* ---- more / settings ---- */
   .switch{display:flex;align-items:center;gap:var(--space-2);cursor:pointer;font-size:13.5px;margin:var(--space-2) 0}
@@ -281,16 +295,25 @@
       <div class="screen-pad">
         <h1 class="screen-title">Nearby</h1>
         <div id="poiStat" class="poi-stat"></div>
-        <div class="feat-list-lbl">Categories</div>
-        <div id="features" class="feat-list"></div>
-        <p class="feat-hint">Drag to reorder · uncheck to hide from this list. Map pins are separate — toggle those from the layers control in the top-right of the map.</p>
-        <div class="feat-list-lbl">Trail miles ahead</div>
-        <div class="poi-band">
-          <label>Min <input id="miMin" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
-          <label>Max <input id="miMax" type="number" min="0" step="5" inputmode="numeric" placeholder="any"></label>
-          <button id="miClear" type="button" class="poi-band-clear">Clear</button>
-        </div>
-        <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. Needs your location.</p>
+        <!-- Native <details> so the toggle needs no JS and stays keyboard- and
+             screen-reader-correct; the only script involved remembers the state. -->
+        <details id="poiFilters" class="filters">
+          <summary class="filters-sum">
+            <span class="filters-caret" aria-hidden="true"></span>
+            <span class="filters-t">Filters</span>
+            <span id="filtersState" class="filters-state"></span>
+          </summary>
+          <div class="feat-list-lbl">Categories</div>
+          <div id="features" class="feat-list"></div>
+          <p class="feat-hint">Drag to reorder · uncheck to hide from this list. Map pins are separate — toggle those from the layers control in the top-right of the map.</p>
+          <div class="feat-list-lbl">Trail miles ahead</div>
+          <div class="poi-band">
+            <label>Min <input id="miMin" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
+            <label>Max <input id="miMax" type="number" min="0" step="5" inputmode="numeric" placeholder="any"></label>
+            <button id="miClear" type="button" class="poi-band-clear">Clear</button>
+          </div>
+          <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. Needs your location.</p>
+        </details>
         <div id="poiList" class="poi-list"></div>
       </div>
     </section>
