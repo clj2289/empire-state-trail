@@ -98,7 +98,9 @@ function icon(name, size){
   size = size || 20;
   const spec = P[name]; if(!spec) return '';
   const parts = spec.split('|').map(s=>{
-    if(s[0]==='c'){ const [,cx,cy,r] = s.split(' '); return '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'"/>'; }
+    // "c<cx> <cy> <r>" — the cx rides on the 'c' with no space, so slice it off
+    // rather than destructuring past it (that shifts every field and drops r).
+    if(s[0]==='c'){ const t=s.split(' '); return '<circle cx="'+t[0].slice(1)+'" cy="'+t[1]+'" r="'+t[2]+'"/>'; }
     if(s[0]==='M'){ return '<path d="'+s+'"/>'; }
     return '';
   }).join('');
@@ -235,7 +237,7 @@ class TrailApp {
     const dirBtn=this.$('dirBtn'); if(dirBtn) dirBtn.addEventListener('click',()=>this.flipDir());
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
     const rc=this.$('recenterBtn'); if(rc) rc.addEventListener('click',()=>this.recenter());
-    const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.renderItin(); });
+    const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.savePrefs(); this.renderItin(); });
     const dest=this.$('destSel'); if(dest) dest.addEventListener('change',()=>{ this.destIdx=dest.value===''?-1:+dest.value; this.renderNext(); });
     const sim=this.$('simSel'); if(sim) sim.addEventListener('change',()=>{ if(sim.value==='')return; const t=TOWNS[+sim.value]; this.setMyLocation(t.lat+0.03,t.lng+0.02); this.status('Simulating near '+t.n+'.'); });
     // delegated: any [data-lat] element zooms the map
@@ -248,6 +250,7 @@ class TrailApp {
   flipDir(){
     this.dir = this.dir==='B2NYC' ? 'NYC2B' : 'B2NYC';
     const lbl=this.$('dirLbl'); if(lbl) lbl.textContent = this.dir==='B2NYC' ? 'Buffalo → NYC' : 'NYC → Buffalo';
+    this.savePrefs();
     this.renderAll();
   }
   locate(){
@@ -266,10 +269,13 @@ class TrailApp {
   setMyLocation(lat,lng){
     this.myMile=projectMile(lat,lng); this.myLL={lat,lng};
     if(this.map){ const ll=[lat,lng];
-      if(!this.myMarker){ this.myMarker=L.circleMarker(ll,{radius:8,weight:3,color:'#fff',fillColor:getComputedStyle(document.body).getPropertyValue('--color-accent').trim()||'#1e73d8',fillOpacity:1}).addTo(this.map).bindPopup('You are here'); }
+      // dark fill, not --color-accent: that's the Hudson Valley stop color, so
+      // "you are here" used to blend into the very dots it should stand out from
+      if(!this.myMarker){ this.myMarker=L.circleMarker(ll,{radius:9,weight:3,color:'#fff',fillColor:getComputedStyle(document.body).getPropertyValue('--color-accent-900').trim()||'#0a303e',fillOpacity:1,className:'map-dot'}).addTo(this.map).bindPopup('You are here'); }
       else this.myMarker.setLatLng(ll);
       this.map.setView(ll, Math.max(this.map.getZoom(),10));
     }
+    this.savePrefs();
     this.renderAll();
   }
   zoomTo(lat,lng,z,townName){
@@ -429,13 +435,17 @@ class TrailApp {
                     L.polyline(rER,{color:accent2,weight:4,opacity:.85}).addTo(map) ];
     this.stopLayer=L.layerGroup();
     TOWNS.forEach(t=>{
-      const mk=L.circleMarker([t.lat,t.lng],{radius:6,weight:2,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1});
+      const mk=L.circleMarker([t.lat,t.lng],{radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
       mk.bindPopup('',{maxWidth:300,minWidth:230}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
     this.stopLayer.addTo(map);
     map.on('click',e=>{ this.setMyLocation(e.latlng.lat,e.latlng.lng); this.status('Location set from your map tap.'); });
     setTimeout(()=>map.invalidateSize(),120);
+    if(this.myLL){ // restored from a previous session — place the marker and zoom in
+      this.setMyLocation(this.myLL.lat,this.myLL.lng);
+      this.status('Showing your last known position — tap Locate to update it.');
+    }
     // live data
     const stat=this.$('poiStat'); if(stat) stat.textContent='Loading live data from the NY State service…';
     Promise.allSettled([
@@ -490,7 +500,7 @@ class TrailApp {
     Object.keys(byCat).sort((a,b)=>{const ia=order.indexOf(a),ib=order.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);}).forEach(asset=>{
       const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
       byCat[asset].forEach(p=>{
-        const mk=L.marker([p.lat,p.lng],{icon:L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,15)+'</span>',className:'',iconSize:[22,22],iconAnchor:[11,11]})});
+        const mk=L.marker([p.lat,p.lng],{icon:L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]})});
         mk.bindPopup('',{maxWidth:280,minWidth:200}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
         g.addLayer(mk);
       });
