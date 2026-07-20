@@ -96,10 +96,18 @@ const EST_SRC='https://empiretrail.ny.gov/import-instructions';
    of these segments and half a megabyte a pan is worse than no layer at all. */
 const AADT_URL='https://gis.dot.ny.gov/hostingny/rest/services/Roadways/Traffic_Monitoring/FeatureServer/1/query';
 const AADT_SRC='https://www.dot.ny.gov/tdv';
-const AADT_MINZ=13, AADT_CAP=400;
-// Bands as a bike feels them, not as a traffic engineer files them.
-const AADT_BANDS=[[1000,'#2e7d32','quiet',2.5],[5000,'#c98a00','moderate',3],
-                  [15000,'#e06c00','busy',4],[Infinity,'#b3261e','heavy',5]];
+const AADT_MINZ=10, AADT_CAP=400;
+// Bands as a bike feels them, not as a traffic engineer files them. The weights are
+// deliberately heavier than the route line: this layer is the answer to "which way
+// round do I go", and a hairline you have to hunt for cannot answer it.
+const AADT_BANDS=[[1000,'#2e7d32','quiet',4],[5000,'#c98a00','moderate',5],
+                  [15000,'#e06c00','busy',6.5],[Infinity,'#b3261e','heavy',8]];
+/* Zoomed out, the quiet streets are not what you are looking for and there is not
+   the room to draw them anyway, so the floor rises with the scale — the same idea
+   as the milepost interval. Where more is in view than will be drawn the busiest
+   survive regardless; this only decides what is worth asking for in the first
+   place, which is what keeps a rural county from being drawn as every farm lane. */
+const AADT_FLOOR=[[13,0],[12,1000],[11,2500],[10,6000]];
 const abs = Math.abs;
 const fmtMi = m => m < 10 ? m.toFixed(1) : String(Math.round(m));
 // Window bounds are typed by hand and land on round numbers, so they read as
@@ -176,6 +184,7 @@ const P = {
   park:'M7 4h6a4 4 0 0 1 0 8H7z|M7 4v16',
   lock:'M6 10V7a6 6 0 0 1 12 0v3|M5 10h14v10H5z',
   pin:'M12 21s-7-6-7-12a7 7 0 0 1 14 0c0 6-7 12-7 12Z|c12 9 2.5',
+  search:'c10 10 6.5|M14.9 14.9L20 20',
   wind:'M3 8h10a3 3 0 1 0-3-3|M3 13h14a3 3 0 1 1-3 3|M3 18h7a2 2 0 1 1-2 2',
   // sun behind a cloud — the outlook tab, distinct from the plain wind glyph
   fcast:'M8.5 2.6v1.8|M3.6 4.6l1.3 1.3|M1.6 9.5h1.8|M13.4 4.6l-1.3 1.3|c8.5 9.5 3|M10 20h7.5a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8.6 11.4 4.3 4.3 0 0 0 10 20Z',
@@ -209,6 +218,42 @@ const AMKEYS=['store','lodging','camp','rail'];
 const AMICON={store:'store',lodging:'bed',camp:'tent',rail:'train'};
 const AMQ={store:'grocery store supermarket',lodging:'hotel motel lodging',camp:'campground',rail:'train station'};
 function iconStrTxt(t){ const c=cats(t); return AMKEYS.filter(k=>c[k]).map(k=>({store:'resupply',lodging:'lodging',camp:'camping',rail:'rail'}[k])).join(' · '); }
+
+/* ---- finding a place ----
+   Two questions wear the same box. A pair of numbers is answered here and offline:
+   decimal degrees, degrees with a hemisphere letter at either end, or degrees-
+   minutes-seconds off a sign or a paper map. Anything else is a name, and names go
+   to Photon — OpenStreetMap's search, no key, boxed to New York and biased to
+   wherever you are looking. Trail stops are matched locally first, so the towns
+   this app already knows come back instantly and keep working with no signal. */
+const PHOTON='https://photon.komoot.io/api/';
+const FIND_BOX='-79.95,40.45,-73.15,45.05';
+function angleOf(t){
+  const hemi=(t.match(/[NSEW]/)||[''])[0];
+  const nums=(t.match(/-?\d+(?:\.\d+)?/g)||[]).map(Number);
+  if(!nums.length || nums.length>3 || nums.some(n=>!isFinite(n))) return null;
+  // Minutes and seconds are always positive; only the degrees carry the sign.
+  let v=abs(nums[0]) + (nums[1]||0)/60 + (nums[2]||0)/3600;
+  if(nums[0]<0 || hemi==='S' || hemi==='W') v=-v;
+  return {v, hemi};
+}
+function parseLL(str){
+  const s=String(str||'').trim().toUpperCase();
+  if(!s || /[^0-9NSEW\u00b0'"\u2032\u2033.,;:\s+-]/.test(s)) return null;
+  let parts = s.indexOf(',')>=0 ? s.split(',')
+    : (s.match(/^(.*?[NS])\s*(.*[EW])$/) || s.match(/^(.*?[EW])\s*(.*[NS])$/) || []).slice(1);
+  if(!parts || parts.length!==2) parts = s.split(/\s+/).length===2 ? s.split(/\s+/) : null;
+  if(!parts || parts.length!==2) return null;
+  const a=angleOf(parts[0]), b=angleOf(parts[1]);
+  if(!a||!b) return null;
+  let lat=a.v, lng=b.v;
+  // The letters say which is which, so "78W 42N" is as good as "42N 78W". Failing
+  // letters, a first number past 90 cannot have been a latitude.
+  if(/[EW]/.test(a.hemi) || /[NS]/.test(b.hemi)){ lat=b.v; lng=a.v; }
+  else if(abs(lat)>90 && abs(lng)<=90){ const t=lat; lat=lng; lng=t; }
+  if(!isFinite(lat)||!isFinite(lng)||abs(lat)>90||abs(lng)>180) return null;
+  return {lat, lng};
+}
 
 /* ---- trail-mile projection (not crow-flies) ---- */
 /* The nearest point on the line, not the nearest vertex on it. Vertices sit about a
@@ -692,6 +737,14 @@ class TrailApp {
         pi!=null ? this.POIS[+pi] : null);
     });
     const mb=this.$('mapBack'); if(mb) mb.addEventListener('click',()=>this.goBack());
+    const fb=this.$('findBtn'); if(fb) fb.addEventListener('click',()=>this.openFind());
+    const fx=this.$('findX'); if(fx) fx.addEventListener('click',()=>this.closeFind());
+    // A form, so the phone keyboard's Go key runs the search like the button does.
+    const ff=this.$('mapFind'); if(ff) ff.addEventListener('submit',e=>{ e.preventDefault(); this.runFind(); });
+    document.addEventListener('click',e=>{
+      const r=e.target.closest('.find-r'); if(!r) return;
+      this.gotoFound(+r.dataset.flat, +r.dataset.flng, +r.dataset.fz, r.dataset.ftown||'');
+    });
     // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
     document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
@@ -1281,6 +1334,98 @@ class TrailApp {
     if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
   }
 
+  /* ---------- find a place ---------- */
+  openFind(){
+    const f=this.$('mapFind'), q=this.$('findQ');
+    if(!f) return;
+    const on=f.hasAttribute('hidden');
+    f.toggleAttribute('hidden', !on);
+    const sc=document.querySelector('[data-screen="map"]');
+    if(sc) sc.classList.toggle('is-finding', on);
+    if(on && q){ q.focus(); q.select(); }
+    if(!on) this.clearFind();
+  }
+  closeFind(){
+    const f=this.$('mapFind'); if(f) f.setAttribute('hidden','');
+    const sc=document.querySelector('[data-screen="map"]');
+    if(sc) sc.classList.remove('is-finding');
+    this.clearFind();
+  }
+  clearFind(){ const o=this.$('findOut'); if(o) o.innerHTML=''; }
+  /* A pair of numbers never touches the network — it is already an answer. A name
+     gets the trail stops we hold locally straight away, then whatever Photon adds
+     when it replies, so a search works at whatever level of signal you have. */
+  async runFind(){
+    const el=this.$('findQ'), out=this.$('findOut');
+    if(!el||!out) return;
+    const raw=el.value.trim();
+    const ll=parseLL(raw);
+    if(ll){ this.gotoFound(ll.lat, ll.lng, 15); return; }
+    if(raw.length<2){ out.innerHTML='<div class="find-n">A town, a place, or a pair of coordinates.</div>'; return; }
+    const near=raw.toLowerCase();
+    const local=TOWNS.filter(t=>t.n.toLowerCase().indexOf(near)>=0)
+      .map(t=>({lat:t.lat, lng:t.lng, z:14, town:t.n, name:this.shortTown(t.n), note:'trail stop \u00b7 '+mpTxt(t.mi)}));
+    this.renderFind(local, 'Searching\u2026');
+    let far=[];
+    try{ far=await this.geocode(raw); }
+    catch(e){
+      // Saying nothing here would let a list of trail stops pass for the whole
+      // answer, which is the one way this can quietly mislead.
+      this.renderFind(local, local.length
+        ? 'Trail stops only \u2014 the wider place search didn\u2019t answer.'
+        : 'No answer from the place search. Coordinates and trail stops still work.');
+      return;
+    }
+    /* Photon knows the trail towns too, so the same place would otherwise be listed
+       twice — once with its milepost and once without. Matched on name and nearness
+       rather than on coordinates alone: the two sources put a town centre in
+       slightly different spots, which is exactly what a coordinate test misses. */
+    const rows=local.concat(far.filter(r=>!local.some(t=>
+      t.name.toLowerCase()===r.name.toLowerCase() && miBetween([t.lat,t.lng],[r.lat,r.lng])<8)));
+    this.renderFind(rows, rows.length?'':'Nothing found for \u201c'+raw+'\u201d.');
+  }
+  async geocode(q){
+    const c=this.map?this.map.getCenter():{lat:42.9,lng:-76.0};
+    const u=PHOTON+'?limit=6&lang=en&q='+encodeURIComponent(q)
+      +'&lat='+c.lat.toFixed(3)+'&lon='+c.lng.toFixed(3)+'&bbox='+FIND_BOX;
+    const r=await fetch(u);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return (((await r.json())||{}).features||[]).map(f=>{
+      const p=f.properties||{}, g=(f.geometry||{}).coordinates||[];
+      if(!isFinite(g[0])||!isFinite(g[1])) return null;
+      const name=p.name || [p.housenumber,p.street].filter(Boolean).join(' ') || p.postcode || p.city || '';
+      const where=[p.city&&p.city!==name?p.city:(p.county||''), p.state||''].filter(Boolean).join(', ');
+      /* A city wants the whole city on screen, a building wants its own street.
+         Photon files most addressable things as 'house', museum or doorstep alike,
+         so that case stops one short of the tightest zoom — near enough to see what
+         is around it, which is the question being asked of a map. */
+      const z = p.type==='house' ? 16 : p.type==='street' ? 16 : p.type==='city' ? 12 : 14;
+      return name ? {lat:g[1], lng:g[0], z, name, note:where||p.countrycode||''} : null;
+    }).filter(Boolean);
+  }
+  renderFind(rows, note){
+    const out=this.$('findOut'); if(!out) return;
+    let h=rows.map(r=>'<button type="button" class="find-r" data-flat="'+r.lat+'" data-flng="'+r.lng+'"'
+      +' data-fz="'+r.z+'"'+(r.town?' data-ftown="'+esc(r.town)+'"':'')+'>'
+      +'<b>'+esc(r.name)+'</b>'+(r.note?'<span>'+esc(r.note)+'</span>':'')+'</button>').join('');
+    if(note) h+='<div class="find-n">'+esc(note)+'</div>';
+    out.innerHTML=h;
+  }
+  /* A found place gets the popup a map tap gets — the milepost, how far off the route
+     it sits, the two Google links — because "where is this" turns into exactly those
+     questions the moment you can see it. A trail stop opens its own, which is richer. */
+  gotoFound(lat,lng,z,town){
+    if(!this.map || !isFinite(lat) || !isFinite(lng)) return;
+    this.closeFind();
+    this.showTab('map');
+    setTimeout(()=>{
+      this.centerVisible(lat,lng,z||14);
+      this.markPick(lat,lng);
+      if(town && this.townMarker[town]) this.townMarker[town].openPopup();
+      else this.tapPopup({lat,lng});
+    },80);
+  }
+
   /* ---------- borrowed layers ---------- */
   /* A layer's name in the control doubles as its provenance: tap it and you get the
      page its data came from. The checkbox still toggles, and so does the chip after
@@ -1329,6 +1474,10 @@ class TrailApp {
   }
 
   /* ---------- traffic counts ---------- */
+  aadtFloor(z){
+    for(let i=0;i<AADT_FLOOR.length;i++) if(z>=AADT_FLOOR[i][0]) return AADT_FLOOR[i][1];
+    return AADT_FLOOR[AADT_FLOOR.length-1][1];
+  }
   aadtBand(v){
     for(let i=0;i<AADT_BANDS.length;i++) if(v<AADT_BANDS[i][0]) return AADT_BANDS[i];
     return AADT_BANDS[AADT_BANDS.length-1];
@@ -1338,13 +1487,14 @@ class TrailApp {
   async loadAadt(){
     const m=this.map, g=this.aadtLayer;
     if(!m||!g||!m.hasLayer(g)) return;
-    if(m.getZoom()<AADT_MINZ){
+    const z=m.getZoom();
+    if(z<AADT_MINZ){
       g.clearLayers(); this.aadtSig='';
-      this.status('Traffic counts draw from zoom '+AADT_MINZ+' in \u2014 further out there are more road segments than anyone can read.');
+      this.status('Traffic counts draw from zoom '+AADT_MINZ+' in \u2014 further out than that the whole state is one smear of road.');
       return;
     }
     const b=m.getBounds();
-    const sig=[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(v=>v.toFixed(4)).join(',');
+    const sig=z+':'+[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(v=>v.toFixed(4)).join(',');
     if(sig===this.aadtSig) return;
     this.aadtSig=sig;
     // A pan that outruns its own fetch must not have the older answer land on top
@@ -1352,9 +1502,9 @@ class TrailApp {
     const my=++this.aadtReq;
     // Generalised to about two pixels at this zoom: past that the detail is being
     // downloaded to be thrown away by the screen.
-    const tol=2*360/(256*Math.pow(2,m.getZoom()));
+    const tol=2*360/(256*Math.pow(2,z));
     const q=new URLSearchParams({
-      where:'AADT>0',
+      where:'AADT>'+this.aadtFloor(z),
       geometry:JSON.stringify({xmin:b.getWest(),ymin:b.getSouth(),xmax:b.getEast(),ymax:b.getNorth(),spatialReference:{wkid:4326}}),
       geometryType:'esriGeometryEnvelope', inSR:'4326', outSR:'4326',
       spatialRel:'esriSpatialRelIntersects',
@@ -1398,7 +1548,7 @@ class TrailApp {
       paths.forEach(path=>{
         if(!path || path.length<2) return;
         const ll=path.map(c=>[c[1],c[0]]);
-        const ln=L.polyline(ll,{color:band[1],weight:band[3],opacity:.8,className:'aadt-ln'});
+        const ln=L.polyline(ll,{color:band[1],weight:band[3],opacity:.85,className:'aadt-ln'});
         ln.bindPopup('',{maxWidth:250,autoPan:false});
         ln.on('popupopen',()=>ln.setPopupContent(this.aadtPopup(pr)));
         ln.addTo(g);

@@ -82,6 +82,31 @@
     background:var(--color-bg);color:var(--color-accent-700);border:1px solid var(--color-divider);
     border-radius:999px;box-shadow:var(--shadow-md);white-space:nowrap}
   .map-back[hidden]{display:none}
+  /* The finder takes the top slot when it is open, and the back pill steps down a
+     row rather than sitting under it. Both clear Leaflet's corners by staying narrow. */
+  .map-find{position:absolute;top:calc(var(--space-3) + env(safe-area-inset-top));
+    left:56px;right:56px;z-index:1101;display:flex;flex-wrap:wrap;gap:5px;align-items:center;
+    padding:5px;background:var(--color-bg);border:1px solid var(--color-divider);
+    border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
+  .map-find[hidden]{display:none}
+  .is-finding .map-back{top:calc(var(--space-3) + env(safe-area-inset-top) + 52px)}
+  .map-find input{flex:1;min-width:0;font-family:inherit;font-size:13px;padding:7px 8px;
+    background:var(--color-surface);color:var(--color-text);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .find-go{flex:none;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;
+    padding:7px 10px;background:var(--color-accent);color:var(--color-bg);
+    border:1px solid var(--color-accent);border-radius:var(--radius-md)}
+  .find-x{flex:none;width:28px;font-family:inherit;font-size:17px;line-height:1;cursor:pointer;
+    padding:5px 0;background:transparent;color:var(--color-neutral-600);border:0}
+  .find-out{flex:0 0 100%;max-height:44vh;overflow-y:auto}
+  .find-out:empty{display:none}
+  .find-r{display:block;width:100%;text-align:left;cursor:pointer;font-family:inherit;
+    padding:7px 8px;background:transparent;border:0;border-top:1px solid var(--color-divider)}
+  .find-r:hover{background:var(--color-accent-100)}
+  .find-r b{display:block;font-size:13px;color:var(--color-text)}
+  .find-r span{display:block;font-size:11px;color:var(--color-neutral-600)}
+  .find-n{padding:7px 8px;font-size:11.5px;color:var(--color-neutral-600);
+    border-top:1px solid var(--color-divider)}
   .map-back:hover{background:var(--color-accent-100)}
   .map-back:active{background:var(--color-accent-200)}
   /* The map panel. Sits above the floating tab bar; the map runs edge to edge behind
@@ -491,9 +516,17 @@
   <main class="screens">
     <section data-screen="map" class="screen active">
       <div id="map"></div>
+      <form id="mapFind" class="map-find" hidden autocomplete="off">
+        <input id="findQ" type="search" inputmode="search" enterkeyhint="search" autocomplete="off"
+          placeholder="Town, place, or 43.05, -76.15" aria-label="Find a place or a coordinate">
+        <button type="submit" class="find-go">Find</button>
+        <button id="findX" type="button" class="find-x" aria-label="Close search">&times;</button>
+        <div id="findOut" class="find-out"></div>
+      </form>
       <button id="mapBack" type="button" class="map-back" hidden></button>
       <aside id="mapPanel" class="map-panel" data-snap="peek">
         <div class="map-fabs">
+          <button id="findBtn" type="button" class="fab" title="Find a place" aria-label="Find a place"><span data-ic="search"></span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
         </div>
