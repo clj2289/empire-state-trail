@@ -80,6 +80,37 @@ const mpTxt = m => { const s=fmtMp(m); return s ? 'TM '+s : ''; };
    and in data-* attributes, so everything interpolated goes through esc() first.
    safeUrl() keeps a hostile record from smuggling a javascript: URL into an href. */
 const PREFS='est-prefs-v1';
+const PRICES='est-prices-v1';
+/* Chain pins carry a wordmark rather than a logo: brand logos are trademarks, and
+   shipping them into this repo — or hotlinking them, which the offline story rules
+   out anyway — is not ours to do. An abbreviation in the chain's own colour scans
+   from the same distance and costs nobody a lawyer. Longest name first, so Hilton
+   Garden and Holiday Inn Express aren't eaten by Hilton and Holiday Inn. */
+const BRANDS=[
+  [/hilton garden/i,'HGI','#00457c'],[/home2/i,'HOME2','#00457c'],[/homewood/i,'HWS','#00457c'],
+  [/doubletree/i,'DBLTREE','#00457c'],[/tru by hilton/i,'TRU','#00457c'],[/hampton/i,'HAMPTON','#00457c'],
+  [/embassy suites/i,'EMBASSY','#00457c'],[/\bhilton\b/i,'HILTON','#00457c'],
+  [/holiday inn express/i,'HIEX','#1f7a3f'],[/holiday inn/i,'HOL INN','#1f7a3f'],
+  [/candlewood/i,'CANDLE','#1f7a3f'],[/staybridge/i,'STAYBR','#1f7a3f'],[/crowne plaza/i,'CROWNE','#1f7a3f'],
+  [/fairfield/i,'FAIRFLD','#8b1a1a'],[/courtyard/i,'COURTYD','#8b1a1a'],[/residence inn/i,'RESIDNC','#8b1a1a'],
+  [/springhill/i,'SPRINGH','#8b1a1a'],[/towneplace/i,'TOWNEPL','#8b1a1a'],[/sheraton/i,'SHERATON','#8b1a1a'],
+  [/westin/i,'WESTIN','#8b1a1a'],[/\bmarriott\b/i,'MARRIOTT','#8b1a1a'],
+  [/days inn/i,'DAYS','#b8860b'],[/super 8/i,'SUPER 8','#b8860b'],[/ramada/i,'RAMADA','#b8860b'],
+  [/howard johnson/i,'HOJO','#b8860b'],[/travelodge/i,'TRVLDG','#b8860b'],[/microtel/i,'MICROTEL','#b8860b'],
+  [/baymont/i,'BAYMONT','#b8860b'],[/la quinta/i,'LA QUINTA','#b8860b'],[/\bwyndham\b/i,'WYNDHAM','#b8860b'],
+  [/comfort (inn|suites)/i,'COMFORT','#0a5c9e'],[/quality inn/i,'QUALITY','#0a5c9e'],
+  [/sleep inn/i,'SLEEP','#0a5c9e'],[/clarion/i,'CLARION','#0a5c9e'],[/econo ?lodge/i,'ECONO','#0a5c9e'],
+  [/rodeway/i,'RODEWAY','#0a5c9e'],[/mainstay/i,'MAINSTAY','#0a5c9e'],[/cambria/i,'CAMBRIA','#0a5c9e'],
+  [/best western/i,'BEST WN','#123c7b'],[/americinn/i,'AMERICINN','#123c7b'],
+  [/motel 6/i,'MOTEL 6','#0d6b3f'],[/extended stay/i,'EXTSTAY','#0d6b3f'],
+  [/red roof/i,'RED ROOF','#b3261e']
+];
+function brandOf(name){
+  const n=String(name||'');
+  for(let i=0;i<BRANDS.length;i++) if(BRANDS[i][0].test(n)) return {tag:BRANDS[i][1], color:BRANDS[i][2]};
+  return null;
+}
+const fmtMoney = n => (n==null||!isFinite(n)) ? '' : '$'+(Math.round(n)===+n ? n : (+n).toFixed(2));
 const ESCMAP={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>ESCMAP[c]);
 const safeUrl = u => /^https?:\/\//i.test(String(u||'')) ? esc(u) : '';
@@ -270,6 +301,7 @@ class TrailApp {
     this.showTrip=false; this.screen='map'; this.panelSnap='shut';
     this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
     this.showWx=true; this.wxPerDay=60; this.wxDays=4; this.wxPlan=null; this.wxBusy=false;
+    this.prices={}; this.poiMarker={};
     // Absolute stretch of trail to list, independent of the rider. The mileage band
     // above it asks "how far from me", which needs a location and moves as you ride;
     // this asks "what's between mile X and Y", which answers the map-shaped question
@@ -294,6 +326,7 @@ class TrailApp {
 
   init(){
     this.loadPrefs();
+    this.loadPrices();
     this.buildDropdowns();
     this.buildTestRows();
     this.wireTabs();
@@ -581,6 +614,10 @@ class TrailApp {
     // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
     document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
+    document.addEventListener('click',e=>{
+      const sv=e.target.closest('.pr-save'); if(sv){ this.savePriceFrom(sv); return; }
+      const cl=e.target.closest('.pr-clear'); if(cl) this.clearPriceFrom(cl);
+    });
     document.addEventListener('click',e=>{
       const t=e.target.closest('.poi-toggle'); if(!t) return;
       const c=t.dataset.cat; this.poiOpen[c]=!this.poiOpen[c]; this.renderNearby();
@@ -1074,14 +1111,74 @@ class TrailApp {
         // The milepost sits in the middle column, which on-trail rows leave empty —
         // so every row carries one whether or not it has a detour to break down.
         const mp = mpTxt(p.mile);
+        const pr = this.priceOf(p);
         h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'"><span class="poi-nm">'+esc(p.name)+'</span>'
-          +(mp?'<span class="poi-mp">'+mp+'</span>':'')+brk
+          +(mp?'<span class="poi-mp">'+mp+'</span>':'')
+          +(pr?'<span class="poi-pr">'+esc(fmtMoney(pr.amt))+'</span>':'')+brk
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
       if(items.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+items.length)+'</button>';
       h+='</div>';
     });
     list.innerHTML=h;
+  }
+
+  /* ---------- rates you looked up ---------- */
+  /* There is no free, legitimate way to pull nightly rates: the booking APIs are
+     partner-only and scraping them from a browser is both CORS-blocked and against
+     their terms. So the app does the honest version — the popup already has a link
+     out to check rates, and this catches the number on the way back. Kept in its own
+     storage key so clearing preferences doesn't take your research with it.
+     Keyed on name and coordinates rather than list index, which shifts when the
+     upstream service reorders its rows. */
+  poiKey(p){ return [p.name, (+p.lat).toFixed(4), (+p.lng).toFixed(4)].join('|'); }
+  loadPrices(){ try{ this.prices=JSON.parse(localStorage.getItem(PRICES)||'{}')||{}; }catch(e){ this.prices={}; } }
+  savePrices(){ try{ localStorage.setItem(PRICES, JSON.stringify(this.prices)); }catch(e){} }
+  priceOf(p){ return (p && this.prices[this.poiKey(p)]) || null; }
+  /* The night you'd actually be there, at your planned daily distance — so the date
+     box opens on the date you're about to go and look up, not on today. */
+  arrivalDate(p){
+    const d=this.rideMi(p);
+    if(d==null || d<-0.3) return '';
+    const per=Math.max(5, this.wxPerDay||60);
+    const t=new Date();
+    t.setDate(t.getDate() + Math.max(1,Math.ceil(d/per)) - 1);
+    return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+  }
+  savePriceFrom(btn){
+    const row=btn.closest('.pr-row'); if(!row) return;
+    const p=this.POIS[+row.dataset.pi]; if(!p) return;
+    const amtEl=row.querySelector('.pr-amt'), dtEl=row.querySelector('.pr-date');
+    const amt=amtEl?+amtEl.value:NaN;
+    if(!isFinite(amt)||amt<=0){ this.status('Put a nightly rate in first.'); return; }
+    this.prices[this.poiKey(p)]={amt:Math.round(amt*100)/100, date:dtEl?dtEl.value:'', at:Date.now()};
+    this.savePrices(); this.refreshPin(p); this.renderNearby();
+    if(this.map) this.map.closePopup();
+    this.status(fmtMoney(amt)+' saved for '+p.name+'.');
+  }
+  clearPriceFrom(btn){
+    const row=btn.closest('.pr-row'); if(!row) return;
+    const p=this.POIS[+row.dataset.pi]; if(!p) return;
+    delete this.prices[this.poiKey(p)];
+    this.savePrices(); this.refreshPin(p); this.renderNearby();
+    if(this.map) this.map.closePopup();
+    this.status('Rate cleared for '+p.name+'.');
+  }
+  /* A chain wordmark, a rate, or both, in place of the generic bed — the point being
+     that a map of forty identical pins tells you nothing you couldn't already see. */
+  poiIcon(p, cfg){
+    const pr=this.priceOf(p), br=(p.asset==='Lodging')?brandOf(p.name):null;
+    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]});
+    const col=br?br.color:'';
+    let h='<span class="poi-chip'+(pr?' has-price':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
+      + (br ? '<span class="chip-b">'+esc(br.tag)+'</span>' : icon(cfg.icon,13))
+      + (pr ? '<span class="chip-p">'+esc(fmtMoney(pr.amt))+'</span>' : '')
+      + '</span>';
+    return L.divIcon({html:h, className:'poi-chip-ic', iconSize:[0,0], iconAnchor:[0,0]});
+  }
+  refreshPin(p){
+    const mk=this.poiMarker[p.i];
+    if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
   }
 
   /* ---------- weather ---------- */
@@ -1292,12 +1389,30 @@ class TrailApp {
     const start=new Date(now.getFullYear(),now.getMonth(),now.getDate()+d,8,0,0,0).getTime();
     return (d===0 && now.getTime()>start) ? now.getTime() : start;
   }
-  wxLegSamples(leg){
-    const sp=this.avgSpeed>0?this.avgSpeed:12, dep=this.wxDepart(leg.d);
-    return [0.5,1].map(f=>{
+  /* Three grid points per day, start / middle / end. Each one hands back 150-odd
+     hourly periods, so an hour-by-hour chart costs nothing beyond these three calls:
+     for any given hour we read the anchor nearest to where you'd be. That is what a
+     gridded forecast means, so the chart is real data throughout rather than a curve
+     drawn between two dots. Day boundaries share a milepost, so the cache absorbs one
+     of the three on every day after the first. */
+  wxLegAnchors(leg){
+    return [0,0.5,1].map(f=>{
       const mile=leg.from+(leg.to-leg.from)*f, p=this.routePtAt(mile);
-      return {mile, lat:p[0], lng:p[1], hdg:this.routeBearing(mile), when: dep + (leg.miles*f/sp)*36e5};
+      return {mile, lat:p[0], lng:p[1]};
     });
+  }
+  wxLegSeries(leg){
+    const sp=this.avgSpeed>0?this.avgSpeed:12, dep=this.wxDepart(leg.d);
+    const steps=Math.max(1, Math.min(14, Math.ceil(leg.miles/sp)));
+    const out=[];
+    for(let i=0;i<=steps;i++){
+      const f=i/steps, mile=leg.from+(leg.to-leg.from)*f;
+      const when=dep+(leg.miles*f/sp)*36e5;
+      let best=null, bd=Infinity;
+      (leg.anchors||[]).forEach(a=>{ const d=abs(a.mile-mile); if(a.periods && d<bd){ bd=d; best=a; } });
+      out.push({mile, when, hdg:this.routeBearing(mile), w: best?this.wxAt(best.periods, when):null});
+    }
+    return out;
   }
   /* Mean rather than worst for the wind: one gusty sample shouldn't brand a whole day
      a headwind day. Rain and temperature take their extremes, because those are what
@@ -1334,15 +1449,60 @@ class TrailApp {
     if(legs.err){ this.wxPlan={err:legs.err}; this.renderOutlook(); return; }
     this.wxBusy=true; this.wxPlan={loading:true}; this.renderOutlook();
     const jobs=[];
-    legs.forEach(leg=>{ leg.samples=this.wxLegSamples(leg); leg.samples.forEach(x=>jobs.push(x)); });
-    await Promise.allSettled(jobs.map(async x=>{
-      const periods=await this.nwsHourly(x.lat,x.lng);
-      x.w=this.wxAt(periods, x.when);
-    }));
-    legs.forEach(leg=>{ leg.sum=this.wxSummary(leg.samples); });
+    legs.forEach(leg=>{ leg.anchors=this.wxLegAnchors(leg); leg.anchors.forEach(a=>jobs.push(a)); });
+    await Promise.allSettled(jobs.map(async a=>{ a.periods=await this.nwsHourly(a.lat,a.lng); }));
+    legs.forEach(leg=>{ leg.series=this.wxLegSeries(leg); leg.sum=this.wxSummary(leg.series); });
     this.wxBusy=false;
     this.wxPlan={legs, at:Date.now(), got:legs.filter(l=>l.sum).length};
     this.renderOutlook();
+  }
+  /* An hour of riding per column: temperature as a line, rain as bars off the
+     baseline, and a wind arrow under each hour turned the way it blows and coloured
+     by what it does to you. Plain inline SVG on a viewBox — it scales to any phone,
+     needs no library, and prints the numbers it is drawing so the picture never has
+     to be trusted on its own. */
+  wxChart(leg){
+    const S=(leg.series||[]).filter(x=>x.w);
+    if(S.length<2) return '';
+    const W=320, H=126, L=8, R=8, span=W-L-R;
+    const x=i=>L+span*(i/(S.length-1));
+    const temps=S.map(p=>p.w.temperature).filter(t=>t!=null && isFinite(t));
+    if(!temps.length) return '';
+    let tMin=Math.min.apply(null,temps), tMax=Math.max.apply(null,temps);
+    if(tMax-tMin<4){ const m=(tMin+tMax)/2; tMin=m-2; tMax=m+2; }
+    const ty=t=>52-((t-tMin)/(tMax-tMin))*36;      // temperature band, y 16..52
+    const BASE=88, RAIN=30;                         // rain grows up from the baseline
+    let g='<svg class="wx-svg" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Hourly forecast along the day\u2019s ride">';
+    g+='<line class="wx-ax" x1="'+L+'" y1="'+BASE+'" x2="'+(W-R)+'" y2="'+BASE+'"/>';
+    const bw=Math.max(4, Math.min(16, span/S.length*0.55));
+    S.forEach((p,i)=>{
+      const pop=p.w.probabilityOfPrecipitation ? p.w.probabilityOfPrecipitation.value : null;
+      if(!pop) return;
+      const hgt=Math.max(1.5, (pop/100)*RAIN);
+      g+='<rect class="wx-rain" x="'+(x(i)-bw/2).toFixed(1)+'" y="'+(BASE-hgt).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="1.5"/>';
+    });
+    const pts=S.map((p,i)=> p.w.temperature==null?null:x(i).toFixed(1)+','+ty(p.w.temperature).toFixed(1)).filter(Boolean);
+    g+='<polyline class="wx-temp" points="'+pts.join(' ')+'"/>';
+    S.forEach((p,i)=>{ if(p.w.temperature!=null) g+='<circle class="wx-dot" cx="'+x(i).toFixed(1)+'" cy="'+ty(p.w.temperature).toFixed(1)+'" r="2"/>'; });
+    // The high and the low get printed; the rest of the curve is shape, not data.
+    const iHi=S.findIndex(p=>p.w.temperature===tMax), iLo=S.findIndex(p=>p.w.temperature===tMin);
+    if(iHi>=0) g+='<text class="wx-tl" x="'+x(iHi).toFixed(1)+'" y="'+(ty(tMax)-6).toFixed(1)+'" text-anchor="middle">'+tMax+'\u00b0</text>';
+    if(iLo>=0 && iLo!==iHi) g+='<text class="wx-tl" x="'+x(iLo).toFixed(1)+'" y="'+(ty(tMin)+13).toFixed(1)+'" text-anchor="middle">'+tMin+'\u00b0</text>';
+    S.forEach((p,i)=>{
+      const r=this.wxRead(p), k=this.wxKind(r);
+      if(r.from==null) return;
+      const rot=(r.from+180)%360, cx=x(i).toFixed(1);
+      g+='<text class="wx-ar wx-'+k+'" x="'+cx+'" y="103" text-anchor="middle" transform="rotate('+Math.round(rot)+' '+cx+' 99)">\u2191</text>';
+    });
+    // Thin the clock labels so they never collide on a narrow screen.
+    const every=Math.max(1, Math.ceil(S.length/5));
+    S.forEach((p,i)=>{
+      if(i%every && i!==S.length-1) return;
+      const t=new Date(p.when).toLocaleTimeString([], {hour:'numeric'}).replace(/\s?([AP])M/i,(m,a)=>a.toLowerCase());
+      const anch=i===0?'start':i===S.length-1?'end':'middle';
+      g+='<text class="wx-xl" x="'+x(i).toFixed(1)+'" y="120" text-anchor="'+anch+'">'+esc(t)+'</text>';
+    });
+    return g+'</svg>';
   }
   renderOutlook(){
     const el=this.$('wxOut'); if(!el) return;
@@ -1372,6 +1532,8 @@ class TrailApp {
         h+='<div class="wx-day-w">'+bits.join(' \u00b7 ')+'</div>';
         const ww=this.windWord(s.head, s.cross);
         h+='<div class="wx-wind wx-'+ww.cls+'">'+icon('wind',15)+'<span>'+esc(ww.txt)+'</span></div>';
+        h+=this.wxChart(leg);
+        h+='<div class="wx-key"><span class="wx-k-t">temperature</span><span class="wx-k-r">rain %</span><span class="wx-k-w">wind, pointing the way it blows</span></div>';
       }
       h+='</div>';
     });
@@ -1481,6 +1643,15 @@ class TrailApp {
       const off=offTrailTxt(p.off);
       if(off) h+='<br><span style="opacity:.65">'+esc(off.replace(/^ · /,''))+'</span>';
     }
+    // Right under the rates link, because the loop is: tap out, look it up, come back.
+    if(p.asset==='Lodging'||p.asset==='Campground'){
+      const pr=this.priceOf(p);
+      h+='<div class="pr-row" data-pi="'+p.i+'"><span class="pr-c">$</span>'
+        +'<input class="pr-amt" type="number" min="0" step="1" inputmode="decimal" placeholder="rate" value="'+(pr?esc(pr.amt):'')+'">'
+        +'<input class="pr-date" type="date" value="'+esc(pr&&pr.date?pr.date:this.arrivalDate(p))+'">'
+        +'<button type="button" class="pr-save">Save</button>'
+        +(pr?'<button type="button" class="pr-clear">Clear</button>':'')+'</div>';
+    }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
     const lk=['<button type="button" class="pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
@@ -1518,8 +1689,9 @@ class TrailApp {
       const items=byCat[asset]; if(!items||!items.length) return;
       const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
       items.forEach(p=>{
-        const mk=L.marker([p.lat,p.lng],{icon:L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]})});
+        const mk=L.marker([p.lat,p.lng],{icon:this.poiIcon(p,cfg)});
         mk.bindPopup('',{maxWidth:280,minWidth:200,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
+        this.poiMarker[p.i]=mk;
         g.addLayer(mk);
       });
       this.poiLayers[asset]=g; if(def) g.addTo(this.map);

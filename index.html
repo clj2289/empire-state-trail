@@ -117,6 +117,51 @@
   /* Weather pins carry their reading in the label — a bare marker would mean tapping
      six of them to learn what the layer is for. The arrow flies the way the wind
      blows, and the colour says whether that helps you or costs you. */
+  /* A chain wordmark or a rate you looked up, in place of the generic bed. Anchored
+     at 0,0 so the chip can size itself to its text and still sit on its coordinate. */
+  .poi-chip-ic{background:none;border:0;overflow:visible}
+  .poi-chip{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;gap:3px;
+    padding:2px 5px;white-space:nowrap;font-family:var(--font-body);font-size:10px;font-weight:700;
+    letter-spacing:.02em;line-height:1;background:var(--color-bg);color:var(--color-neutral-700);
+    border:1.5px solid var(--color-neutral-400);border-radius:999px;box-shadow:var(--shadow-md)}
+  .poi-chip .ic{flex:none}
+  .poi-chip .chip-p{padding-left:3px;border-left:1px solid var(--color-divider);
+    color:var(--color-text);font-variant-numeric:tabular-nums}
+  .poi-chip.has-price{border-width:2px}
+  /* A rate you saved, in the row and in the popup. */
+  .poi-pr{flex:0 0 auto;font-size:11px;font-weight:700;color:var(--color-text);
+    font-variant-numeric:tabular-nums}
+  .pr-row{display:flex;align-items:center;gap:4px;margin-top:6px;padding-top:6px;
+    border-top:1px solid var(--color-divider)}
+  .pr-c{font-size:12px;color:var(--color-neutral-600)}
+  .pr-amt{width:52px}
+  .pr-date{width:112px}
+  .pr-row input{min-width:0;font-family:inherit;font-size:12px;padding:4px 6px;
+    background:var(--color-surface);color:var(--color-text);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .pr-row button{font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;
+    padding:4px 7px;background:transparent;border:1px solid var(--color-divider);
+    border-radius:var(--radius-md);color:var(--color-accent-700)}
+  .pr-row button:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  /* The day chart: an hour of riding per column. */
+  .wx-svg{display:block;width:100%;height:auto;margin-top:var(--space-2);overflow:visible}
+  .wx-ax{stroke:var(--color-divider);stroke-width:1}
+  .wx-rain{fill:var(--color-accent);opacity:.3}
+  .wx-temp{fill:none;stroke:var(--color-accent-800);stroke-width:1.75;
+    stroke-linejoin:round;stroke-linecap:round}
+  .wx-dot{fill:var(--color-accent-800)}
+  .wx-tl{fill:var(--color-text);font-family:var(--font-body);font-size:10px;font-weight:700}
+  .wx-xl{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:9px}
+  .wx-ar{font-size:13px;font-weight:700}
+  text.wx-head{fill:#b3261e}
+  text.wx-tail{fill:#146c2e}
+  text.wx-cross{fill:var(--color-neutral-500)}
+  .wx-key{display:flex;flex-wrap:wrap;gap:10px;margin-top:3px;font-size:10px;color:var(--color-neutral-500)}
+  .wx-key span::before{content:"";display:inline-block;width:8px;height:8px;margin-right:4px;
+    border-radius:2px;vertical-align:-1px}
+  .wx-k-t::before{background:var(--color-accent-800)}
+  .wx-k-r::before{background:var(--color-accent);opacity:.4}
+  .wx-k-w::before{background:var(--color-neutral-400)}
   .wx-ic{background:none;border:0}
   .wx-pin{display:flex;align-items:center;gap:3px;padding:2px 5px;white-space:nowrap;
     font-family:var(--font-body);font-size:11px;font-weight:600;line-height:1;
