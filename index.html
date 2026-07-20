@@ -143,6 +143,28 @@
     padding:4px 7px;background:transparent;border:1px solid var(--color-divider);
     border-radius:var(--radius-md);color:var(--color-accent-700)}
   .pr-row button:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  /* What a pin costs you to reach, as figures rather than a sentence. */
+  .rd-row{display:flex;gap:5px;margin:8px 0 2px;text-align:center;
+    font-variant-numeric:tabular-nums}
+  .rd-c{flex:1;min-width:0;padding:4px 2px;background:var(--color-neutral-100);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .rd-c b{display:block;font-size:15px;line-height:1.15;color:var(--color-text)}
+  .rd-c>span{display:block;margin-top:1px;font-size:9px;letter-spacing:.04em;
+    text-transform:uppercase;color:var(--color-neutral-600)}
+  .rd-off{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .rd-off b{color:var(--color-accent-800)}
+  .rd-note{font-size:11px;color:var(--color-neutral-600)}
+  /* Mileposts: a number on the line, a dot where it actually falls. */
+  .leaflet-marker-icon.mp-ic{background:none;border:0;overflow:visible;pointer-events:none}
+  .mp-lb{display:flex;flex-direction:column;align-items:center;gap:1px}
+  .mp-n{pointer-events:auto;cursor:pointer;padding:1px 4px;font-family:var(--font-body);
+    font-size:10px;font-weight:700;line-height:1.3;color:var(--color-neutral-800);
+    background:var(--color-bg);border:1px solid currentColor;border-radius:var(--radius-md);
+    box-shadow:var(--shadow-sm);font-variant-numeric:tabular-nums}
+  .mp-maj{font-size:11.5px}
+  .mp-dot{width:5px;height:5px;border-radius:50%;background:currentColor;
+    box-shadow:0 0 0 1.5px var(--color-bg)}
+  .mp-tick{opacity:.9}
   /* The day chart: stacked panels over one time axis, an hour of riding per column. */
   .wx-svg{display:block;width:100%;height:auto;margin-top:var(--space-2);overflow:visible}
   .wx-ax{stroke:var(--color-neutral-400);stroke-width:1}
@@ -422,6 +444,9 @@
     background:var(--color-accent);border:0;border-radius:var(--radius-md)}
   .mv-go:hover{background:var(--color-accent-700)}
   .mv-go:active{background:var(--color-accent-900)}
+  .mv-ll{margin-top:2px;font-size:10.5px;color:var(--color-neutral-500);
+    font-variant-numeric:tabular-nums}
+  .mv-lk{justify-content:center;margin-top:var(--space-2)}
   /* Chips are a left-reading list, so they opt out of the dialog's centred column. */
   .mv-find{text-align:left}
   .mv-find .pa-row{justify-content:flex-start}
@@ -534,7 +559,7 @@
           <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
           <label>Days <input id="wxDays" type="number" min="1" max="6" step="1" inputmode="numeric" placeholder="4"></label>
         </div>
-        <div class="wx-dest"><label>Ending at <select id="wxDest"><option value="">nowhere in particular — just ride</option></select></label></div>
+        <div class="wx-dest"><label>Riding to <select id="wxDest"><option value="">nowhere in particular — just ride</option></select></label></div>
         <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
         <div id="wxOut" class="wx-out"></div>
         <p class="poi-band-note">Forecast from the US National Weather Service (api.weather.gov), read where you’d be at <b id="wxSpeedEcho">12</b> mph rather than where you are now. Wind is split into the part you ride into and the part crossing you. NWS hourly runs about six days out, which is the ceiling on days here.</p>

@@ -74,6 +74,10 @@ const fmtWin = m => abs(m-Math.round(m))<0.05 ? String(Math.round(m)) : m.toFixe
    fmtMi rounds anything over 10 to whole miles, which read as a different scale
    sitting next to the one-decimal mileposts the TOWNS table has always used. */
 const fmtMp = m => (m==null || !isFinite(m)) ? '' : m.toFixed(1);
+// Intervals a person reads without doing arithmetic — no 3s, no 15s. The cap is a
+// backstop on a pathological viewport, not a design limit: at 48px a label the whole
+// trail never puts more than a few dozen on screen.
+const MILE_LADDER=[1,2,5,10,25,50,100], MILE_CAP=300;
 const mpTxt = m => { const s=fmtMp(m); return s ? 'TM '+s : ''; };
 
 /* Facility names/addresses come from a third-party service and land in innerHTML
@@ -169,11 +173,23 @@ const AMQ={store:'grocery store supermarket',lodging:'hotel motel lodging',camp:
 function iconStrTxt(t){ const c=cats(t); return AMKEYS.filter(k=>c[k]).map(k=>({store:'resupply',lodging:'lodging',camp:'camping',rail:'rail'}[k])).join(' · '); }
 
 /* ---- trail-mile projection (not crow-flies) ---- */
+/* The nearest point on the line, not the nearest vertex on it. Vertices sit about a
+   third of a mile apart, so measuring to them alone put a floor of up to a sixth of a
+   mile under every off-trail figure — and reported a tap that landed exactly on the
+   drawn line as being off it, which is now the first thing a map tap tells you.
+   Projecting onto the leg costs one dot product each and carries the mile with it,
+   interpolated the same way. Flat-earth within a leg, which at this length is exact. */
 function projectRoute(lat,lng){
-  const kx=Math.cos(lat*Math.PI/180); let best=Infinity, mile=0;
-  for(let i=0;i<ROUTE.length;i++){
-    const dy=ROUTE[i][0]-lat, dx=(ROUTE[i][1]-lng)*kx, d=dx*dx+dy*dy;
-    if(d<best){ best=d; mile=ROUTE[i][2]; }
+  const kx=Math.cos(lat*Math.PI/180);
+  let best=Infinity, mile=ROUTE[0][2];
+  for(let i=1;i<ROUTE.length;i++){
+    const a=ROUTE[i-1], b=ROUTE[i];
+    const ay=a[0]-lat, ax=(a[1]-lng)*kx, vy=b[0]-a[0], vx=(b[1]-a[1])*kx;
+    const len=vx*vx+vy*vy;
+    let t = len>0 ? -(ax*vx+ay*vy)/len : 0;
+    t = t<0?0:t>1?1:t;                       // stay on the leg, not on its extension
+    const dy=ay+vy*t, dx=ax+vx*t, d=dx*dx+dy*dy;
+    if(d<best){ best=d; mile=a[2]+(b[2]-a[2])*t; }
   }
   return {mile, off:Math.sqrt(best)*69};
 }
@@ -222,20 +238,19 @@ function findNearbyRow(lat,lng){
   return '<div class="pa-lbl">Find nearby:</div><div class="pa-row">'
     +FINDQ.map(f=>'<a href="'+searchAt(f[0],lat,lng)+'" target="_blank" rel="noopener" class="pa">'+f[1]+'</a>').join('')+'</div>';
 }
+/* A tapped point, handed to Google two ways. Street View asks for a panorama at the
+   viewpoint and falls back to the map when there is none within range, which along a
+   rail trail is common enough to be worth knowing about before you tap it. */
+function atLink(lat,lng){
+  return 'https://www.google.com/maps/search/?api=1&query='+lat.toFixed(6)+','+lng.toFixed(6);
+}
+function panoLink(lat,lng){
+  return 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+lat.toFixed(6)+','+lng.toFixed(6);
+}
 function reviewsLink(q,lat,lng){
   const u='https://www.google.com/maps/search/'+encodeURIComponent(q);
   return (lat!=null&&lng!=null&&isFinite(lat)&&isFinite(lng)) ? u+'/@'+lat+','+lng+',17z' : u;
 }
-// How far off the route a facility sits. projectRoute already computes this to
-// filter POIs to within 5 mi, it was just never shown. Straight-line from the
-// nearest route vertex — the real pedal distance up whatever side road serves it
-// is longer, so this is a floor, and the wording says so rather than implying a
-// routed number we don't have. Under a tenth of a mile reads as on-trail.
-function offTrailTxt(off){
-  if(off==null || !isFinite(off) || off<0.1) return '';
-  return ' · '+fmtMi(off)+' mi off trail';
-}
-
 /* ---- live POI service (NY State ArcGIS) ---- */
 const ARC="https://services.arcgis.com/1xFZPtKn1wKC6POA/arcgis/rest/services/";
 const BBOX={xmin:-78.95,ymin:40.65,xmax:-73.55,ymax:43.35};
@@ -328,6 +343,7 @@ class TrailApp {
     // expansion. Filters start collapsed — the list is the reason you opened the tab.
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
+    this.mileLayer=null; this.mileSig='';
     this.POIS=[]; this.embLines=[];
     // Nearby-list shape only. Map pin visibility is the layers control's job.
     this.catOrder=[...CAT_ORDER]; this.catHidden=new Set();
@@ -739,8 +755,12 @@ class TrailApp {
      was about to do. Everything on screen keys off myMile, so a stray tap while
      panning silently re-sorted Nearby, the itinerary and every distance in the app.
      The popup anchors the decision to the point you actually hit and names the mile
-     before you commit — dismissing it costs nothing, which is the common case. */
-  askMove(ll){
+     before you commit — dismissing it costs nothing, which is the common case.
+     It now opens on every tap rather than only when moving is armed, because the
+     question a map tap most often asks is "what is this place" — which the milepost
+     answers roughly, and Google Maps and Street View answer exactly. Moving stays
+     behind its setting: it is the one thing here that changes the app's state. */
+  tapPopup(ll){
     if(!this.map) return;
     const pr=projectRoute(ll.lat,ll.lng);
     this.pendingLL={lat:ll.lat,lng:ll.lng};
@@ -748,10 +768,14 @@ class TrailApp {
     // elsewhere: the further off, the looser the milepost it snapped to.
     const off=pr.off>=0.1 ? '<div class="mv-s">'+fmtMi(pr.off)+' mi off the route</div>' : '';
     const delta=this.myMile==null ? '' : '<div class="mv-s">'+fmtMi(abs(pr.mile-this.myMile))+' mi from where you are now</div>';
+    const a=(u,t)=>'<a href="'+u+'" target="_blank" rel="noopener" class="pa">'+t+'</a>';
     L.popup({className:'mv-pop',autoPan:false}).setLatLng(ll).setContent(
-      '<div class="mv"><div class="mv-k">Move your location here?</div>'
+      '<div class="mv"><div class="mv-k">This spot</div>'
       +'<div class="mv-v">Trail mile '+fmtMp(pr.mile)+'</div>'+off+delta
-      +'<button type="button" class="mv-go">Move me here</button>'
+      +'<div class="mv-ll">'+ll.lat.toFixed(5)+', '+ll.lng.toFixed(5)+'</div>'
+      +'<div class="pa-row mv-lk">'+a(atLink(ll.lat,ll.lng),'Google Maps')
+      +a(panoLink(ll.lat,ll.lng),'Street View')+'</div>'
+      +(this.tapToSet?'<button type="button" class="mv-go">Move me here</button>':'')
       // Same chips the town popups carry — a tap anywhere is often about "what's
       // around here", not "put me here", and that shouldn't need a known town.
       +'<div class="mv-find">'+findNearbyRow(ll.lat,ll.lng)+'</div></div>'
@@ -1207,6 +1231,97 @@ class TrailApp {
   refreshPin(p){
     const mk=this.poiMarker[p.i];
     if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
+  }
+
+  /* ---------- mileposts ---------- */
+  /* A number every mile is right over a town and unreadable over the state, so the
+     interval is picked from how many pixels a mile is actually worth at the zoom you
+     are on rather than from a table of zoom levels: the labels land about a thumb
+     apart whatever you are looking at, and only the ones on screen get built. */
+  // Web Mercator, so this is exact rather than fitted, and the ladder below reads off it.
+  milePx(){
+    const m=this.map; if(!m) return 0;
+    const lat=m.getCenter().lat, z=m.getZoom();
+    return 256*Math.pow(2,z)*1609.344/(40075016.686*Math.cos(lat*Math.PI/180));
+  }
+  // The finest interval whose labels still clear each other — 48px is "355" and its
+  // padding, so at worst the numbers sit shoulder to shoulder and never overlap.
+  mileStep(px){
+    for(let i=0;i<MILE_LADDER.length;i++) if(MILE_LADDER[i]*px>=48) return MILE_LADDER[i];
+    return MILE_LADDER[MILE_LADDER.length-1];
+  }
+  /* Unlabelled ticks between the numbers, the way the small marks on a ruler let you
+     read a distance without counting the numbered ones. Dropped once they would crowd
+     into a dotted line, which is decoration rather than a scale. */
+  mileMinor(step,px){
+    const i=MILE_LADDER.indexOf(step)-1;
+    return (i>=0 && MILE_LADDER[i]*px>=7) ? MILE_LADDER[i] : 0;
+  }
+  // Interpolated along the leg rather than snapped to a vertex the way routePtAt is:
+  // a milepost sitting a tenth of a mile off the line looks like a mistake up close.
+  milePoint(mile){
+    const last=ROUTE[ROUTE.length-1];
+    if(mile<=ROUTE[0][2]) return [ROUTE[0][0],ROUTE[0][1]];
+    if(mile>=last[2]) return [last[0],last[1]];
+    let lo=0, hi=ROUTE.length-1;
+    while(lo<hi-1){ const m=(lo+hi)>>1; if(ROUTE[m][2]<=mile) lo=m; else hi=m; }
+    const a=ROUTE[lo], b=ROUTE[hi], den=b[2]-a[2], f=den>0?(mile-a[2])/den:0;
+    return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f];
+  }
+  // Matching the two route lines, so a milepost says which half of the trail it is on.
+  mileColor(mile){ return mile<=201.1 ? (this.accent||'#0088b0') : (this.accent2||'#d6006c'); }
+  renderMileposts(){
+    const m=this.map, g=this.mileLayer;
+    if(!m||!g||!m.hasLayer(g)) return;
+    const px=this.milePx(), step=this.mileStep(px), minor=this.mileMinor(step,px);
+    const b=m.getBounds().pad(0.2);
+    const sig=step+':'+minor+':'+[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()]
+      .map(v=>v.toFixed(3)).join(',');
+    if(sig===this.mileSig) return;      // the same stretch at the same scale — leave it be
+    this.mileSig=sig;
+    g.clearLayers();
+    let n=0;
+    for(let mi=0; mi<=TOTAL && n<MILE_CAP; mi+=(minor||step)){
+      const p=this.milePoint(mi);
+      if(!b.contains(p)) continue;      // off screen, so it costs nothing to skip
+      n++;
+      g.addLayer(mi%step===0 ? this.mileLabel(mi,p) : this.mileTick(mi,p));
+    }
+  }
+  mileLabel(mile,p){
+    const c=this.mileColor(mile);
+    const html='<div class="mp-lb" style="color:'+c+'">'
+      +'<span class="mp-n'+(mile%50===0?' mp-maj':'')+'" style="border-color:'+c+'">'+mile+'</span>'
+      +'<i class="mp-dot"></i></div>';
+    // Under everything else in the z-order: a milepost is a reference, not a
+    // destination, and it should never be the thing your thumb lands on.
+    const mk=L.marker(p,{keyboard:false, zIndexOffset:-500,
+      icon:L.divIcon({className:'mp-ic',html,iconSize:[46,26],iconAnchor:[23,26]})});
+    mk.bindPopup('',{maxWidth:250,autoPan:false});
+    mk.on('popupopen',()=>mk.setPopupContent(this.milePopup(mile,p)));
+    return mk;
+  }
+  mileTick(mile,p){
+    return L.circleMarker(p,{radius:2.2,weight:0,fillColor:this.mileColor(mile),
+      fillOpacity:.9,interactive:false,className:'mp-tick'});
+  }
+  milePopup(mile,p){
+    // Not mpTxt: these are whole miles by construction, and a trailing .0 on every
+    // one of them reads as precision that isn't being claimed.
+    const n=this.nearestTown(mile), tm='TM '+mile;
+    let h='<b>'+tm+'</b>';
+    if(n) h+='<br><span style="opacity:.65">'+esc(this.townLabel(n))+'</span>';
+    if(this.myMile!=null){
+      const gap=(mile-this.myMile)*(this.dir==='B2NYC'?-1:1);
+      h+='<br><b>~'+fmtMi(abs(gap))+' mi '+(gap>=-0.3?'ahead of you':'behind you')+'</b>';
+    }
+    h+='<br><span style="opacity:.65">'+fmtMi(mile)+' mi from Manhattan · '
+      +fmtMi(TOTAL-mile)+' mi to Buffalo</span>';
+    // Same offer a town popup makes, on the same setting: a milepost is a finer place
+    // to drop yourself than the nearest town when you are simulating a day.
+    if(this.tapToSet) h+='<button type="button" class="mv-go" data-mvlat="'+p[0]+'" data-mvlng="'+p[1]
+      +'">Move me to '+tm+'</button>';
+    return h;
   }
 
   /* ---------- weather ---------- */
@@ -1735,16 +1850,23 @@ class TrailApp {
     });
     this.stopLayer.addTo(map);
     this.layersCtl.addOverlay(this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
+    /* On from the start, unlike the weather: it costs a few divs and no requests, and
+       a trail map without mileposts makes you guess which end of the line you are
+       looking at. Redrawn on moveend — which is also what a zoom ends in. */
+    this.mileLayer=L.layerGroup().addTo(map);
+    this.layersCtl.addOverlay(this.mileLayer,'Mileposts');
+    map.on('moveend',()=>this.renderMileposts());
+    map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     // Off until asked for: it costs a dozen requests to a public service, so switching
     // it on is the fetch trigger rather than something that happens behind your back.
     this.wxLayer=L.layerGroup();
     this.layersCtl.addOverlay(this.wxLayer,'Wind &amp; weather');
     map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
     map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.renderMapSheet(); } });
-    map.on('click',e=>{ if(this.tapToSet) this.askMove(e.latlng); });
+    map.on('click',e=>this.tapPopup(e.latlng));
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
-    setTimeout(()=>map.invalidateSize(),120);
+    setTimeout(()=>{ map.invalidateSize(); this.renderMileposts(); },120);
     if(this.myLL){ // restored from a previous session — place the marker and zoom in
       this.setMyLocation(this.myLL.lat,this.myLL.lng);
       this.status('Showing your last known position — tap Locate to update it.');
@@ -1783,23 +1905,23 @@ class TrailApp {
     const mp=p.mile!=null?' · '+mpTxt(p.mile):'';
     const sub=p.sub?' · '+p.sub:'';
     let h='<b>'+esc(p.name)+'</b><br><span style="opacity:.65">'+esc(p.asset)+esc(sub)+mp+'</span>';
-    /* The popup used to print the trail leg and the spur side by side and leave the
-       addition to the reader — so the one number a rider actually wants, what this
-       costs them to reach, was the one number missing. It now leads with the total
-       and breaks it down underneath, the same total and the same wording the Nearby
-       list shows, computed the same way. The spur stays labelled as straight-line
-       (see offTrailTxt): the real pedal up whatever side road serves it is longer. */
-    const d=this.aheadMi(p), tot=this.rideMi(p);
+    /* Figures in a row, not a sentence to pick apart. Three questions get asked of a
+       pin — what does this cost me, how much of that is trail, how far off the route
+       does it sit — and the last one is the one you squint for, so it is a box of its
+       own rather than the tail of a clause. The spur is straight-line from the route,
+       so the real pedal up whatever side road serves it is longer: the + carries that
+       caveat without spending a line on it. */
+    const fig=(v,l,c)=>'<span class="rd-c'+(c?' '+c:'')+'"><b>'+v+'</b><span>'+l+'</span></span>';
+    const d=this.aheadMi(p), tot=this.rideMi(p), s=this.spurMi(p);
+    const offFig=fig(s?fmtMi(s)+'+':'0', 'mi off trail', s?'rd-off':'');
     if(tot!=null){
-      const s=this.spurMi(p), back=d<-0.3;
-      // "straight-line" was the honest caveat stated as jargon. The spur is measured
-      // direct from the route, so the real pedal up whatever side road serves it is
-      // longer — which "at least", and the + on the total, say without the vocabulary.
-      h+='<br><b>~'+fmtMi(abs(tot))+(s?'+':'')+' mi to ride'+(back?' — back the way you came':'')+'</b>';
-      if(s) h+='<br><span style="opacity:.65">'+fmtMi(abs(d))+' mi along the trail, then at least '+fmtMi(s)+' mi off it</span>';
+      h+='<div class="rd-row">'+fig(fmtMi(abs(tot))+(s?'+':''),'mi to ride','')
+        +fig(fmtMi(abs(d)),'mi on trail','')+offFig+'</div>';
+      if(d<-0.3) h+='<div class="rd-note">Back the way you came.</div>';
     } else {
-      const off=offTrailTxt(p.off);
-      if(off) h+='<br><span style="opacity:.65">'+esc(off.replace(/^ · /,''))+'</span>';
+      // No position yet, so the trail leg is unknowable — but the spur never was.
+      h+='<div class="rd-row">'+offFig+'</div>'
+        +'<div class="rd-note">Set your location for the ride to it.</div>';
     }
     // Right under the rates link, because the loop is: tap out, look it up, come back.
     if(p.asset==='Lodging'||p.asset==='Campground'){
