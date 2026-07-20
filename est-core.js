@@ -99,6 +99,11 @@ const ME_BLUE='#1a73e8', ME_PANE='mePane';
 const OFF_TRAIL_MI=60;
 // Zoom at which pins start showing their names beside them.
 const POI_LABEL_Z=13;
+/* Above every pane Leaflet ships (popups are the highest at 700) and every pane the
+   layer registry makes at 600, so a hovered pin is never behind anything. */
+const HI_PANE_Z='1200';
+// Beats any z-index Leaflet derives from a marker's y position within the same pane.
+const HI_Z_OFFSET=100000;
 
 /* ---- NYSDOT traffic counts -------------------------------------------------
    The AADT layer behind the state's Traffic Data Viewer: annual average daily
@@ -1481,6 +1486,7 @@ class TrailApp {
     // a filter or a category toggle lands in both without either owning the state.
     const mounts=[this.$('poiList'), this.$('panelList')].filter(Boolean);
     if(!mounts.length) return;
+    this.clearPoiHi();
     const list={ set innerHTML(v){ mounts.forEach(m=>{ m.innerHTML=v; }); } };
     if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
     // The two controls are orthogonal: the chips decide which groups appear and in
@@ -1625,11 +1631,36 @@ class TrailApp {
      answers "where", and without this you had to read a name here and then hunt for
      it among forty identical dots there. Delegated, so it survives every re-render.
      Also lights the label, which is the part that actually identifies the pin. */
+  /* Puts everything the highlight touched back. Also called before each list rebuild:
+     a re-render drops the row you were pointing at without ever firing pointerout, so
+     without this a pan left pins lit behind you, one per row you had passed over. */
+  clearPoiHi(){
+    const mk=this._hiMk;
+    if(mk){
+      const n=mk.getElement&&mk.getElement();
+      if(n) n.classList.remove('is-hi');
+      if(mk.setZIndexOffset) mk.setZIndexOffset(0);
+      this._hiMk=null;
+    }
+    if(this._hiPane){ this._hiPane.style.zIndex=this._hiPaneZ||''; this._hiPane=null; this._hiPaneZ=null; }
+  }
   wirePoiHover(){
     const mark=(el,on)=>{
       const id=el&&el.dataset?el.dataset.poi:null; if(id==null) return;
       const mk=this.poiMarker[id]; if(!mk||!mk.getElement) return;
-      const node=mk.getElement(); if(node) node.classList.toggle('is-hi',on);
+      if(!on){ if(this._hiMk===mk) this.clearPoiHi(); return; }
+      this.clearPoiHi();
+      const node=mk.getElement(); if(!node) return;
+      node.classList.add('is-hi');
+      /* Two axes to win, and CSS alone loses both. Within a pane Leaflet derives each
+         marker's z-index from its y position, so a neighbour further down the screen
+         outranks any fixed value — hence the offset, which is Leaflet's own lever.
+         Across panes, each layer owns one and a pane is a stacking context, so the
+         pane has to rise too or the pin stays under the layer stacked above it. */
+      if(mk.setZIndexOffset) mk.setZIndexOffset(HI_Z_OFFSET);
+      this._hiMk=mk;
+      const pane=node.parentElement;
+      if(pane){ this._hiPane=pane; this._hiPaneZ=pane.style.zIndex; pane.style.zIndex=HI_PANE_Z; }
     };
     // pointerover/out rather than mouseenter/leave: those don't bubble, and the rows
     // are replaced wholesale on every filter change.

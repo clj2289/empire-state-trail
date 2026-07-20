@@ -580,7 +580,9 @@
      Magenta is the app's rare second accent, so a lit pin reads as the one you are
      pointing at even in a field of forty cyan ones. Label comes on with it at any
      zoom: the ring says where, the name says which. */
-  .leaflet-marker-icon.is-hi{z-index:1000 !important}
+  /* No z-index here on purpose. Leaflet writes each marker's z-index inline from its
+     y position, and an !important rule here beat its own setZIndexOffset — pinning the
+     lit marker at 1000 while its neighbours climbed past 30000. The offset does it. */
   .is-hi .poi-lbl{display:block;color:var(--color-bg);background:var(--color-accent-2)}
   .is-hi .poi-pin{background:var(--color-accent-2);transform:scale(1.35);
     box-shadow:0 0 0 5px color-mix(in srgb,var(--color-accent-2) 30%,transparent),0 2px 6px rgba(0,0,0,.5)}
