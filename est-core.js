@@ -93,6 +93,12 @@ const EST_SRC='https://empiretrail.ny.gov/import-instructions';
    so nothing can cover it: not a road line, not forty lodging pins, not a milepost.
    Below the popup pane, though — a popup you cannot read is worse. */
 const ME_BLUE='#1a73e8', ME_PANE='mePane';
+/* Past this far from the route you are not on the trail, you are planning a trip to
+   it. Generous on purpose: a rider detouring to a motel, a diner or an airport is
+   still riding this trail, and only a genuinely different-state fix should trip it. */
+const OFF_TRAIL_MI=60;
+// Zoom at which pins start showing their names beside them.
+const POI_LABEL_Z=13;
 
 /* ---- NYSDOT traffic counts -------------------------------------------------
    The AADT layer behind the state's Traffic Data Viewer: annual average daily
@@ -182,6 +188,7 @@ const safeUrl = u => /^https?:\/\//i.test(String(u||'')) ? esc(u) : '';
 const P = {
   map:'M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z|c12 10 3',
   next:'M13 5l7 7-7 7|M5 5l7 7-7 7',
+  plus:'M12 5v14|M5 12h14', minus:'M5 12h14',
   list:'M8 6h13|M8 12h13|M8 18h13|M3.5 6h.01|M3.5 12h.01|M3.5 18h.01',
   near:'c12 12 9|c12 12 3|M12 3v3|M12 18v3|M3 12h3|M18 12h3',
   gear:'M4 6h10|M18 6h2|M4 12h2|M10 12h10|M4 18h6|M14 18h6|c14 6 2|c8 12 2|c12 18 2',
@@ -564,11 +571,18 @@ class TrailApp {
     this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
     this.showWx=true; this.wxPerDay=60; this.wxDays=4; this.wxPlan=null; this.wxBusy=false;
     this.prices={}; this.poiMarker={};
+    // Planning mode: no usable trail position, so distances run from the start of the
+    // trip. offTrail records how far a real fix was, for the note that explains it.
+    this.planning=false; this.offTrail=0;
     // Absolute stretch of trail to list, independent of the rider. The mileage band
     // above it asks "how far from me", which needs a location and moves as you ride;
     // this asks "what's between mile X and Y", which answers the map-shaped question
     // — that cluster around Syracuse, what is it — and works with no GPS at all.
     this.mpFrom=null; this.mpTo=null;
+    // On by default: panning the map is the most direct way to ask "what's over
+    // there", so the range tracks the view until the rider takes the wheel by
+    // typing a bound themselves.
+    this.followMap=true;
     // Nearby list: optional day-planning band (trail miles ahead) + per-category
     // expansion. Filters start collapsed — the list is the reason you opened the tab.
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
@@ -587,6 +601,15 @@ class TrailApp {
   $(id){ return document.getElementById(id); }
   destName(){ return this.dir==='B2NYC' ? 'NYC' : 'Buffalo'; }
   travelOrder(){ return [...TOWNS].sort((a,b)=> this.dir==='B2NYC' ? b.mi-a.mi : a.mi-b.mi); }
+  /* Where the trip starts in the current direction of travel — Buffalo heading east,
+     Manhattan heading west. Planning from out of state anchors here, so the app is
+     useful before you fly in without ever pretending the anchor is a GPS fix. */
+  anchorTown(){ return this.travelOrder()[0]; }
+  anchorName(){ const t=this.anchorTown(); return t ? t.n.replace(/ *\/.*$/,'') : 'Buffalo'; }
+  applyAnchor(){
+    const t=this.anchorTown(); if(!t) return;
+    this.planning=true; this.myMile=t.mi;
+  }
   isAhead(t){ return this.dir==='B2NYC' ? t.mi < this.myMile-0.3 : t.mi > this.myMile+0.3; }
   visibleStops(){
     if(this.myMile==null || this.showPassed) return this.travelOrder();
@@ -626,8 +649,15 @@ class TrailApp {
     if(['shut','peek','half','full'].indexOf(p.panelSnap)>=0) this.panelSnap=p.panelSnap;
     if(p.myLL && isFinite(p.myLL.lat) && isFinite(p.myLL.lng)){
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
-      this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
+      const pr=projectRoute(this.myLL.lat,this.myLL.lng);
+      // Same guard the live fix gets — a stored out-of-state position must not come
+      // back from localStorage as a trail mile either.
+      if(pr.off>OFF_TRAIL_MI){ this.offTrail=Math.round(pr.off); this.applyAnchor(); }
+      else this.myMile=pr.mile;
     }
+    // Nothing usable stored: plan from the start of the trip rather than opening on a
+    // whole-state view with every distance blank.
+    if(this.myMile==null) this.applyAnchor();
     if(isFinite(p.avgSpeed)&&p.avgSpeed>0) this.avgSpeed=p.avgSpeed;
     if(typeof p.showWx==='boolean') this.showWx=p.showWx;
     if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
@@ -654,11 +684,44 @@ class TrailApp {
     const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
     const c=this.$('mpFrom'); if(c && this.mpFrom!=null) c.value=this.mpFrom;
     const d=this.$('mpTo'); if(d && this.mpTo!=null) d.value=this.mpTo;
+    if(typeof p.followMap==='boolean') this.followMap=p.followMap;
+    const fm=this.$('mpFollow'); if(fm) fm.checked=this.followMap;
+    this.syncFollowUi();
   }
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxDays:this.wxDays,
-      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
+      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
       catOrder:this.catOrder,catHidden:[...this.catHidden],lyrOrder:this.lyrOrder})); }catch(e){}
+  }
+  /* While following, the two boxes are an output, not an input — say so rather than
+     leaving a rider typing into fields the next pan silently overwrites. */
+  syncFollowUi(){
+    const on=this.followMap;
+    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el){ el.readOnly=on; el.classList.toggle('is-auto',on); } });
+    const pv=this.$('mpFromMap'); if(pv) pv.disabled=on;
+    const pc=this.$('mpClear'); if(pc) pc.disabled=on;
+  }
+  /* Called on every moveend. Re-renders only when the rounded range actually
+     changes, so nudging the map a few pixels doesn't rebuild both lists. */
+  syncRangeToMap(){
+    if(!this.followMap) return;
+    const r=this.mileRangeInView();
+    // Panned off the route entirely — keep the last stretch rather than blanking
+    // the list, which would read as "there is nothing here".
+    if(!r) return;
+    const lo=Math.floor(r.lo), hi=Math.ceil(r.hi);
+    if(lo===this.mpFrom && hi===this.mpTo) return;
+    this.mpFrom=lo; this.mpTo=hi;
+    const a=this.$('mpFrom'); if(a) a.value=lo;
+    const b=this.$('mpTo'); if(b) b.value=hi;
+    this.savePrefs(); this.renderNearby();
+  }
+  /* Any manual edit to the range takes the wheel back from the map. */
+  stopFollowing(){
+    if(!this.followMap) return;
+    this.followMap=false;
+    const fm=this.$('mpFollow'); if(fm) fm.checked=false;
+    this.syncFollowUi();
   }
   /* Summary shown on the collapsed header. A filter you can't see is a filter you
      forget you set, so the closed state has to say when something is narrowing. */
@@ -858,7 +921,9 @@ class TrailApp {
     this.setTabsHidden(false);
     this.tabs.forEach(b=>{ const on=b.dataset.tab===name; b.classList.toggle('active',on); b.setAttribute('aria-current', on?'page':'false'); });
     this.screens.forEach(s=>{ s.classList.toggle('active', s.dataset.screen===name); });
-    if(name==='map' && this.map){ setTimeout(()=>{ this.map.invalidateSize(); if(this.myLL) this.map.setView([this.myLL.lat,this.myLL.lng]); },60); }
+    // Only resize. Recentring here threw away wherever you had panned to the moment
+    // you glanced at another tab and came back.
+    if(name==='map' && this.map){ setTimeout(()=>this.map.invalidateSize(),60); }
   }
 
   /* ---------- controls ---------- */
@@ -875,6 +940,8 @@ class TrailApp {
     const tr=this.$('showTrip'); if(tr) tr.addEventListener('change',e=>{ this.showTrip=e.target.checked; this.savePrefs(); this.applyTripTab(); });
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
     const rc=this.$('recenterBtn'); if(rc) rc.addEventListener('click',()=>this.recenter());
+    const zi=this.$('zoomInBtn'); if(zi) zi.addEventListener('click',()=>{ if(this.map) this.map.zoomIn(); });
+    const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ if(this.map) this.map.zoomOut(); });
     const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.savePrefs(); this.renderItin(); });
     const tp=this.$('tapToSet'); if(tp) tp.addEventListener('change',e=>{ this.tapToSet=e.target.checked; this.savePrefs();
       this.status(this.tapToSet?'Tapping the map will offer to move you there.':'Map taps no longer move you — use Locate or a simulated spot.'); });
@@ -926,9 +993,17 @@ class TrailApp {
       this.mpFrom=g('mpFrom'); this.mpTo=g('mpTo');
       this.savePrefs(); this.renderNearby();
     };
-    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readRange); });
+    // Typing a bound is the rider overriding the map, so it stops the follow. Safe
+    // from feedback loops: syncRangeToMap assigns .value, which fires no input event.
+    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',()=>{ this.stopFollowing(); readRange(); }); });
+    const fm=this.$('mpFollow');
+    if(fm) fm.addEventListener('change',()=>{
+      this.followMap=fm.checked; this.syncFollowUi(); this.savePrefs();
+      if(this.followMap){ this.syncRangeToMap(); this.status('Trail mile range now follows the map view.'); }
+      else this.status('Trail mile range held — pan the map without changing it.');
+    });
     const pc=this.$('mpClear');
-    if(pc) pc.addEventListener('click',()=>{ ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readRange(); });
+    if(pc) pc.addEventListener('click',()=>{ this.stopFollowing(); ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readRange(); });
     const pv=this.$('mpFromMap');
     if(pv) pv.addEventListener('click',()=>{
       const r=this.mileRangeInView();
@@ -988,6 +1063,9 @@ class TrailApp {
   }
   flipDir(){
     this.dir = this.dir==='B2NYC' ? 'NYC2B' : 'B2NYC';
+    // The anchor is the start of the trip, so flipping the direction moves it to the
+    // other end of the state. Only while planning — a real fix is a real fix.
+    if(this.planning) this.applyAnchor();
     this.renderDirLabels();
     this.savePrefs();
     this.renderAll();
@@ -996,7 +1074,9 @@ class TrailApp {
     if(!('geolocation' in navigator)){ this.status('No geolocation — pick a simulated spot in Settings, or tap the map.'); return; }
     this.status('Locating…');
     navigator.geolocation.getCurrentPosition(
-      p=>{ this.setMyLocation(p.coords.latitude,p.coords.longitude); this.status('Location on — updates as you move.');
+      // The first fix earns a recentre because you asked for it by tapping Locate.
+      // The watch that follows does not: it fires while you are reading the map.
+      p=>{ this.setMyLocation(p.coords.latitude,p.coords.longitude,true); this.status('Location on — updates as you move.');
         navigator.geolocation.watchPosition(q=>this.setMyLocation(q.coords.latitude,q.coords.longitude),()=>{},{enableHighAccuracy:true,maximumAge:15000}); },
       e=>{ this.status('Couldn’t locate ('+e.message+'). Pick a simulated spot, or tap the map.'); },
       {enableHighAccuracy:true,timeout:12000});
@@ -1044,8 +1124,28 @@ class TrailApp {
     this.setMyLocation(ll.lat,ll.lng);
     this.status('Location set from your map tap.');
   }
-  setMyLocation(lat,lng){
-    this.myMile=projectMile(lat,lng); this.myLL={lat,lng};
+  /* `move` is opt-in, and that is the whole point. This used to recentre on every
+     call — including each watchPosition tick — so panning the map to read the pins
+     around Syracuse got yanked back to the rider's real fix a few seconds later,
+     over and over. Only a deliberate Locate or Recenter moves the map now. */
+  setMyLocation(lat,lng,move){
+    const pr=projectRoute(lat,lng);
+    // A fix hundreds of miles from the route is not a position on the trail. Left
+    // unguarded it still projected onto a milepost, so planning from out of state
+    // silently re-sorted Nearby and the itinerary around a fictional trail mile.
+    if(pr.off>OFF_TRAIL_MI){
+      this.myLL={lat,lng}; this.myMile=null; this.offTrail=Math.round(pr.off);
+      this.applyAnchor();
+      // Recentre on the anchor, not on the rider: dropping someone who tapped Locate
+      // onto blank map a thousand miles from any trail answers nothing.
+      const t=this.anchorTown();
+      if(this.map && move && t) this.map.setView([t.lat,t.lng],11);
+      this.savePrefs(); this.renderAll();
+      this.status('You are ~'+this.offTrail+' mi from the trail, so distances are planned from '+this.anchorName()+' instead. They switch to your real position once you are on the route.');
+      return;
+    }
+    this.offTrail=0; this.planning=false;
+    this.myMile=pr.mile; this.myLL={lat,lng};
     if(this.map){ const ll=[lat,lng];
       // dark fill, not --color-accent: that's the Hudson Valley stop color, so
       // "you are here" used to blend into the very dots it should stand out from
@@ -1053,7 +1153,7 @@ class TrailApp {
         radius:8,weight:3,color:'#fff',fillColor:ME_BLUE,fillOpacity:1,className:'me-dot'})
         .addTo(this.map).bindPopup('You are here'); }
       else this.myMarker.setLatLng(ll);
-      this.map.setView(ll, Math.max(this.map.getZoom(),10));
+      if(move) this.map.setView(ll, Math.max(this.map.getZoom(),10));
     }
     this.savePrefs();
     this.renderAll();
@@ -1134,7 +1234,13 @@ class TrailApp {
     // that stays distinct whichever way you're travelling.
     const ridden = this.dir==='B2NYC' ? TOTAL-this.myMile : this.myMile;
     const pct = Math.max(0,Math.min(100,(ridden/TOTAL)*100));
-    let h='<div class="sheet-row"><div><div class="sheet-k">Trail mile</div><div class="sheet-v">'+fmtMp(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
+    // Every figure below is measured from myMile. When that is an anchor rather than a
+    // fix, saying so once here is the difference between a plan and a wrong readout.
+    let h = this.planning
+      ? '<div class="sheet-plan">Planning from <b>'+esc(this.anchorName())+'</b>'
+        +(this.offTrail?' · you are ~'+this.offTrail+' mi away':'')
+        +' — distances switch to your position once you are on the trail.</div>' : '';
+    h+='<div class="sheet-row"><div><div class="sheet-k">'+(this.planning?'Starting at':'Trail mile')+'</div><div class="sheet-v">'+fmtMp(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
       +'<div class="sheet-r"><div class="sheet-k">ridden</div><div class="sheet-v">'+Math.round(pct)+'%</div></div></div>';
     const wl=this.wxLine();
     if(wl) h+='<div class="sheet-wx">'+esc(wl)+'</div>';
@@ -1476,13 +1582,23 @@ class TrailApp {
      that a map of forty identical pins tells you nothing you couldn't already see. */
   poiIcon(p, cfg){
     const pr=this.priceOf(p), br=(p.asset==='Lodging')?brandOf(p.name):null;
-    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]});
+    // Every pin carries its name. Hidden by CSS until the map is zoomed in past
+    // POI_LABEL_Z, or the pin is hovered — a field of identical dots you have to tap
+    // one at a time to identify is the thing this is fixing.
+    const lbl='<span class="poi-lbl">'+esc(p.name)+'</span>';
+    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>'+lbl,className:'poi-ic',iconSize:[28,28],iconAnchor:[14,14]});
     const col=br?br.color:'';
     let h='<span class="poi-chip'+(pr?' has-price':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
       + (br ? '<span class="chip-b">'+esc(br.tag)+'</span>' : icon(cfg.icon,13))
       + (pr ? '<span class="chip-p">'+esc(fmtMoney(pr.amt))+'</span>' : '')
       + '</span>';
-    return L.divIcon({html:h, className:'poi-chip-ic', iconSize:[0,0], iconAnchor:[0,0]});
+    return L.divIcon({html:h+lbl, className:'poi-chip-ic', iconSize:[0,0], iconAnchor:[0,0]});
+  }
+  /* Labels are a zoom-level decision, not a per-pin one: at state scale they would be
+     a solid wall of text, and close in they are the whole point. */
+  syncPoiLabels(){
+    if(!this.map) return;
+    this.map.getContainer().classList.toggle('is-labeled', this.map.getZoom()>=POI_LABEL_Z);
   }
   refreshPin(p){
     const mk=this.poiMarker[p.i];
@@ -2420,9 +2536,9 @@ class TrailApp {
       rows.push(['Wind', mph+' mph <b style="color:'+(mph<3?'#5f6368':this.wxKindColor(kind))+'">'+word+'</b>', 1]);
       if(kind!=='cross' && r.parts.cross>=5) rows.push(['Across', Math.round(r.parts.cross)+' mph']);
     }
-    const hh=Math.round(g.h*10)/10;
+    // No subtitle: the heading already carries the clock time and the milepost, which
+    // is what the marker is being asked. Anything else here was narration.
     return '<b>'+esc(this.wxClock(g.when||Date.parse(w.startTime)))+' \u00b7 '+mpTxt(g.mile)+'</b>'
-      +'<div class="wxp-s">'+(g.h===0?'the day starts here':fmtWin(hh)+'h in at '+this.avgSpeed+' mph')+'</div>'
       +'<table class="wxp">'+rows.map(x=>'<tr><th>'+x[0]+'</th><td>'
         +(x[2]?x[1]:esc(String(x[1])))+'</td></tr>').join('')+'</table>'
       +'<a href="'+nwsLink(g.lat,g.lng)+'" target="_blank" rel="noopener">weather.gov \u2197</a>';
@@ -2785,7 +2901,11 @@ class TrailApp {
     const accent=getComputedStyle(document.body).getPropertyValue('--color-accent').trim()||'#0088b0';
     const accent2=getComputedStyle(document.body).getPropertyValue('--color-accent-2').trim()||'#d6006c';
     this.accent=accent; this.accent2=accent2;
-    const map=L.map(el,{scrollWheelZoom:false,zoomControl:true,attributionControl:true}).setView([42.9,-76.0],7);
+    // Zoom lives in the FAB stack with Find/Locate/Recenter rather than in Leaflet's
+    // top-left corner, so every map control is under one thumb.
+    // Opens on the start of the trip, not a whole-state view nobody can read.
+    const st=this.anchorTown(), home=st?[st.lat,st.lng]:[42.9,-76.0];
+    const map=L.map(el,{scrollWheelZoom:false,zoomControl:false,attributionControl:true}).setView(home, st?11:7);
     this.map=map;
     /* Above the marker pane (600) and below the popup pane (700), so where you are
        is never underneath anything you have switched on. */
@@ -2829,7 +2949,9 @@ class TrailApp {
        looking at. Redrawn on moveend — which is also what a zoom ends in. */
     this.mileLayer=L.layerGroup().addTo(map);
     this.regLayer('miles', this.mileLayer,'Mileposts');
-    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); });
+    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
+    map.on('zoomend',()=>this.syncPoiLabels());
+    this.syncPoiLabels();
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
        control. The Shoreline is free to draw; the counts cost a request per view. */

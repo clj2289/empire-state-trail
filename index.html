@@ -243,7 +243,6 @@
   .wxp th{text-align:left;padding:1px 10px 1px 0;font-weight:400;
     color:var(--color-neutral-600);white-space:nowrap}
   .wxp td{padding:1px 0}
-  .wxp-s{font-size:11px;color:var(--color-neutral-600)}
   .wx-when{display:inline-flex;align-items:center;gap:3px;padding:1px 5px;
     font-size:9.5px;font-weight:600;line-height:1.5;white-space:nowrap;
     color:var(--color-neutral-700);background:var(--color-bg);
@@ -254,6 +253,10 @@
   .wx-cross{color:var(--color-neutral-700)}
   .sheet-wx{margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-700);
     font-variant-numeric:tabular-nums}
+  /* Planning banner: every figure under it is measured from an anchor, not a fix. */
+  .sheet-plan{margin-bottom:var(--space-2);padding:5px 8px;font-size:11px;line-height:1.45;
+    color:var(--color-accent-800);background:var(--color-accent-100);
+    border-left:2px solid var(--color-accent);border-radius:var(--radius-sm)}
   /* Outlook */
   .wx-dest{margin:var(--space-2) 0}
   .wx-dest label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)}
@@ -276,6 +279,9 @@
   .wx-wind{display:flex;align-items:center;gap:5px;margin-top:4px;font-size:13px;font-weight:600}
   .wx-wind .ic{flex:none}
   .wx-asof{font-size:11px;color:var(--color-neutral-500);border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
+  /* Zoom is one control in two halves, so it sits tighter than the gap between the
+     independent FABs above it. */
+  .fab-pair{display:flex;flex-direction:column;gap:4px}
   .fab{width:46px;height:46px;display:grid;place-items:center;cursor:pointer;
     background:var(--color-bg);color:var(--color-accent);border:1px solid var(--color-divider);
     border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
@@ -448,6 +454,13 @@
   /* ---- more / settings ---- */
   .switch{display:flex;align-items:center;gap:var(--space-2);cursor:pointer;font-size:13.5px;margin:var(--space-2) 0}
   .switch input{width:18px;height:18px;accent-color:var(--color-accent);margin:0}
+  .switch-sm{font-size:12px;margin:var(--space-2) 0 0}
+  .switch-sm input{width:15px;height:15px}
+  /* While the map drives the range the boxes are readouts — flatten them so they
+     don't invite a tap that the next pan would undo. */
+  input.is-auto{background:transparent;border-style:dashed;color:var(--color-neutral-600)}
+  .poi-band-view:disabled,.poi-band-clear:disabled{opacity:.4;cursor:default}
+  .poi-band-view:disabled:hover{border-color:var(--color-divider);background:transparent}
   .test-list{display:flex;flex-direction:column;gap:6px}
   .test-row{display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;width:100%;cursor:pointer;color:var(--color-text);
     background:var(--color-surface);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:9px var(--space-3)}
@@ -549,6 +562,20 @@
   .poi-pin{display:grid;place-items:center;width:28px;height:28px;color:#fff;background:var(--color-accent);
     border:2px solid #fff;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.45)}
   .poi-pin .ic{color:#fff;stroke-width:2.2}
+  /* ---- pin labels ----
+     Off by default, on once the map is zoomed past POI_LABEL_Z, and always on for
+     whichever pin the cursor is over — which is the desktop stand-in for the tap a
+     phone would need. Never intercepts pointer events: the pin stays the target. */
+  .poi-ic{overflow:visible}
+  .poi-lbl{position:absolute;left:34px;top:50%;transform:translateY(-50%);
+    display:none;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:11px;font-weight:600;line-height:1.5;color:var(--color-text);pointer-events:none;
+    background:color-mix(in srgb,var(--color-bg) 90%,transparent);
+    padding:1px 6px;border-radius:var(--radius-sm);box-shadow:var(--shadow-sm)}
+  .poi-chip-ic .poi-lbl{left:50%;top:12px;transform:translateX(-50%)}
+  .is-labeled .poi-lbl{display:block}
+  .leaflet-marker-icon:hover .poi-lbl{display:block;z-index:2}
+  .poi-pin:hover{transform:scale(1.12)}
   /* circleMarker dots: lift them off the map tiles */
   .map-dot{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
   /* You: the blue dot, with the soft halo every phone map gives it. */
@@ -573,6 +600,10 @@
           <button id="findBtn" type="button" class="fab" title="Find a place" aria-label="Find a place"><span data-ic="search"></span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
+          <div class="fab-pair">
+            <button id="zoomInBtn" type="button" class="fab" title="Zoom in" aria-label="Zoom in"><span data-ic="plus"></span></button>
+            <button id="zoomOutBtn" type="button" class="fab" title="Zoom out" aria-label="Zoom out"><span data-ic="minus"></span></button>
+          </div>
         </div>
         <button id="panelGrab" type="button" class="panel-grab" aria-label="Resize the list panel"><span class="panel-bar"></span><span id="panelHint" class="panel-hint"></span></button>
         <div id="mapSheet" class="map-sheet"></div>
@@ -633,6 +664,7 @@
             <label>To <input id="mpTo" type="number" min="0" step="5" inputmode="numeric" placeholder="end"></label>
             <button id="mpClear" type="button" class="poi-band-clear">Clear</button>
           </div>
+          <label class="switch switch-sm"><input type="checkbox" id="mpFollow" checked> Follow the map view</label>
           <button id="mpFromMap" type="button" class="poi-band-view">Use the stretch shown on the map</button>
           <p class="poi-band-note"><b>TM</b> is trail mile — the fixed milepost a place sits at, measured along the route from the NYC end. Unlike the band above it, this is absolute rather than relative to you, so it works without your location.</p>
         </details>
