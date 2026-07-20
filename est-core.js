@@ -473,7 +473,9 @@ class TrailApp {
       const el=e.target.closest('[data-lat]'); if(!el || e.target.closest('a')) return;
       this.markReturn(el);
       if(el.closest('#panelList') && this.panelSnap==='full') this.setPanelSnap('half');
-      this.zoomTo(+el.dataset.lat, +el.dataset.lng, +el.dataset.z||13, el.dataset.town);
+      const pi=el.dataset.poi;
+      this.zoomTo(+el.dataset.lat, +el.dataset.lng, +el.dataset.z||13, el.dataset.town,
+        pi!=null ? this.POIS[+pi] : null);
     });
     const mb=this.$('mapBack'); if(mb) mb.addEventListener('click',()=>this.goBack());
     // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
@@ -592,10 +594,19 @@ class TrailApp {
     this.savePrefs();
     this.renderAll();
   }
-  zoomTo(lat,lng,z,townName){
+  /* Moving the map to a place you picked from a list answered "where" and left
+     "what" to a pin hunt. The popup opens with it. Built fresh at the coordinate
+     rather than reaching for the marker's own, so it still works when that category's
+     pins are switched off in the layers control — you can read a lodging row with
+     lodging pins hidden and still get its rates, reviews and directions. */
+  zoomTo(lat,lng,z,townName,poi){
     if(!this.map||isNaN(lat)||isNaN(lng)) return;
     this.showTab('map');
-    setTimeout(()=>{ this.map.setView([lat,lng], z||13); if(townName && this.townMarker[townName]) this.townMarker[townName].openPopup(); },80);
+    setTimeout(()=>{
+      this.map.setView([lat,lng], z||13);
+      if(townName && this.townMarker[townName]) this.townMarker[townName].openPopup();
+      else if(poi) L.popup().setLatLng([lat,lng]).setContent(this.poiPopup(poi)).openOn(this.map);
+    },80);
   }
 
   /* ---------- dropdowns / test rows ---------- */
@@ -821,7 +832,7 @@ class TrailApp {
         // The milepost sits in the middle column, which on-trail rows leave empty —
         // so every row carries one whether or not it has a detour to break down.
         const mp = mpTxt(p.mile);
-        h+='<button class="poi-item" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'
+        h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'
           +(mp?'<span class="poi-mp">'+mp+'</span>':'')+brk
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
@@ -943,6 +954,8 @@ class TrailApp {
       }).filter(x=>x.lat!=null && x.off<=5);
     }));
     this.POIS = res.flatMap(r=> r.status==='fulfilled'? r.value : []);
+    // Index doubles as the handle a list row hands back to open the right popup.
+    this.POIS.forEach((p,i)=>{ p.i=i; });
     return this.POIS.length;
   }
   /* Map pins. These feed Leaflet's own layers control — deliberately independent
