@@ -595,8 +595,12 @@ class TrailApp {
     this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
-    // Nearby-list shape only. Map pin visibility is the layers control's job.
-    this.catOrder=[...CAT_ORDER]; this.catHidden=new Set();
+    /* One switch per category, driving the list AND the pins together. They were
+       briefly independent, which meant the map could show a pin whose row the list
+       had filtered away — and a place you can see is a place you expect to be able
+       to read about. Seeded from CAT_DEFAULT so the map doesn't open under 700 pins. */
+    this.catOrder=[...CAT_ORDER];
+    this.catHidden=new Set(CAT_ORDER.filter(c=>!CAT_DEFAULT[c]));
   }
   $(id){ return document.getElementById(id); }
   destName(){ return this.dir==='B2NYC' ? 'NYC' : 'Buffalo'; }
@@ -671,7 +675,10 @@ class TrailApp {
     // retired key is inert rather than needing pruning here.
     if(Array.isArray(p.catOrder)) this.catOrder=p.catOrder.filter(c=>typeof c==='string');
     if(Array.isArray(p.lyrOrder)) this.lyrOrder=p.lyrOrder.filter(c=>typeof c==='string');
-    if(Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
+    // Only trust a stored hidden-set from after the switches were coupled. The older
+    // one recorded list visibility alone, and replaying it now would switch every map
+    // layer on at once — 700-odd pins on the first load after upgrading.
+    if(p.catCoupled && Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     this.renderDirLabels();
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
@@ -691,7 +698,7 @@ class TrailApp {
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxDays:this.wxDays,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
-      catOrder:this.catOrder,catHidden:[...this.catHidden],lyrOrder:this.lyrOrder})); }catch(e){}
+      catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder})); }catch(e){}
   }
   /* While following, the two boxes are an output, not an input — say so rather than
      leaving a rider typing into fields the next pan silently overwrites. */
@@ -701,20 +708,29 @@ class TrailApp {
     const pv=this.$('mpFromMap'); if(pv) pv.disabled=on;
     const pc=this.$('mpClear'); if(pc) pc.disabled=on;
   }
-  /* Called on every moveend. Re-renders only when the rounded range actually
-     changes, so nudging the map a few pixels doesn't rebuild both lists. */
+  /* Is this place inside the map's current viewport? While following the map this is
+     what decides the list, rather than the trail-mile range: the range was only ever a
+     proxy for "what I can see", and it disagreed at the edges — a guesthouse 3 mi off
+     the route sat plainly on screen while its milepost fell outside the band, so the
+     pin was there and the row was not. */
+  inMapView(p){
+    if(!this.map || p==null || !isFinite(p.lat) || !isFinite(p.lng)) return true;
+    return this.map.getBounds().contains([p.lat,p.lng]);
+  }
+  /* Called on every moveend. The trail-mile boxes still track the view as a readout,
+     but the list itself is rebuilt every time because any pan changes what's on
+     screen, and what's on screen is exactly what the list must show. */
   syncRangeToMap(){
     if(!this.followMap) return;
     const r=this.mileRangeInView();
-    // Panned off the route entirely — keep the last stretch rather than blanking
-    // the list, which would read as "there is nothing here".
-    if(!r) return;
-    const lo=Math.floor(r.lo), hi=Math.ceil(r.hi);
-    if(lo===this.mpFrom && hi===this.mpTo) return;
-    this.mpFrom=lo; this.mpTo=hi;
-    const a=this.$('mpFrom'); if(a) a.value=lo;
-    const b=this.$('mpTo'); if(b) b.value=hi;
-    this.savePrefs(); this.renderNearby();
+    if(r){
+      const lo=Math.floor(r.lo), hi=Math.ceil(r.hi);
+      this.mpFrom=lo; this.mpTo=hi;
+      const a=this.$('mpFrom'); if(a) a.value=lo;
+      const b=this.$('mpTo'); if(b) b.value=hi;
+      this.savePrefs();
+    }
+    this.renderNearby();
   }
   /* Any manual edit to the range takes the wheel back from the map. */
   stopFollowing(){
@@ -1452,6 +1468,9 @@ class TrailApp {
     const lo=+el.dataset.lo, hi=+el.dataset.hi;
     if(!isFinite(lo)||!isFinite(hi)) return;
     const ids = w.kind==='band' ? ['miMin','miMax'] : ['mpFrom','mpTo'];
+    // Stepping to another stretch is a manual choice about range, so it takes the
+    // wheel back from the map the same way typing a bound does.
+    if(w.kind!=='band') this.stopFollowing();
     if(w.kind==='band'){ this.miMin=lo; this.miMax=hi; } else { this.mpFrom=lo; this.mpTo=hi; }
     const a=this.$(ids[0]); if(a) a.value=lo;
     const b=this.$(ids[1]); if(b) b.value=hi;
@@ -1468,7 +1487,12 @@ class TrailApp {
     // what order, the band filters the items inside each one.
     // "X of Y" whenever anything is narrowing, so a filtered count never reads as the
     // full one. The band needs a location to mean anything; the range never does.
-    const CAP=6, banded=((this.miMin!=null||this.miMax!=null) && this.myMile!=null)
+    // Following the map, the viewport is the filter and there is no cap: anything you
+    // can see a pin for has to have a row, so truncating at six would break exactly
+    // the promise the two views make to each other. Zoom is what shortens this list.
+    const view=this.followMap && !!this.map;
+    const CAP=view ? Infinity : 6;
+    const banded=view || ((this.miMin!=null||this.miMax!=null) && this.myMile!=null)
       || this.mpFrom!=null || this.mpTo!=null;
     const byCat=this.poisByCat();
     this.renderFilterState();
@@ -1479,8 +1503,10 @@ class TrailApp {
       const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
       // Absolute range first — it's the one filter that doesn't need a location, so
-      // it has to bite even when nothing below it can.
-      if(this.mpFrom!=null||this.mpTo!=null) items=items.filter(p=>this.inMileRange(p));
+      // it has to bite even when nothing below it can. Following the map, the
+      // viewport replaces it outright rather than stacking with it.
+      if(view) items=items.filter(p=>this.inMapView(p));
+      else if(this.mpFrom!=null||this.mpTo!=null) items=items.filter(p=>this.inMileRange(p));
       if(this.myMile==null){
         // No rider to sort around, so fall back to trail order in the direction of
         // travel. Matters most with a range set: that IS the list you asked for.
@@ -1504,7 +1530,7 @@ class TrailApp {
       const open=!!this.poiOpen[cat], shown=open?items:items.slice(0,CAP);
       const ct=banded ? items.length+' of '+total : String(total);
       h+='<div class="poi-group"><div class="poi-h">'+icon(cfg.icon,18)+'<span>'+esc(cfg.label)+'</span><span class="poi-ct">'+ct+'</span></div>';
-      if(!items.length) h+='<div class="poi-more">Nothing in this mileage range.</div>';
+      if(!items.length) h+='<div class="poi-more">'+(view?'None of these on screen — zoom out or pan.':'Nothing in this mileage range.')+'</div>';
       shown.forEach(p=>{
         const d=this.aheadMi(p), back=(d!=null&&d<-0.3), s=this.spurMi(p), tot=this.rideMi(p);
         // Three numbers when there's a detour — trail leg, spur, and the total they
@@ -2972,6 +2998,17 @@ class TrailApp {
     map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
     map.on('zoomend',()=>this.syncPoiLabels());
     this.syncPoiLabels();
+    /* The other half of the coupling: a facility layer switched from Leaflet's own
+       control has to move the chip and the list with it, or the two views drift apart
+       again by the other route. Skipped while setCatVisible is driving. */
+    map.on('overlayadd overlayremove',e=>{
+      if(this._syncCats) return;
+      const key=this.lyrKeyById[L.Util.stamp(e.layer)];
+      if(!key || key.indexOf('poi:')!==0) return;
+      const cat=key.slice(4);
+      if(e.type==='overlayadd') this.catHidden.delete(cat); else this.catHidden.add(cat);
+      this.savePrefs(); this.renderCategories(); this.renderNearby();
+    });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
        control. The Shoreline is free to draw; the counts cost a request per view. */
@@ -3098,16 +3135,16 @@ class TrailApp {
     this.POIS.forEach((p,i)=>{ p.i=i; });
     return this.POIS.length;
   }
-  /* Map pins. These feed Leaflet's own layers control — deliberately independent
-     of the Nearby chips, so a rider can narrow the browse list down to campsites
-     without also blanking the pins they're navigating by. */
+  /* Map pins, feeding Leaflet's own layers control. Visibility comes from the same
+     catHidden set the Nearby chips read, so a pin and its row appear and disappear
+     together — see setCatVisible. */
   buildPOILayers(was){
     const byCat=this.poisByCat();
     // Fixed order, NOT the rider's Nearby order — the map control stays put even
     // as they rearrange the browse list.
     [...new Set([...CAT_ORDER, ...Object.keys(byCat)])].forEach(asset=>{
       const items=byCat[asset]; if(!items||!items.length) return;
-      const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
+      const cfg=catCfg(asset), g=L.layerGroup(), def=!this.catHidden.has(asset);
       const pane=this.lyrPane('poi:'+asset);
       items.forEach(p=>{
         const mk=L.marker([p.lat,p.lng],{pane, icon:this.poiIcon(p,cfg)});
@@ -3123,6 +3160,22 @@ class TrailApp {
   }
 
   /* Nearby chips: which groups appear in the list below, and in what order. */
+  /* The single entry point for showing or hiding a category, wherever the tap came
+     from — the chip, or Leaflet's own layers control. Moves the pins and the rows
+     together so the two views cannot drift apart. */
+  setCatVisible(cat, on){
+    if(on) this.catHidden.delete(cat); else this.catHidden.add(cat);
+    const g=this.poiLayers[cat];
+    if(g && this.map){
+      // Guarded: adding or removing fires overlayadd/overlayremove, which routes
+      // straight back here. Without this the pair ping-pongs on every toggle.
+      this._syncCats=true;
+      if(on && !this.map.hasLayer(g)) g.addTo(this.map);
+      else if(!on && this.map.hasLayer(g)) this.map.removeLayer(g);
+      this._syncCats=false;
+    }
+    this.savePrefs(); this.renderNearby();
+  }
   renderCategories(){
     const el=this.$('features'); if(!el) return;
     const byCat=this.poisByCat();
@@ -3137,9 +3190,8 @@ class TrailApp {
         +icon(cfg.icon,16)+'<span>'+esc(cfg.label)+'</span>'
         +'<span class="feat-ct">'+items.length+'</span></label>';
       chip.querySelector('input').addEventListener('change',ev=>{
-        if(ev.target.checked) this.catHidden.delete(cat); else this.catHidden.add(cat);
         chip.classList.toggle('off',!ev.target.checked);
-        this.savePrefs(); this.renderNearby();
+        this.setCatVisible(cat, ev.target.checked);
       });
       this.wireCatDrag(chip);
       el.appendChild(chip);
