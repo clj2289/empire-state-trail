@@ -107,7 +107,13 @@
   /* Only the list scrolls; the stats above it stay put as the panel grows. */
   .panel-list{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
     padding:0 calc(var(--space-4) + env(safe-area-inset-right)) calc(var(--space-3) + env(safe-area-inset-bottom)) calc(var(--space-4) + env(safe-area-inset-left))}
-  .map-panel[data-snap="peek"] .panel-list{display:none}
+  .map-panel[data-snap="peek"] .panel-list,
+  .map-panel[data-snap="shut"] .panel-list{display:none}
+  /* Shut hands the whole screen back to the map: grab bar only, no stats. */
+  .map-panel[data-snap="shut"] .map-sheet{display:none}
+  .map-pick{animation:pickPulse 1.6s ease-out infinite}
+  @keyframes pickPulse{0%,100%{opacity:1}50%{opacity:.3}}
+  @media (prefers-reduced-motion:reduce){.map-pick{animation:none}}
   .fab{width:46px;height:46px;display:grid;place-items:center;cursor:pointer;
     background:var(--color-bg);color:var(--color-accent);border:1px solid var(--color-divider);
     border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
@@ -231,9 +237,29 @@
     background:transparent;border:1px solid var(--color-divider);border-radius:var(--radius-md);
     color:var(--color-accent-700);padding:6px var(--space-2)}
   .poi-band-view:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  /* Stepping the window, at the top of the list where the window is set. Each side
+     names the stretch it would move to and how much is waiting there, so a step is
+     never a guess — and a direction with nothing in it says so instead of moving. */
+  .poi-pager{display:flex;flex-direction:column;gap:5px;margin-bottom:var(--space-2)}
+  .poi-page-now{font-size:11px;color:var(--color-neutral-500);text-align:center;
+    font-variant-numeric:tabular-nums}
+  .poi-page-row{display:flex;gap:var(--space-2)}
+  .poi-page{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:1px;font-family:inherit;font-size:12px;font-weight:600;
+    line-height:1.3;text-align:center;padding:7px 6px;border-radius:var(--radius-md);
+    border:1px solid var(--color-divider);background:var(--color-surface);
+    color:var(--color-accent-700);cursor:pointer;font-variant-numeric:tabular-nums}
+  .poi-page:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .poi-page .pg-n{font-size:10px;font-weight:400;color:var(--color-neutral-500)}
+  .poi-page.is-off{cursor:default;border-style:dashed;font-weight:400;
+    color:var(--color-neutral-500);background:transparent}
+  .poi-page.is-off:hover{border-color:var(--color-divider);background:transparent}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
   /* Collapsible filter block. Closed by default so the list starts near the top;
      the summary carries a live state line so a filter can't be silently on. */
+  .pop-zoom{font-family:inherit;font-size:inherit;font-weight:600;cursor:pointer;
+    background:transparent;border:0;padding:0;color:var(--color-accent-700);
+    text-decoration:underline;text-underline-offset:2px}
   .filters{margin-bottom:var(--space-3);border-bottom:1px solid var(--color-divider)}
   .filters-sum{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none;padding:var(--space-2) 0;
     font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);font-weight:600}
@@ -383,11 +409,11 @@
           <p class="feat-hint">Drag to reorder · uncheck to hide from this list. Map pins are separate — toggle those from the layers control in the top-right of the map.</p>
           <div class="feat-list-lbl">Trail miles ahead</div>
           <div class="poi-band">
-            <label>Min <input id="miMin" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
-            <label>Max <input id="miMax" type="number" min="0" step="5" inputmode="numeric" placeholder="any"></label>
+            <label>Min <input id="miMin" type="number" step="5" inputmode="numeric" placeholder="0"></label>
+            <label>Max <input id="miMax" type="number" step="5" inputmode="numeric" placeholder="any"></label>
             <button id="miClear" type="button" class="poi-band-clear">Clear</button>
           </div>
-          <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. Needs your location.</p>
+          <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. A negative number looks behind you, which is where <b>Prev</b> steps. Needs your location.</p>
           <div class="feat-list-lbl">Trail mile range</div>
           <div class="poi-band">
             <label>From <input id="mpFrom" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>

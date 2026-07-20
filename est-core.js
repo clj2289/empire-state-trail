@@ -64,6 +64,9 @@ const TEST=[
 const TOTAL = ROUTE[ROUTE.length-1][2];
 const abs = Math.abs;
 const fmtMi = m => m < 10 ? m.toFixed(1) : String(Math.round(m));
+// Window bounds are typed by hand and land on round numbers, so they read as
+// integers unless a step actually produced a fraction.
+const fmtWin = m => abs(m-Math.round(m))<0.05 ? String(Math.round(m)) : m.toFixed(1);
 /* A distance answers "how far", a milepost answers "where" — and the milepost is
    the number on the trail sign, in the itinerary column, and in whatever else the
    rider is cross-checking against. Anything that prints a distance prints the mile
@@ -236,7 +239,7 @@ class TrailApp {
     // moving the rider re-sorts Nearby, the itinerary, and every distance on screen.
     // On by default so nothing changes for anyone who hasn't gone looking for it.
     this.tapToSet=true;
-    this.showTrip=false; this.screen='map'; this.panelSnap='peek';
+    this.showTrip=false; this.screen='map'; this.panelSnap='shut';
     // Absolute stretch of trail to list, independent of the rider. The mileage band
     // above it asks "how far from me", which needs a location and moves as you ride;
     // this asks "what's between mile X and Y", which answers the map-shaped question
@@ -285,13 +288,13 @@ class TrailApp {
     this.showPassed=!!p.showPassed;
     if('tapToSet' in p) this.tapToSet=!!p.tapToSet;
     this.showTrip=!!p.showTrip;
-    if(p.panelSnap==='peek'||p.panelSnap==='half'||p.panelSnap==='full') this.panelSnap=p.panelSnap;
+    if(['shut','peek','half','full'].indexOf(p.panelSnap)>=0) this.panelSnap=p.panelSnap;
     if(p.myLL && isFinite(p.myLL.lat) && isFinite(p.myLL.lng)){
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
     }
-    if(isFinite(p.miMin)&&p.miMin>=0) this.miMin=p.miMin;
-    if(isFinite(p.miMax)&&p.miMax>=0) this.miMax=p.miMax;
+    if(isFinite(p.miMin)) this.miMin=p.miMin;
+    if(isFinite(p.miMax)) this.miMax=p.miMax;
     if(isFinite(p.mpFrom)&&p.mpFrom>=0) this.mpFrom=p.mpFrom;
     if(isFinite(p.mpTo)&&p.mpTo>=0) this.mpTo=p.mpTo;
     // Stored keys aren't checked against CAT_ORDER — the service can serve asset
@@ -371,24 +374,85 @@ class TrailApp {
      and full hands the list most of the screen with the map still visible above it.
      Peek is measured rather than guessed: the stats block changes height depending on
      whether there's a next stop and whether its name wrapped. */
-  peekHeight(){
-    const g=this.$('panelGrab'), st=this.$('mapSheet');
-    return (g?g.offsetHeight:0) + (st && !st.hidden ? st.offsetHeight : 0);
+  /* The stats block is display:none while shut, so it measures zero — flip the
+     state off just long enough to read its real height rather than collapsing peek
+     down onto shut. Cheap: it only runs on a snap change, and sets no height. */
+  /* The panel and the tab bar sit ON the map — #map is inset:0 underneath both — so
+     the map's own centre is not the centre of anything you can see. Everything that
+     aims the map has to work from the strip that's actually left. */
+  obstructedH(){
+    const m=this.map; if(!m) return 0;
+    const mr=m.getContainer().getBoundingClientRect();
+    let top=mr.bottom;
+    const p=this.$('mapPanel');
+    if(p){ const r=p.getBoundingClientRect(); if(r.height && r.top<top) top=r.top; }
+    const t=document.querySelector('.tabbar');
+    if(t && !t.classList.contains('is-hidden')){ const r=t.getBoundingClientRect(); if(r.height && r.top<top) top=r.top; }
+    return Math.max(0, mr.bottom-top);
   }
-  setPanelSnap(snap){
+  // Put a point in the middle of the visible strip rather than the middle of the map.
+  centerVisible(lat,lng,zoom){
+    const m=this.map; if(!m) return;
+    const z=zoom!=null?zoom:m.getZoom();
+    const pt=m.project([lat,lng], z).add([0, this.obstructedH()/2]);
+    m.setView(m.unproject(pt, z), z);
+  }
+  /* Leaflet's own autoPan fits a popup to the map container, which runs on behind the
+     panel — so it thinks a popup buried under the sheet is fine. Ours is switched off
+     and this runs instead, fitting to the strip you can see. */
+  fitPopup(pop){
+    const m=this.map; if(!m||!pop) return;
+    const el=pop.getElement(); if(!el) return;
+    const r=el.getBoundingClientRect(), mr=m.getContainer().getBoundingClientRect();
+    const bottomLimit=mr.height-this.obstructedH();
+    const top=r.top-mr.top, bottom=r.bottom-mr.top;
+    let dy=0;
+    if(bottom > bottomLimit-8) dy = bottom-(bottomLimit-8);
+    dy=Math.min(dy, top-8);          // never push its head off the top to save its feet
+    let dx=0;
+    const left=r.left-mr.left, right=r.right-mr.left;
+    if(right > mr.width-8) dx = right-(mr.width-8);
+    if(left-dx < 8) dx = left-8;
+    if(abs(dy)>1 || abs(dx)>1) m.panBy([dx,dy],{animate:true,duration:.2});
+  }
+  measureSheet(){
+    const st=this.$('mapSheet'), p=this.$('mapPanel');
+    if(!st || st.hidden || !p) return 0;
+    if(st.offsetHeight) return st.offsetHeight;
+    const prev=p.dataset.snap;
+    p.dataset.snap='peek';
+    const h=st.offsetHeight;
+    p.dataset.snap=prev;
+    return h;
+  }
+  panelH(snap){
+    const g=this.$('panelGrab'), gh=g?g.offsetHeight:0;
+    return snap==='shut' ? gh : gh+this.measureSheet();
+  }
+  setPanelSnap(snap, fromH){
     const p=this.$('mapPanel'); if(!p) return;
+    const h0 = fromH!=null ? fromH : p.getBoundingClientRect().height;
     this.panelSnap=snap;
     p.dataset.snap=snap;
-    p.style.height = snap==='peek' ? this.peekHeight()+'px'
+    const avail=p.parentElement?p.parentElement.clientHeight:0;
+    const h1 = (snap==='shut'||snap==='peek') ? this.panelH(snap) : avail*(snap==='full'?.86:.52);
+    p.style.height = (snap==='shut'||snap==='peek') ? h1+'px'
       : snap==='full' ? '86%' : '52%';
+    /* The panel covers the map instead of resizing it, so sliding it up used to push
+       whatever you were looking at down behind the sheet. Moving the map half the
+       height change keeps it in the middle of what's left. */
+    if(this.map && this.panelReady && abs(h1-h0)>2) this.map.panBy([0,(h1-h0)/2],{animate:true,duration:.24});
+    this.panelReady=true;
     const hint=this.$('panelHint');
-    if(hint) hint.textContent = snap==='peek' ? (this.POIS.length?'Pull up for the list':'') : '';
+    if(hint) hint.textContent = snap==='shut' ? 'Pull up'
+      : snap==='peek' ? (this.POIS.length?'Pull up for the list':'') : '';
     this.savePrefs();
     // Leaflet has to be told the viewport changed, and only once the height settles.
     if(this.map) setTimeout(()=>this.map.invalidateSize(),260);
   }
   cyclePanel(){
-    this.setPanelSnap(this.panelSnap==='peek'?'half':this.panelSnap==='half'?'full':'peek');
+    const order=['shut','peek','half','full'], i=order.indexOf(this.panelSnap);
+    this.setPanelSnap(order[(i+1)%order.length]);
   }
   /* Drag beats a three-way tap for reaching a height directly, but the tap has to keep
      working — so anything under 6px of travel is treated as a tap, not a stalled drag. */
@@ -405,7 +469,7 @@ class TrailApp {
       const dy=y0-e.clientY;
       if(abs(dy)>6) moved=true;
       const max=p.parentElement.clientHeight*0.86;
-      p.style.height=Math.max(this.peekHeight(), Math.min(max, h0+dy))+'px';
+      p.style.height=Math.max(this.panelH('shut'), Math.min(max, h0+dy))+'px';
     });
     const end=()=>{
       if(id==null) return;
@@ -414,10 +478,9 @@ class TrailApp {
       if(!moved){ this.cyclePanel(); return; }
       // Snap to whichever height the release landed nearest.
       const avail=p.parentElement.clientHeight, frac=p.getBoundingClientRect().height/avail;
-      const peekFrac=this.peekHeight()/avail;
-      const d=[['peek',peekFrac],['half',.52],['full',.86]]
+      const d=[['shut',this.panelH('shut')/avail],['peek',this.panelH('peek')/avail],['half',.52],['full',.86]]
         .sort((a,b)=>abs(frac-a[1])-abs(frac-b[1]));
-      this.setPanelSnap(d[0][0]);
+      this.setPanelSnap(d[0][0], h0);
     };
     grab.addEventListener('pointerup',end);
     grab.addEventListener('pointercancel',end);
@@ -474,20 +537,27 @@ class TrailApp {
       this.markReturn(el);
       if(el.closest('#panelList') && this.panelSnap==='full') this.setPanelSnap('half');
       const pi=el.dataset.poi;
-      this.zoomTo(+el.dataset.lat, +el.dataset.lng, +el.dataset.z||13, el.dataset.town,
+      this.zoomTo(+el.dataset.lat, +el.dataset.lng, el.dataset.z?+el.dataset.z:null, el.dataset.town,
         pi!=null ? this.POIS[+pi] : null);
     });
     const mb=this.$('mapBack'); if(mb) mb.addEventListener('click',()=>this.goBack());
     // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
+    document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
     document.addEventListener('click',e=>{
       const t=e.target.closest('.poi-toggle'); if(!t) return;
       const c=t.dataset.cat; this.poiOpen[c]=!this.poiOpen[c]; this.renderNearby();
     });
-    const g=id=>{ const el=this.$(id); if(!el) return null; const v=el.value.trim(); if(v==='') return null;
-      const n=+v; return isFinite(n)&&n>=0 ? n : null; };
+    document.addEventListener('click',e=>{
+      const t=e.target.closest('.poi-page');
+      if(t && t.dataset.page) this.applyPage(t);
+    });
+    // Trail miles are absolute and can't go below zero; the band is relative to you,
+    // so a negative one is just the road behind — that's what Prev steps into.
+    const g=(id,neg)=>{ const el=this.$(id); if(!el) return null; const v=el.value.trim(); if(v==='') return null;
+      const n=+v; if(!isFinite(n)) return null; return (neg||n>=0) ? n : null; };
     const readBand=()=>{
-      this.miMin=g('miMin'); this.miMax=g('miMax');
+      this.miMin=g('miMin',1); this.miMax=g('miMax',1);
       this.savePrefs(); this.renderNearby();
     };
     ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readBand); });
@@ -564,7 +634,7 @@ class TrailApp {
     // elsewhere: the further off, the looser the milepost it snapped to.
     const off=pr.off>=0.1 ? '<div class="mv-s">'+fmtMi(pr.off)+' mi off the route</div>' : '';
     const delta=this.myMile==null ? '' : '<div class="mv-s">'+fmtMi(abs(pr.mile-this.myMile))+' mi from where you are now</div>';
-    L.popup({className:'mv-pop'}).setLatLng(ll).setContent(
+    L.popup({className:'mv-pop',autoPan:false}).setLatLng(ll).setContent(
       '<div class="mv"><div class="mv-k">Move your location here?</div>'
       +'<div class="mv-v">Trail mile '+fmtMp(pr.mile)+'</div>'+off+delta
       +'<button type="button" class="mv-go">Move me here</button>'
@@ -603,10 +673,30 @@ class TrailApp {
     if(!this.map||isNaN(lat)||isNaN(lng)) return;
     this.showTab('map');
     setTimeout(()=>{
-      this.map.setView([lat,lng], z||13);
+      this.centerVisible(lat,lng,z);
       if(townName && this.townMarker[townName]) this.townMarker[townName].openPopup();
-      else if(poi) L.popup().setLatLng([lat,lng]).setContent(this.poiPopup(poi)).openOn(this.map);
+      else if(poi){
+        this.markPick(lat,lng);
+        L.popup({autoPan:false}).setLatLng([lat,lng]).setContent(this.poiPopup(poi)).openOn(this.map);
+      }
     },80);
+  }
+  /* A ring around the one you asked for. Forty identical bed pins in one town is
+     exactly when "where is it" stops being answerable by moving the map alone. */
+  markPick(lat,lng){
+    if(!this.map) return;
+    const c=this.accent2||'#d6006c';
+    if(!this.pick) this.pick=L.circleMarker([lat,lng],{radius:15,weight:3,color:c,fill:false,className:'map-pick',interactive:false}).addTo(this.map);
+    else this.pick.setLatLng([lat,lng]);
+  }
+  clearPick(){ if(this.pick&&this.map){ this.map.removeLayer(this.pick); this.pick=null; } }
+  // Zoom is the second question, so it's a button rather than something a tap on a
+  // row does for you — moving the map at your zoom is what "show me where" means.
+  zoomHere(el){
+    const m=this.map; if(!m) return;
+    const lat=+el.dataset.zlat, lng=+el.dataset.zlng;
+    if(isNaN(lat)||isNaN(lng)) return;
+    this.centerVisible(lat,lng,Math.min(17, Math.max(m.getZoom()+3, 15)));
   }
 
   /* ---------- dropdowns / test rows ---------- */
@@ -769,10 +859,100 @@ class TrailApp {
   inBand(d){
     if(this.miMin==null && this.miMax==null) return true;
     if(d==null) return true;
-    if(d < -0.3) return false;
+    // A bare max means "within 30 miles", which nobody means to include the 30 behind
+    // them. An explicit min speaks for itself, negative or not.
+    if(this.miMin==null && d < -0.3) return false;
     if(this.miMin!=null && d < this.miMin) return false;
     if(this.miMax!=null && d > this.miMax) return false;
     return true;
+  }
+  /* ---------- stepping the window ---------- */
+  /* Which window Prev/Next moves. The band wins when both filters are on: it's the
+     one anchored to you, so a step means "the next day's ride" rather than "the next
+     stretch of map". Either way it needs two finite ends — "0 to any" has no width. */
+  pagerWin(){
+    if(this.myMile!=null && this.miMax!=null){
+      const lo=this.miMin!=null?this.miMin:0;
+      if(this.miMax>lo) return {kind:'band', lo, hi:this.miMax};
+    }
+    if(this.mpFrom!=null && this.mpTo!=null){
+      const lo=Math.min(this.mpFrom,this.mpTo), hi=Math.max(this.mpFrom,this.mpTo);
+      if(hi>lo) return {kind:'range', lo, hi};
+    }
+    return null;
+  }
+  /* One window on (mult 1) or back (mult -1). Trail miles count up from the NYC end,
+     so for the absolute range "on" is whichever way you're riding — heading for NYC
+     walks the numbers down. The band is already relative to you, so on is always up
+     and back runs negative: the miles you've already covered. */
+  pageStep(w, mult){
+    const span=w.hi-w.lo, r=n=>Math.round(n*10)/10;
+    const fwd = w.kind==='band' ? 1 : (this.dir==='B2NYC' ? -1 : 1);
+    let lo=w.lo+span*mult*fwd, hi=w.hi+span*mult*fwd;
+    if(w.kind==='range'){
+      if(hi<=0 || lo>=TOTAL) return null;   // stepped clean off the end of the trail
+      lo=Math.max(0,lo); hi=Math.min(TOTAL,hi);
+      if(hi-lo<0.5) return null;
+    }
+    return {lo:r(lo), hi:r(hi)};
+  }
+  /* What sits in a window we aren't showing yet. The pager only offers a step that
+     lands on something, so an empty direction reads as unavailable rather than as a
+     button that appears to work and doesn't. The other filter still applies. */
+  countInWin(w, lo, hi){
+    const byCat=this.poisByCat();
+    let n=0;
+    Object.keys(byCat).forEach(c=>{
+      if(this.catHidden.has(c)) return;
+      byCat[c].forEach(p=>{
+        if(w.kind==='band'){
+          if(!this.inMileRange(p)) return;
+          const d=this.rideMi(p);
+          if(d==null || d<lo || d>hi) return;
+        } else {
+          if(p.mile==null || !isFinite(p.mile) || p.mile<lo || p.mile>hi) return;
+          if(this.myMile!=null && !this.inBand(this.rideMi(p))) return;
+        }
+        n++;
+      });
+    });
+    return n;
+  }
+  // A band window straddles you once Prev has run it negative, so it gets three
+  // readings rather than one format with a minus sign buried in it.
+  winLabel(w, lo, hi){
+    if(w.kind==='range') return 'TM '+fmtWin(lo)+'\u2013'+fmtWin(hi);
+    if(lo>=0) return fmtWin(lo)+'\u2013'+fmtWin(hi)+' mi ahead';
+    if(hi<=0) return fmtWin(abs(hi))+'\u2013'+fmtWin(abs(lo))+' mi back';
+    return fmtWin(abs(lo))+' back \u2013 '+fmtWin(hi)+' ahead';
+  }
+  pagerHTML(){
+    const w=this.pagerWin();
+    if(!w) return '';
+    const prev=this.pageStep(w,-1), next=this.pageStep(w,1);
+    const pc=prev?this.countInWin(w,prev.lo,prev.hi):0;
+    const nc=next?this.countInWin(w,next.lo,next.hi):0;
+    const cell=(dir,win,ct)=>{
+      const back=dir<0;
+      if(!win || !ct) return '<span class="poi-page is-off">'+(back?'Nothing back there':'Nothing further on')+'</span>';
+      return '<button type="button" class="poi-page" data-page="'+dir+'" data-lo="'+win.lo+'" data-hi="'+win.hi+'">'
+        +'<span class="pg-w">'+(back?'\u2039 ':'')+esc(this.winLabel(w,win.lo,win.hi))+(back?'':' \u203a')+'</span>'
+        +'<span class="pg-n">'+ct+(ct===1?' place':' places')+'</span></button>';
+    };
+    return '<div class="poi-pager"><div class="poi-page-now">Showing '+esc(this.winLabel(w,w.lo,w.hi))+'</div>'
+      +'<div class="poi-page-row">'+cell(-1,prev,pc)+cell(1,next,nc)+'</div></div>';
+  }
+  // Stepping writes the new window straight into the boxes, so the filter you can see
+  // and the list you're reading never disagree about what's on.
+  applyPage(el){
+    const w=this.pagerWin(); if(!w) return;
+    const lo=+el.dataset.lo, hi=+el.dataset.hi;
+    if(!isFinite(lo)||!isFinite(hi)) return;
+    const ids = w.kind==='band' ? ['miMin','miMax'] : ['mpFrom','mpTo'];
+    if(w.kind==='band'){ this.miMin=lo; this.miMax=hi; } else { this.mpFrom=lo; this.mpTo=hi; }
+    const a=this.$(ids[0]); if(a) a.value=lo;
+    const b=this.$(ids[1]); if(b) b.value=hi;
+    this.savePrefs(); this.renderNearby();
   }
   renderNearby(){
     // Two mounts, one list: the Nearby tab and the map panel show the same thing, so
@@ -791,7 +971,7 @@ class TrailApp {
     this.renderFilterState();
     const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length);
     if(!keys.length){ list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
-    let h='';
+    let h=this.pagerHTML();
     keys.forEach(cat=>{
       const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
@@ -832,7 +1012,7 @@ class TrailApp {
         // The milepost sits in the middle column, which on-trail rows leave empty —
         // so every row carries one whether or not it has a detour to break down.
         const mp = mpTxt(p.mile);
-        h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'
+        h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'"><span class="poi-nm">'+esc(p.name)+'</span>'
           +(mp?'<span class="poi-mp">'+mp+'</span>':'')+brk
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
@@ -852,6 +1032,10 @@ class TrailApp {
     this.accent=accent; this.accent2=accent2;
     const map=L.map(el,{scrollWheelZoom:false,zoomControl:true,attributionControl:true}).setView([42.9,-76.0],7);
     this.map=map;
+    // One place decides where a popup sits, whoever opened it, using the panel height
+    // as it is right now — a bind-time padding would be stale the moment it moved.
+    map.on('popupopen', e=>setTimeout(()=>this.fitPopup(e.popup),0));
+    map.on('popupclose', e=>{ if(this.pick && !e.popup.options.className) this.clearPick(); });
     const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
     const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Esri'});
     const labels=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19});
@@ -868,7 +1052,7 @@ class TrailApp {
     this.stopLayer=L.layerGroup();
     TOWNS.forEach(t=>{
       const mk=L.circleMarker([t.lat,t.lng],{radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
-      mk.bindPopup('',{maxWidth:300,minWidth:230}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
+      mk.bindPopup('',{maxWidth:300,minWidth:230,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
     this.stopLayer.addTo(map);
@@ -935,7 +1119,8 @@ class TrailApp {
     }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
-    const lk=[]; const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
+    const lk=['<button type="button" class="pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
+    const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
     // Campgrounds get reviews too — same question a rider is asking of a motel.
     const stay=(p.asset==='Lodging'||p.asset==='Campground');
     if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '))+'" target="_blank" rel="noopener">Check rates</a>');
@@ -970,7 +1155,7 @@ class TrailApp {
       const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
       items.forEach(p=>{
         const mk=L.marker([p.lat,p.lng],{icon:L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]})});
-        mk.bindPopup('',{maxWidth:280,minWidth:200}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
+        mk.bindPopup('',{maxWidth:280,minWidth:200,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
         g.addLayer(mk);
       });
       this.poiLayers[asset]=g; if(def) g.addTo(this.map);
