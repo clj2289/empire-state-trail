@@ -103,6 +103,7 @@ const P = {
   park:'M7 4h6a4 4 0 0 1 0 8H7z|M7 4v16',
   lock:'M6 10V7a6 6 0 0 1 12 0v3|M5 10h14v10H5z',
   pin:'M12 21s-7-6-7-12a7 7 0 0 1 14 0c0 6-7 12-7 12Z|c12 9 2.5',
+  wind:'M3 8h10a3 3 0 1 0-3-3|M3 13h14a3 3 0 1 1-3 3|M3 18h7a2 2 0 1 1-2 2',
   chevR:'M9 6l6 6-6 6',
   chevL:'M15 6l-6 6 6 6'
 };
@@ -198,6 +199,33 @@ const POI_SOURCES=[
   { url:ARC+"Attractions_Public/FeatureServer/0/query", fields:"Attraction,FullAddress,Theme,WebPage", bbox:true,
     map:p=>({asset:'Attraction',name:p.Attraction||'(attraction)',addr:p.FullAddress||'',phone:'',url:p.WebPage||'',sub:p.Theme||''}) }
 ];
+/* ---------- weather ---------- */
+/* NWS reports the direction wind comes FROM, as a compass point. Keeping that
+   convention straight is the whole game: a wind "from the north" while you ride
+   north is a headwind, not a tailwind. */
+const COMPASS={N:0,NNE:22.5,NE:45,ENE:67.5,E:90,ESE:112.5,SE:135,SSE:157.5,
+  S:180,SSW:202.5,SW:225,WSW:247.5,W:270,WNW:292.5,NW:315,NNW:337.5};
+// "10 mph" and "5 to 10 mph" both come back; a range's mean is the sustained wind.
+function windMph(s){
+  const n=String(s||'').match(/\d+/g);
+  if(!n||!n.length) return null;
+  return n.reduce((a,b)=>a+ +b,0)/n.length;
+}
+// Initial great-circle bearing, degrees clockwise from north.
+function bearing(a1,o1,a2,o2){
+  const R=Math.PI/180, dl=(o2-o1)*R;
+  const y=Math.sin(dl)*Math.cos(a2*R);
+  const x=Math.cos(a1*R)*Math.sin(a2*R)-Math.sin(a1*R)*Math.cos(a2*R)*Math.cos(dl);
+  return (Math.atan2(y,x)/R+360)%360;
+}
+/* Split a wind into the part fighting you and the part shoving you sideways.
+   Because `from` is where it blows from, a wind from dead ahead has from === your
+   heading, cos(0)=1, and comes out as a full positive headwind. Negative is a push. */
+function windParts(fromDeg, hdgDeg, mph){
+  const d=(fromDeg-hdgDeg)*Math.PI/180;
+  return {head: mph*Math.cos(d), cross: abs(mph*Math.sin(d))};
+}
+
 async function fetchSource(src){
   const feats=[]; let offset=0;
   for(let page=0;page<8;page++){
@@ -240,6 +268,8 @@ class TrailApp {
     // On by default so nothing changes for anyone who hasn't gone looking for it.
     this.tapToSet=true;
     this.showTrip=false; this.screen='map'; this.panelSnap='shut';
+    this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
+    this.showWx=true; this.wxPerDay=60; this.wxDays=4; this.wxPlan=null; this.wxBusy=false;
     // Absolute stretch of trail to list, independent of the rider. The mileage band
     // above it asks "how far from me", which needs a location and moves as you ride;
     // this asks "what's between mile X and Y", which answers the map-shaped question
@@ -268,9 +298,11 @@ class TrailApp {
     this.buildTestRows();
     this.wireTabs();
     this.applyTripTab();
+    this.applyWxTab();
     this.wireControls();
     this.wireTabAutohide();
     this.wirePanelDrag();
+    this.buildWxDest();
     this.initMap();
     this.renderAll();
     // Peek is measured off the rendered stats, so it can only be set once they exist.
@@ -293,6 +325,10 @@ class TrailApp {
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
     }
+    if(isFinite(p.avgSpeed)&&p.avgSpeed>0) this.avgSpeed=p.avgSpeed;
+    if(typeof p.showWx==='boolean') this.showWx=p.showWx;
+    if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
+    if(isFinite(p.wxDays)&&p.wxDays>0) this.wxDays=p.wxDays;
     if(isFinite(p.miMin)) this.miMin=p.miMin;
     if(isFinite(p.miMax)) this.miMax=p.miMax;
     if(isFinite(p.mpFrom)&&p.mpFrom>=0) this.mpFrom=p.mpFrom;
@@ -306,18 +342,19 @@ class TrailApp {
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
     const tr=this.$('showTrip'); if(tr) tr.checked=this.showTrip;
-    this.filtersOpen=!!p.filtersOpen;
+    const spd=this.$('avgSpeed'); if(spd) spd.value=this.avgSpeed;
+    const sw=this.$('showWx'); if(sw) sw.checked=this.showWx;
+    const pd=this.$('wxPerDay'); if(pd) pd.value=this.wxPerDay;
+    const wd=this.$('wxDays'); if(wd) wd.value=this.wxDays;
     const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
     const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
     const c=this.$('mpFrom'); if(c && this.mpFrom!=null) c.value=this.mpFrom;
     const d=this.$('mpTo'); if(d && this.mpTo!=null) d.value=this.mpTo;
-    const fl=this.$('poiFilters'); if(fl) fl.open=this.filtersOpen;
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxDays:this.wxDays,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
-      catOrder:this.catOrder,catHidden:[...this.catHidden],
-      filtersOpen:this.filtersOpen})); }catch(e){}
+      catOrder:this.catOrder,catHidden:[...this.catHidden]})); }catch(e){}
   }
   /* Summary shown on the collapsed header. A filter you can't see is a filter you
      forget you set, so the closed state has to say when something is narrowing. */
@@ -582,8 +619,26 @@ class TrailApp {
     });
     const mc=this.$('miClear');
     if(mc) mc.addEventListener('click',()=>{ ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readBand(); });
+    const wg=this.$('wxGo');
+    if(wg) wg.addEventListener('click',()=>this.loadOutlook());
+    const rd=id=>{ const el=this.$(id); if(!el) return;
+      el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this[id==='wxDays'?'wxDays':'wxPerDay']=n; this.savePrefs(); } }); };
+    rd('wxPerDay'); rd('wxDays');
+    const sw=this.$('showWx');
+    if(sw) sw.addEventListener('change',()=>{ this.showWx=sw.checked; this.savePrefs(); this.applyWxTab(); });
+    const as=this.$('avgSpeed');
+    if(as) as.addEventListener('input',()=>{
+      const n=+as.value;
+      if(isFinite(n)&&n>0&&n<40){ this.avgSpeed=n; this.savePrefs();
+        const e2=this.$('wxSpeedEcho'); if(e2) e2.textContent=n;
+        // Speed decides where each forecast hour lands, so the layer is now wrong.
+        if(this.wxLayer && this.map && this.map.hasLayer(this.wxLayer)) this.loadWeather();
+      }
+    });
     const fl=this.$('poiFilters');
-    if(fl) fl.addEventListener('toggle',()=>{ this.filtersOpen=fl.open; this.savePrefs(); });
+    // Deliberately not remembered: the list is the point of the screen, and a filter
+    // block left open from three days ago costs a third of a phone screen to say so.
+    if(fl) fl.addEventListener('toggle',()=>{ this.filtersOpen=fl.open; });
   }
   status(msg){ const el=this.$('locStatus'); if(el) el.textContent=msg; }
   /* The direction control is no longer one button in a bar that no longer exists —
@@ -597,6 +652,11 @@ class TrailApp {
   }
   /* Trip duplicates what Next up and Nearby already answer, so it is off by default
      and its tab is simply absent — not greyed, not reordered. */
+  applyWxTab(){
+    const btn=document.querySelector('[data-tab="wx"]');
+    if(btn) btn.hidden=!this.showWx;
+    if(!this.showWx && this.screen==='wx') this.showTab('map');
+  }
   applyTripTab(){
     const btn=document.querySelector('[data-tab="itin"]');
     if(btn) btn.hidden=!this.showTrip;
@@ -742,6 +802,8 @@ class TrailApp {
     const pct = Math.max(0,Math.min(100,(ridden/TOTAL)*100));
     let h='<div class="sheet-row"><div><div class="sheet-k">Trail mile</div><div class="sheet-v">'+fmtMp(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
       +'<div class="sheet-r"><div class="sheet-k">ridden</div><div class="sheet-v">'+Math.round(pct)+'%</div></div></div>';
+    const wl=this.wxLine();
+    if(wl) h+='<div class="sheet-wx">'+esc(wl)+'</div>';
     if(nx){ h+='<button class="sheet-next" data-lat="'+nx.lat+'" data-lng="'+nx.lng+'" data-town="'+esc(nx.n)+'"><span class="sheet-k">Next stop</span><span class="sheet-nm">'+esc(nx.n)+' · '+mpTxt(nx.mi)+' · ~'+fmtMi(abs(nx.mi-this.myMile))+' mi</span>'+icon('chevR',18)+'</button>'; }
     el.innerHTML=h;
   }
@@ -1022,6 +1084,302 @@ class TrailApp {
     list.innerHTML=h;
   }
 
+  /* ---------- weather ---------- */
+  /* Sampled by riding-hour rather than by distance. The question a cyclist has is not
+     "what is it doing twenty miles up the trail" but "what will it be doing when I get
+     there" — which is what makes the average-speed setting load-bearing rather than
+     decorative, and what makes a headwind reading worth trusting. */
+  wxAnchorMile(){
+    if(this.myMile!=null) return this.myMile;
+    if(!this.map) return null;
+    const c=this.map.getCenter(), pr=projectRoute(c.lat,c.lng);
+    return pr && pr.mile!=null ? pr.mile : null;
+  }
+  routePtAt(mile){
+    const last=ROUTE[ROUTE.length-1];
+    if(mile<=ROUTE[0][2]) return ROUTE[0];
+    if(mile>=last[2]) return last;
+    let lo=0, hi=ROUTE.length-1;
+    while(lo<hi-1){ const m=(lo+hi)>>1; if(ROUTE[m][2]<=mile) lo=m; else hi=m; }
+    return ROUTE[hi];
+  }
+  // The way you're pointed at a milepost. Mileposts run up from the NYC end, so riding
+  // to NYC walks them down — the sign is what turns a compass into a heading.
+  /* A chord centred on the milepost, not one running off it: a one-sided chord
+     measures the next stretch of trail rather than the tangent at your feet, so
+     flipping direction sampled a different bend and the two headings came back
+     155 degrees apart instead of exactly reversed. */
+  routeBearing(mile){
+    const sgn=this.dir==='B2NYC'?-1:1;
+    const a=this.routePtAt(mile-sgn*0.75), b=this.routePtAt(mile+sgn*0.75);
+    if(!a||!b||(a[0]===b[0]&&a[1]===b[1])) return null;
+    return bearing(a[0],a[1],b[0],b[1]);
+  }
+  /* api.weather.gov, in two hops: a point maps to a forecast grid, the grid has the
+     hourly. Kept in memory only — a stale forecast presented as current is worse than
+     no forecast, so it dies with the tab rather than lingering in storage. */
+  async nwsHourly(lat,lng){
+    // Grid cells are a couple of km, so rounding the key stops six samples in one town
+    // from becoming six pairs of requests.
+    const key=lat.toFixed(2)+','+lng.toFixed(2);
+    const hit=this.wxCache[key];
+    if(hit && Date.now()-hit.t < 18e5) return hit.v;
+    const pr=await fetch('https://api.weather.gov/points/'+lat.toFixed(4)+','+lng.toFixed(4));
+    if(!pr.ok) throw new Error('points '+pr.status);
+    const url=((await pr.json()).properties||{}).forecastHourly;
+    if(!url) throw new Error('no hourly grid here');
+    const fr=await fetch(url);
+    if(!fr.ok) throw new Error('forecast '+fr.status);
+    const periods=((await fr.json()).properties||{}).periods||[];
+    this.wxCache[key]={t:Date.now(), v:periods};
+    return periods;
+  }
+  // Periods are hourly buckets; find the one holding a given moment.
+  wxAt(periods, when){
+    for(let i=0;i<periods.length;i++){
+      const p=periods[i], a=Date.parse(p.startTime), b=Date.parse(p.endTime);
+      if(when>=a && when<b) return p;
+    }
+    return periods[0]||null;
+  }
+  wxSamples(){
+    const anchor=this.wxAnchorMile();
+    if(anchor==null) return [];
+    const sgn=this.dir==='B2NYC'?-1:1, sp=this.avgSpeed>0?this.avgSpeed:12;
+    const out=[], seen={};
+    for(let h=0;h<=5;h++){
+      const mile=Math.max(0,Math.min(TOTAL, anchor+sgn*sp*h));
+      const k=Math.round(mile);
+      if(seen[k]) continue;        // the route ran out — stop restating its last point
+      seen[k]=1;
+      const p=this.routePtAt(mile);
+      out.push({h, mile, lat:p[0], lng:p[1], hdg:this.routeBearing(mile)});
+    }
+    return out;
+  }
+  async loadWeather(){
+    if(!this.map||!this.wxLayer) return;
+    const pts=this.wxSamples();
+    if(!pts.length){ this.status('Weather follows your route, so it needs a position on the trail first.'); return; }
+    this.status('Reading the forecast along your route…');
+    const now=Date.now();
+    const res=await Promise.allSettled(pts.map(async pt=>{
+      const periods=await this.nwsHourly(pt.lat,pt.lng);
+      return {...pt, w:this.wxAt(periods, now+pt.h*36e5)};
+    }));
+    const got=res.filter(r=>r.status==='fulfilled' && r.value.w).map(r=>r.value);
+    this.wxLayer.clearLayers();
+    this.wxAsOf=now;
+    this.wxNow=got.filter(g=>g.h===0)[0]||null;
+    got.forEach(g=>this.addWxMarker(g));
+    this.renderMapSheet();
+    if(!got.length){ this.status('No answer from api.weather.gov. It’s the US forecast service — it covers the whole trail, but it does go down.'); return; }
+    this.status(got.length<pts.length
+      ? 'Forecast in for '+got.length+' of '+pts.length+' points along your route.'
+      : 'Forecast in along your route, '+this.avgSpeed+' mph out to '+(pts.length-1)+'h ahead.');
+  }
+  // One reading, in the units a rider thinks in.
+  wxRead(g){
+    const w=g.w, mph=windMph(w.windSpeed), from=COMPASS[String(w.windDirection||'').toUpperCase()];
+    const parts=(mph!=null && from!=null && g.hdg!=null) ? windParts(from,g.hdg,mph) : null;
+    const pop=w.probabilityOfPrecipitation ? w.probabilityOfPrecipitation.value : null;
+    return {mph, from, parts, pop, temp:w.temperature, unit:w.temperatureUnit||'F', short:w.shortForecast||''};
+  }
+  // Under 3 mph either way is noise, not a wind you'd notice on a bike.
+  wxKind(r){ return !r.parts ? 'cross' : r.parts.head>3 ? 'head' : r.parts.head<-3 ? 'tail' : 'cross'; }
+  addWxMarker(g){
+    const r=this.wxRead(g), kind=this.wxKind(r);
+    const rot = r.from==null ? 0 : (r.from+180)%360;   // the arrow flies the way it blows
+    const html='<div class="wx-pin wx-'+kind+'">'
+      +'<span class="wx-arrow" style="transform:rotate('+Math.round(rot)+'deg)">\u2191</span>'
+      +'<span class="wx-t">'+(r.temp==null?'—':r.temp+'\u00b0')+'</span>'
+      +(r.pop?'<span class="wx-p">'+r.pop+'%</span>':'')+'</div>';
+    const mk=L.marker([g.lat,g.lng],{icon:L.divIcon({className:'wx-ic',html,iconSize:[62,24],iconAnchor:[31,12]})});
+    mk.bindPopup('',{maxWidth:260,autoPan:false});
+    mk.on('popupopen',()=>mk.setPopupContent(this.wxPopup(g)));
+    mk.addTo(this.wxLayer);
+  }
+  wxPopup(g){
+    const r=this.wxRead(g), w=g.w;
+    const t=new Date(Date.parse(w.startTime)).toLocaleTimeString([], {hour:'numeric'});
+    let h='<b>'+(g.h===0?'Where you are now':'About '+g.h+'h up the trail')+'</b>'
+      +'<br><span style="opacity:.65">'+mpTxt(g.mile)+' · around '+t+'</span>'
+      +'<br>'+esc(r.short)+(r.temp!=null?' · <b>'+r.temp+'\u00b0'+esc(r.unit)+'</b>':'');
+    if(r.pop!=null) h+='<br>Rain '+r.pop+'%';
+    if(r.mph!=null){
+      h+='<br>Wind '+Math.round(r.mph)+' mph from the '+esc(w.windDirection||'?');
+      if(r.parts){
+        const hd=r.parts.head, cr=r.parts.cross;
+        h+='<br>'+(hd>3 ? '<b>'+Math.round(hd)+' mph headwind</b>'
+          : hd<-3 ? '<b>'+Math.round(-hd)+' mph tailwind</b>'
+          : 'nothing much head-on')
+          +(cr>=5?' · '+Math.round(cr)+' mph across':'');
+      } else h+='<br><span style="opacity:.65">No heading here to call it head or tail.</span>';
+    }
+    return h;
+  }
+  // The one-line version for the map sheet.
+  wxLine(){
+    if(!this.wxNow) return '';
+    const r=this.wxRead(this.wxNow), bits=[];
+    if(r.temp!=null) bits.push(r.temp+'\u00b0'+r.unit);
+    if(r.parts){
+      const hd=r.parts.head;
+      bits.push(hd>3?Math.round(hd)+' mph headwind':hd<-3?Math.round(-hd)+' mph tailwind':'little wind either way');
+    } else if(r.mph!=null) bits.push(Math.round(r.mph)+' mph wind');
+    if(r.pop) bits.push('rain '+r.pop+'%');
+    return bits.join(' · ');
+  }
+
+  /* ---------- multi-day outlook ---------- */
+  /* The map layer answers "what am I riding into today". This answers the question you
+     ask the night before: split the route into days, work out where you'd be and when,
+     and report the weather waiting for you there rather than the weather here now. */
+  buildWxDest(){
+    const sel=this.$('wxDest'); if(!sel) return;
+    const keep=sel.value;
+    let h='<option value="">nowhere in particular — just ride</option><optgroup label="Trail stops">';
+    TOWNS.forEach(t=>{ h+='<option value="t:'+t.mi+'">'+esc(t.n)+' — TM '+fmtMp(t.mi)+'</option>'; });
+    h+='</optgroup>';
+    const stay=this.POIS.filter(p=>(p.asset==='Lodging'||p.asset==='Campground') && p.mile!=null)
+      .slice().sort((a,b)=>a.mile-b.mile);
+    if(stay.length){
+      h+='<optgroup label="Lodging &amp; campgrounds">';
+      stay.forEach(p=>{ h+='<option value="p:'+p.i+'">'+esc(p.name)+' — TM '+fmtMp(p.mile)+'</option>'; });
+      h+='</optgroup>';
+    }
+    sel.innerHTML=h;
+    if(keep) sel.value=keep;
+  }
+  wxDestMile(){
+    const sel=this.$('wxDest'); if(!sel||!sel.value) return null;
+    const k=sel.value.slice(0,1), v=sel.value.slice(2);
+    if(k==='t') return +v;
+    const p=this.POIS[+v];
+    return p && p.mile!=null ? p.mile : null;
+  }
+  /* Days are cut by distance, then capped by the destination if there is one. Six is
+     the ceiling because NWS hourly runs about six and a half days out — past that
+     there is nothing to report, and a made-up seventh day is worse than none. */
+  wxLegs(){
+    const anchor=this.wxAnchorMile();
+    if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
+    const sgn=this.dir==='B2NYC'?-1:1;
+    const per=Math.max(5, this.wxPerDay||60);
+    const dest=this.wxDestMile();
+    let days=Math.max(1, Math.min(6, this.wxDays||4));
+    if(dest!=null){
+      const gap=(dest-anchor)*sgn;                  // positive when it lies ahead of you
+      if(gap<=0.5) return {err:'That one is behind you. Flip your direction in More, or pick something further along.'};
+      days=Math.ceil(gap/per);
+      if(days>6) return {err:'That is '+Math.round(gap)+' mi — about '+days+' days at '+Math.round(per)+' a day, and the forecast only runs six out. Raise the miles a day, or aim closer.'};
+    }
+    const legs=[]; let from=anchor;
+    for(let d=0; d<days; d++){
+      let to=from+sgn*per;
+      if(dest!=null && (to-dest)*sgn>0) to=dest;
+      to=Math.max(0,Math.min(TOTAL,to));
+      if(abs(to-from)<0.5) break;
+      legs.push({d, from, to, miles:abs(to-from)});
+      from=to;
+      if(dest!=null && abs(from-dest)<0.5) break;
+    }
+    return legs.length?legs:{err:'That works out to no riding at all — check the miles a day.'};
+  }
+  // Day 0 starts now if you're already up and riding; every other day starts at eight.
+  wxDepart(d){
+    const now=new Date();
+    const start=new Date(now.getFullYear(),now.getMonth(),now.getDate()+d,8,0,0,0).getTime();
+    return (d===0 && now.getTime()>start) ? now.getTime() : start;
+  }
+  wxLegSamples(leg){
+    const sp=this.avgSpeed>0?this.avgSpeed:12, dep=this.wxDepart(leg.d);
+    return [0.5,1].map(f=>{
+      const mile=leg.from+(leg.to-leg.from)*f, p=this.routePtAt(mile);
+      return {mile, lat:p[0], lng:p[1], hdg:this.routeBearing(mile), when: dep + (leg.miles*f/sp)*36e5};
+    });
+  }
+  /* Mean rather than worst for the wind: one gusty sample shouldn't brand a whole day
+     a headwind day. Rain and temperature take their extremes, because those are what
+     you pack for. */
+  wxSummary(samples){
+    const rs=samples.filter(x=>x.w).map(x=>this.wxRead({w:x.w, hdg:x.hdg}));
+    if(!rs.length) return null;
+    const nums=a=>a.filter(v=>v!=null && isFinite(v));
+    const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+    const temps=nums(rs.map(r=>r.temp)), pops=nums(rs.map(r=>r.pop));
+    const heads=rs.filter(r=>r.parts).map(r=>r.parts.head);
+    const cross=rs.filter(r=>r.parts).map(r=>r.parts.cross);
+    return {
+      tLo: temps.length?Math.min.apply(null,temps):null,
+      tHi: temps.length?Math.max.apply(null,temps):null,
+      pop: pops.length?Math.max.apply(null,pops):null,
+      head: heads.length?mean(heads):null,
+      cross: cross.length?mean(cross):null,
+      unit: rs[0].unit, short: rs[rs.length-1].short
+    };
+  }
+  // All three of head, tail and cross, said the way you'd say them out loud.
+  windWord(head, cross){
+    const h=head==null?0:head, c=cross==null?0:cross, mag=abs(h);
+    if(mag<3 && c<5) return {cls:'cross', txt:'barely any wind'};
+    if(mag<3) return {cls:'cross', txt:Math.round(c)+' mph crosswind'};
+    let t=Math.round(mag)+' mph '+(h>0?'headwind':'tailwind');
+    if(c>=5) t+=', '+Math.round(c)+' mph across';
+    return {cls: h>0?'head':'tail', txt:t};
+  }
+  async loadOutlook(){
+    if(this.wxBusy) return;
+    const legs=this.wxLegs();
+    if(legs.err){ this.wxPlan={err:legs.err}; this.renderOutlook(); return; }
+    this.wxBusy=true; this.wxPlan={loading:true}; this.renderOutlook();
+    const jobs=[];
+    legs.forEach(leg=>{ leg.samples=this.wxLegSamples(leg); leg.samples.forEach(x=>jobs.push(x)); });
+    await Promise.allSettled(jobs.map(async x=>{
+      const periods=await this.nwsHourly(x.lat,x.lng);
+      x.w=this.wxAt(periods, x.when);
+    }));
+    legs.forEach(leg=>{ leg.sum=this.wxSummary(leg.samples); });
+    this.wxBusy=false;
+    this.wxPlan={legs, at:Date.now(), got:legs.filter(l=>l.sum).length};
+    this.renderOutlook();
+  }
+  renderOutlook(){
+    const el=this.$('wxOut'); if(!el) return;
+    const pl=this.wxPlan;
+    const echo=this.$('wxSpeedEcho'); if(echo) echo.textContent=this.avgSpeed;
+    if(!pl){ el.innerHTML='<div class="up-empty">Set a day\u2019s distance and press the button. The forecast comes from the US National Weather Service, so it only asks when you ask.</div>'; return; }
+    if(pl.err){ el.innerHTML='<div class="up-empty">'+esc(pl.err)+'</div>'; return; }
+    if(pl.loading){ el.innerHTML='<div class="up-empty">Reading the forecast along your route\u2026</div>'; return; }
+    if(!pl.got){ el.innerHTML='<div class="up-empty">No answer from api.weather.gov. It covers the whole trail, but it does go down \u2014 worth another try in a minute.</div>'; return; }
+    const sp=this.avgSpeed>0?this.avgSpeed:12;
+    let h='';
+    pl.legs.forEach(leg=>{
+      const dt=new Date(this.wxDepart(leg.d));
+      const day=dt.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+      const hrs=leg.miles/sp;
+      h+='<div class="wx-day"><div class="wx-day-h"><span class="wx-day-n">Day '+(leg.d+1)+'</span>'
+        +'<span class="wx-day-d">'+esc(day)+'</span>'
+        +'<span class="wx-day-m">'+fmtWin(leg.miles)+' mi \u00b7 ~'+(hrs<1?Math.round(hrs*60)+' min':fmtWin(Math.round(hrs*10)/10)+'h')+'</span></div>'
+        +'<div class="wx-day-tm">TM '+fmtMp(leg.from)+' \u2192 '+fmtMp(leg.to)+'</div>';
+      const s=leg.sum;
+      if(!s){ h+='<div class="wx-none">No forecast came back for this stretch.</div>'; }
+      else{
+        const bits=[];
+        if(s.short) bits.push(esc(s.short));
+        if(s.tLo!=null) bits.push(s.tLo===s.tHi ? s.tLo+'\u00b0'+s.unit : s.tLo+'\u2013'+s.tHi+'\u00b0'+s.unit);
+        if(s.pop) bits.push('rain '+s.pop+'%');
+        h+='<div class="wx-day-w">'+bits.join(' \u00b7 ')+'</div>';
+        const ww=this.windWord(s.head, s.cross);
+        h+='<div class="wx-wind wx-'+ww.cls+'">'+icon('wind',15)+'<span>'+esc(ww.txt)+'</span></div>';
+      }
+      h+='</div>';
+    });
+    const at=new Date(pl.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    h+='<div class="wx-asof">Forecast read at '+esc(at)+' \u00b7 sampled at '+sp+' mph, starting 8am each day</div>';
+    el.innerHTML=h;
+  }
+
   /* ---------- map + live data ---------- */
   initMap(){
     const el=this.$('map');
@@ -1057,6 +1415,12 @@ class TrailApp {
     });
     this.stopLayer.addTo(map);
     this.layersCtl.addOverlay(this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
+    // Off until asked for: it costs a dozen requests to a public service, so switching
+    // it on is the fetch trigger rather than something that happens behind your back.
+    this.wxLayer=L.layerGroup();
+    this.layersCtl.addOverlay(this.wxLayer,'Wind &amp; weather');
+    map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
+    map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.renderMapSheet(); } });
     map.on('click',e=>{ if(this.tapToSet) this.askMove(e.latlng); });
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
@@ -1068,7 +1432,7 @@ class TrailApp {
     // live data
     const stat=this.$('poiStat'); if(stat) stat.textContent='Loading live data from the NY State service…';
     Promise.allSettled([
-      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); return n; }),
+      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); this.buildWxDest(); return n; }),
       this.fetchRouteLine().then(feats=>{ this.drawLiveRoute(feats); return feats.length; })
     ]).then(([poi,route])=>{
       if(stat){

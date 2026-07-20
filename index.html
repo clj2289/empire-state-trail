@@ -114,6 +114,40 @@
   .map-pick{animation:pickPulse 1.6s ease-out infinite}
   @keyframes pickPulse{0%,100%{opacity:1}50%{opacity:.3}}
   @media (prefers-reduced-motion:reduce){.map-pick{animation:none}}
+  /* Weather pins carry their reading in the label — a bare marker would mean tapping
+     six of them to learn what the layer is for. The arrow flies the way the wind
+     blows, and the colour says whether that helps you or costs you. */
+  .wx-ic{background:none;border:0}
+  .wx-pin{display:flex;align-items:center;gap:3px;padding:2px 5px;white-space:nowrap;
+    font-family:var(--font-body);font-size:11px;font-weight:600;line-height:1;
+    background:var(--color-bg);border:1px solid currentColor;border-radius:999px;
+    box-shadow:var(--shadow-md);font-variant-numeric:tabular-nums}
+  .wx-arrow{display:inline-block;font-size:13px;line-height:1}
+  .wx-p{font-weight:400;opacity:.7}
+  .wx-head{color:#b3261e}
+  .wx-tail{color:#146c2e}
+  .wx-cross{color:var(--color-neutral-700)}
+  .wx-pin .wx-t{color:var(--color-text)}
+  .sheet-wx{margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-700);
+    font-variant-numeric:tabular-nums}
+  /* Outlook */
+  .wx-dest{margin:var(--space-2) 0}
+  .wx-dest label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)}
+  .wx-dest select{flex:1;min-width:0;font-family:inherit;font-size:12px;padding:6px 8px;
+    background:var(--color-surface);color:var(--color-text);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .wx-out{display:flex;flex-direction:column;gap:var(--space-3);margin-top:var(--space-3)}
+  .wx-day{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
+  .wx-day-h{display:flex;align-items:baseline;gap:7px}
+  .wx-day-n{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px}
+  .wx-day-d{font-size:12px;color:var(--color-neutral-600)}
+  .wx-day-m{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
+  .wx-day-tm{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums;margin-top:1px}
+  .wx-day-w{font-size:13px;margin-top:5px}
+  .wx-none{font-size:12px;color:var(--color-neutral-500);margin-top:5px}
+  .wx-wind{display:flex;align-items:center;gap:5px;margin-top:4px;font-size:13px;font-weight:600}
+  .wx-wind .ic{flex:none}
+  .wx-asof{font-size:11px;color:var(--color-neutral-500);border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
   .fab{width:46px;height:46px;display:grid;place-items:center;cursor:pointer;
     background:var(--color-bg);color:var(--color-accent);border:1px solid var(--color-divider);
     border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
@@ -427,12 +461,32 @@
       </div>
     </section>
 
+    <section data-screen="wx" class="screen">
+      <div class="screen-pad">
+        <h1 class="screen-title">Outlook</h1>
+        <div class="poi-band">
+          <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
+          <label>Days <input id="wxDays" type="number" min="1" max="6" step="1" inputmode="numeric" placeholder="4"></label>
+        </div>
+        <div class="wx-dest"><label>Ending at <select id="wxDest"><option value="">nowhere in particular — just ride</option></select></label></div>
+        <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
+        <div id="wxOut" class="wx-out"></div>
+        <p class="poi-band-note">Forecast from the US National Weather Service (api.weather.gov), read where you’d be at <b id="wxSpeedEcho">12</b> mph rather than where you are now. Wind is split into the part you ride into and the part crossing you. NWS hourly runs about six days out, which is the ceiling on days here.</p>
+      </div>
+    </section>
+
     <section data-screen="settings" class="screen">
       <div class="screen-pad">
         <h1 class="screen-title">More</h1>
         <label class="switch"><input type="checkbox" id="showPassed"> Show stops I’ve already passed</label>
         <label class="switch"><input type="checkbox" id="tapToSet" checked> Tapping the map can move my location</label>
         <label class="switch"><input type="checkbox" id="showTrip"> Show the Trip tab</label>
+        <label class="switch"><input type="checkbox" id="showWx" checked> Show the Outlook tab</label>
+        <div class="feat-list-lbl">Average riding speed</div>
+        <div class="poi-band">
+          <label>Speed <input id="avgSpeed" type="number" min="4" max="30" step="1" inputmode="numeric" placeholder="12"> mph</label>
+        </div>
+        <p class="poi-band-note">Moving average over a day, not what the computer flashes on a downhill — 10 to 13 is honest for a loaded touring bike. It decides where you’d be at each forecast hour, so the weather layer and the Outlook both hang off it.</p>
         <div class="set-lbl">Direction of travel</div>
         <button type="button" class="dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span class="dir-lbl">Buffalo → NYC</span></button>
         <div class="set-lbl"><label for="simSel">Simulate a location</label></div>
@@ -453,6 +507,7 @@
     <button data-tab="next" type="button" class="tab" aria-current="false" title="Next up" aria-label="Next up"><span class="tab-ic" data-ic="next"></span></button>
     <button data-tab="itin" type="button" class="tab" aria-current="false" title="Trip" aria-label="Trip" hidden><span class="tab-ic" data-ic="list"></span></button>
     <button data-tab="nearby" type="button" class="tab" aria-current="false" title="Nearby" aria-label="Nearby"><span class="tab-ic" data-ic="near"></span></button>
+    <button data-tab="wx" type="button" class="tab" aria-current="false" title="Outlook" aria-label="Outlook"><span class="tab-ic" data-ic="wind"></span></button>
     <button data-tab="settings" type="button" class="tab" aria-current="false" title="More" aria-label="More"><span class="tab-ic" data-ic="gear"></span></button>
   </nav>
 </div>
