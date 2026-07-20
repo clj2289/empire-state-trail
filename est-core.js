@@ -198,6 +198,18 @@ const P = {
   lock:'M6 10V7a6 6 0 0 1 12 0v3|M5 10h14v10H5z',
   pin:'M12 21s-7-6-7-12a7 7 0 0 1 14 0c0 6-7 12-7 12Z|c12 9 2.5',
   search:'c10 10 6.5|M14.9 14.9L20 20',
+  food:'M7 3v7a2.5 2.5 0 0 0 5 0V3|M9.5 10.5V21|M17.5 3c1.6 1.3 2.5 3.2 2.5 5.2 0 1.9-.9 3.4-2.5 4V21',
+  // sky, in the five states a rider actually cares about
+  sun:'c12 12 4.3|M12 2.4v2.2|M12 19.4v2.2|M2.4 12h2.2|M19.4 12h2.2|M5.2 5.2l1.6 1.6|M17.2 17.2l1.6 1.6|M18.8 5.2l-1.6 1.6|M6.8 17.2l-1.6 1.6',
+  cloud:'M7.5 19h9.5a3.6 3.6 0 0 0 .4-7.18A5.6 5.6 0 0 0 6.5 10.4 4.3 4.3 0 0 0 7.5 19Z',
+  rain:'M7.5 16h9.5a3.6 3.6 0 0 0 .4-7.18A5.6 5.6 0 0 0 6.5 7.4 4.3 4.3 0 0 0 7.5 16Z|M8.5 18.5l-1 3|M12.5 18.5l-1 3|M16.5 18.5l-1 3',
+  snow:'M7.5 15h9.5a3.6 3.6 0 0 0 .4-7.18A5.6 5.6 0 0 0 6.5 6.4 4.3 4.3 0 0 0 7.5 15Z|M8 18.2l1.8 2|M9.8 18.2l-1.8 2|M14.2 18.2l1.8 2|M16 18.2l-1.8 2',
+  storm:'M7.5 15h9.5a3.6 3.6 0 0 0 .4-7.18A5.6 5.6 0 0 0 6.5 6.4 4.3 4.3 0 0 0 7.5 15Z|M13 17l-3.5 4.2h3L11.5 24',
+  fog:'M4 8h13|M6.5 12h13|M3.5 16h11|M7 20h12',
+  // and what the wind is doing to you, in the same three shapes the chart uses
+  whead:'M12 21V4|M5.5 10.5L12 4l6.5 6.5',
+  wtail:'M12 3v17|M5.5 13.5L12 20l6.5-6.5',
+  wcross:'M3 12h18|M7.5 6.5L2 12l5.5 5.5|M16.5 6.5L22 12l-5.5 5.5',
   fuel:'M5 21V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v16|M3.5 21h13|M7.5 8h5|M14 11h3a1.5 1.5 0 0 1 1.5 1.5v5a1.5 1.5 0 0 0 3 0V9.5L19 7',
   cart:'M3 4h2l2.1 10.3a2 2 0 0 0 2 1.6h8a2 2 0 0 0 1.95-1.55L21 7.5H6.2|c9.5 19.5 1.3|c17.5 19.5 1.3',
   wind:'M3 8h10a3 3 0 1 0-3-3|M3 13h14a3 3 0 1 1-3 3|M3 18h7a2 2 0 1 1-2 2',
@@ -206,17 +218,43 @@ const P = {
   chevR:'M9 6l6 6-6 6',
   chevL:'M15 6l-6 6 6 6'
 };
-function icon(name, size){
-  size = size || 20;
-  const spec = P[name]; if(!spec) return '';
-  const parts = spec.split('|').map(s=>{
+function iconInner(spec){
+  return spec.split('|').map(s=>{
     // "c<cx> <cy> <r>" — the cx rides on the 'c' with no space, so slice it off
     // rather than destructuring past it (that shifts every field and drops r).
     if(s[0]==='c'){ const t=s.split(' '); return '<circle cx="'+t[0].slice(1)+'" cy="'+t[1]+'" r="'+t[2]+'"/>'; }
     if(s[0]==='M'){ return '<path d="'+s+'"/>'; }
     return '';
   }).join('');
-  return '<svg class="ic" viewBox="0 0 24 24" width="'+size+'" height="'+size+'" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+parts+'</svg>';
+}
+function icon(name, size){
+  size = size || 20;
+  const spec = P[name]; if(!spec) return '';
+  return '<svg class="ic" viewBox="0 0 24 24" width="'+size+'" height="'+size+'" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+iconInner(spec)+'</svg>';
+}
+/* The same glyphs placed inside a drawing rather than inline in text: a group with
+   its own scale, centred on a point. The stroke width is divided back out so a
+   shrunk icon keeps the weight of a full-size one instead of turning to hairline. */
+function glyph(name,x,y,size,color){
+  const spec=P[name]; if(!spec) return '';
+  const k=size/24, n=v=>(Math.round(v*100)/100);
+  return '<g transform="translate('+n(x-size/2)+' '+n(y-size/2)+') scale('+n(k)+')"'
+    +' fill="none" stroke="'+(color||'currentColor')+'" stroke-width="'+n(1.9/k)
+    +'" stroke-linecap="round" stroke-linejoin="round">'+iconInner(spec)+'</g>';
+}
+/* NWS writes the sky as a sentence. These are the five pictures worth drawing, and
+   the order matters: "Mostly Cloudy" is cloud, "Partly Sunny" is the sun behind one,
+   and only a plain "Sunny" or "Clear" gets the bare sun. */
+function skyIcon(t){
+  const s=String(t||'').toLowerCase();
+  if(/thunder|t-storm|squall/.test(s)) return 'storm';
+  if(/snow|flurr|sleet|ice|freezing|wintry/.test(s)) return 'snow';
+  if(/rain|shower|drizzle/.test(s)) return 'rain';
+  if(/fog|haze|mist|smoke/.test(s)) return 'fog';
+  if(/cloudy|overcast/.test(s) && !/partly|mostly sunny/.test(s)) return 'cloud';
+  if(/partly|mostly sunny|mostly clear|few clouds|scattered/.test(s)) return 'fcast';
+  if(/sunny|clear|fair/.test(s)) return 'sun';
+  return 'fcast';
 }
 
 /* ---- amenity categories inferred from stop text ---- */
@@ -281,6 +319,12 @@ function parseGpx(text){
   const nm=doc.getElementsByTagName('name')[0];
   if(!lines.length && !wpts.length) throw new Error('no track, route or waypoints in it');
   return {name:nm?nm.textContent.trim():'', lines, wpts};
+}
+
+// The forecast office's own page for a point: the discussion, the radar and the
+// warnings, none of which fit on a dial.
+function nwsLink(lat,lng){
+  return 'https://forecast.weather.gov/MapClick.php?lat='+lat.toFixed(4)+'&lon='+lng.toFixed(4);
 }
 
 /* ---- finding a place ----
@@ -473,6 +517,7 @@ const OSM_TAGS=[
   ['shop','^(supermarket|grocery|greengrocer)$','Groceries'],
   ['shop','^(convenience|general)$','Convenience'],
   ['shop','^(variety_store|department_store|wholesale)$','General store'],
+  ['amenity','^(restaurant|fast_food|cafe|pub|bar|ice_cream)$','Food'],
   ['amenity','^(fuel)$','Fuel']
 ];
 function osmCat(t){
@@ -495,6 +540,7 @@ const CATCFG={
   'Attraction':{icon:'star',label:'Attractions'},
   'Train Station':{icon:'train',label:'Train stations'},
   'Groceries':{icon:'cart',label:'Groceries'},
+  'Food':{icon:'food',label:'Food'},
   'Convenience':{icon:'store',label:'Convenience'},
   'General store':{icon:'store',label:'Dollar / big box'},
   'Fuel':{icon:'fuel',label:'Fuel / gas'},
@@ -504,7 +550,7 @@ const CATCFG={
 const CAT_DEFAULT={'Lock camping':true,'Campground':true,'Lodging':true};
 /* Fallback order for the Nearby groups — a rider who hasn't dragged anything yet
    gets sleeping options first, sightseeing after, logistics last. */
-const CAT_ORDER=['Lock camping','Campground','Lodging','Groceries','Convenience','General store','Fuel',
+const CAT_ORDER=['Lock camping','Campground','Lodging','Food','Groceries','Convenience','General store','Fuel',
                  'Attraction','Train Station','Restroom','Parking Area'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
@@ -539,7 +585,7 @@ class TrailApp {
     // Overlays by key, the order they were registered in, and the order the rider
     // has dragged them into — the last of these is the only one that is saved.
     this.lyrByKey={}; this.lyrKeyById={}; this.lyrSeq=[]; this.lyrOrder=[];
-    this.userLayers=[];
+    this.userLayers=[]; this.wxAt0=null; this.wxPanT=null;
     this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
@@ -2221,8 +2267,41 @@ class TrailApp {
      stepped by the hour at your average speed. Direction stays on the map even though
      the outlook drops it: an arrow on a map has somewhere to point, and seeing the
      whole day's wind swing round is worth the ink. */
+  /* The map layer follows the map. Pan up the canal and the question becomes what it
+     is doing up the canal, which is the only reason to pan there. The Outlook stays
+     anchored to you, because that one is about your trip rather than about what you
+     happen to be looking at — so this is a second anchor rather than a change to the
+     first. A centre well off the route is somebody looking at Vermont, and falls back. */
+  wxMapAnchor(){
+    if(this.map){
+      const c=this.map.getCenter(), pr=projectRoute(c.lat,c.lng);
+      if(pr && pr.mile!=null && pr.off<=8){
+        // Looking at yourself is not panning: inside a few miles the answer stays
+        // pinned to where you actually are, so the first dial sits on you rather
+        // than a mile up the towpath from you.
+        if(this.myMile!=null && abs(pr.mile-this.myMile)<=3) return this.myMile;
+        return pr.mile;
+      }
+    }
+    return this.wxAnchorMile();
+  }
+  /* Redrawing as you pan is affordable because of the cache, not in spite of it: a
+     grid point costs two requests, they are keyed to a hundredth of a degree and
+     kept half an hour, so panning the length of a county costs a handful and panning
+     back costs none. Debounced, and ignored until the anchor has actually moved a
+     few miles — the expensive part was never the drawing. */
+  wxPanRefresh(){
+    if(!this.map||!this.wxLayer||!this.map.hasLayer(this.wxLayer)) return;
+    clearTimeout(this.wxPanT);
+    this.wxPanT=setTimeout(()=>{
+      const a=this.wxMapAnchor();
+      if(a==null) return;
+      if(this.wxAt0!=null && abs(a-this.wxAt0)<3) return;
+      this.loadWeather();
+    },450);
+  }
   wxSamples(){
-    const anchor=this.wxAnchorMile();
+    const anchor=this.wxMapAnchor();
     if(anchor==null) return [];
     const sgn=this.dir==='B2NYC'?-1:1, sp=this.avgSpeed>0?this.avgSpeed:12;
     const dist=Math.max(sp, this.wxPerDay||60);
@@ -2244,14 +2323,18 @@ class TrailApp {
     const pts=this.wxSamples();
     if(!pts.length){ this.status('Weather follows your route, so it needs a position on the trail first.'); return; }
     this.status('Reading the forecast along your route…');
-    const now=Date.now();
+    /* The day starts at eight. Reading the first sample for whatever moment the app
+       happened to be opened answers a question nobody asked — what matters is what it
+       will be doing when you are out in it. Same clock the Outlook keeps: if eight
+       has already gone by then you are up, and the answer is now. */
+    const dep=this.wxDepart(0), now=Date.now();
     const res=await Promise.allSettled(pts.map(async pt=>{
       const periods=await this.nwsHourly(pt.lat,pt.lng);
-      return {...pt, w:this.wxAt(periods, now+pt.h*36e5)};
+      return {...pt, when:dep+pt.h*36e5, w:this.wxAt(periods, dep+pt.h*36e5)};
     }));
     const got=res.filter(r=>r.status==='fulfilled' && r.value.w).map(r=>r.value);
     this.wxLayer.clearLayers();
-    this.wxAsOf=now;
+    this.wxAsOf=now; this.wxAt0=pts[0].mile;
     this.wxNow=got.filter(g=>g.h===0)[0]||null;
     got.forEach(g=>this.addWxMarker(g));
     this.renderMapSheet();
@@ -2259,7 +2342,8 @@ class TrailApp {
     const ride=abs(pts[pts.length-1].mile-pts[0].mile);
     this.status(got.length<pts.length
       ? 'Forecast in for '+got.length+' of '+pts.length+' points along your route.'
-      : 'Forecast in for today\u2019s '+fmtWin(Math.round(ride))+' mi at '+this.avgSpeed+' mph.');
+      : 'Forecast in for '+fmtWin(Math.round(ride))+' mi from TM '+fmtMp(pts[0].mile)
+        +', at '+this.avgSpeed+' mph from a '+this.wxClock(this.wxDepart(0))+' start.');
   }
   // One reading, in the units a rider thinks in.
   wxRead(g){
@@ -2270,25 +2354,60 @@ class TrailApp {
   }
   // Under 3 mph either way is noise, not a wind you'd notice on a bike.
   wxKind(r){ return !r.parts ? 'cross' : r.parts.head>3 ? 'head' : r.parts.head<-3 ? 'tail' : 'cross'; }
+  // "9am", the way a person says an hour.
+  wxClock(t){
+    return new Date(t).toLocaleTimeString([], {hour:'numeric'})
+      .replace(/\s?([AP])M/i,(m,a)=>a.toLowerCase()+'m').replace(/\s+/g,'');
+  }
+  wxKindColor(k){ return k==='head' ? '#b3261e' : k==='tail' ? '#146c2e' : '#5f6368'; }
+  wxKindGlyph(k){ return k==='head' ? 'whead' : k==='tail' ? 'wtail' : 'wcross'; }
+  /* A dial, so the map answers without being tapped. The ring fills clockwise with
+     the wind's strength and takes the colour of what that wind is doing to you — red
+     in your face, green at your back, grey when it only crosses — and the arrow on
+     the rim still flies the way it blows for anyone who wants the direction. Sky at
+     the top, temperature in the middle because that is what the eye goes to first,
+     the wind's shape and speed underneath. The hour hangs below in a pill, with the
+     rain chance beside it when there is one: a forecast with no time on it is a
+     rumour, and 40% is a thing you plan around. */
+  wxDial(r, kind){
+    const R=21, C=2*Math.PI*R, col=this.wxKindColor(kind);
+    const mph=r.mph==null?0:Math.max(0,Math.min(30,r.mph));
+    const on=(mph/30)*C;
+    let g='<svg class="wx-dial" viewBox="0 0 52 52" width="52" height="52" aria-hidden="true">'
+      +'<circle class="wx-d-bg" cx="26" cy="26" r="18.5"/>'
+      +'<circle class="wx-d-tr" cx="26" cy="26" r="'+R+'"/>';
+    if(on>1) g+='<circle class="wx-d-arc" cx="26" cy="26" r="'+R+'" stroke="'+col+'"'
+      +' stroke-dasharray="'+on.toFixed(1)+' '+C.toFixed(1)+'" transform="rotate(-90 26 26)"/>';
+    if(r.from!=null) g+='<path class="wx-d-ar" fill="'+col+'" d="M26 2.2l3.8 6.6h-7.6z"'
+      +' transform="rotate('+Math.round((r.from+180)%360)+' 26 26)"/>';
+    g+=glyph(skyIcon(r.short), 26, 17, 14, '#5f6368');
+    g+='<text class="wx-d-t" x="26" y="34" text-anchor="middle">'
+      +(r.temp==null?'—':r.temp+'°')+'</text>';
+    if(r.mph!=null && mph>=1){
+      g+=glyph(this.wxKindGlyph(kind), 21, 41, 10, col);
+      g+='<text class="wx-d-w" x="27" y="43.5" fill="'+col+'">'+Math.round(r.mph)+'</text>';
+    }
+    return g+'</svg>';
+  }
   addWxMarker(g){
     const r=this.wxRead(g), kind=this.wxKind(r);
-    const rot = r.from==null ? 0 : (r.from+180)%360;   // the arrow flies the way it blows
-    const html='<div class="wx-pin wx-'+kind+'">'
-      +'<span class="wx-arrow" style="transform:rotate('+Math.round(rot)+'deg)">\u2191</span>'
-      +(r.mph!=null?'<span class="wx-s">'+Math.round(r.mph)+'</span>':'')
-      +'<span class="wx-t">'+(r.temp==null?'—':r.temp+'\u00b0')+'</span>'
-      +(r.pop?'<span class="wx-p">'+r.pop+'%</span>':'')+'</div>';
-    const mk=L.marker([g.lat,g.lng],{icon:L.divIcon({className:'wx-ic',html,iconSize:[80,24],iconAnchor:[40,12]})});
-    mk.bindPopup('',{maxWidth:260,autoPan:false});
+    const wet=r.pop!=null && r.pop>=20;
+    const html='<div class="wx-pin wx-'+kind+'">'+this.wxDial(r,kind)
+      +'<span class="wx-when">'+esc(this.wxClock(g.when||Date.now()))
+      +(wet?'<i class="wx-wet">'+r.pop+'%</i>':'')+'</span></div>';
+    const mk=L.marker([g.lat,g.lng],{icon:L.divIcon({className:'wx-ic',html,iconSize:[68,72],iconAnchor:[34,26]})});
+    mk.bindPopup('',{maxWidth:270,autoPan:false});
     mk.on('popupopen',()=>mk.setPopupContent(this.wxPopup(g)));
     mk.addTo(this.wxLayer);
   }
   wxPopup(g){
     const r=this.wxRead(g), w=g.w;
-    const t=new Date(Date.parse(w.startTime)).toLocaleTimeString([], {hour:'numeric'});
     const hh=Math.round(g.h*10)/10;
-    let h='<b>'+(g.h===0?'Where you are now':'About '+fmtWin(hh)+'h up the trail')+'</b>'
-      +'<br><span style="opacity:.65">'+mpTxt(g.mile)+' · around '+t+'</span>'
+    // The hour leads: the whole point of sampling by riding-time is that this is the
+    // weather at the moment you would be standing in it.
+    let h='<b>'+esc(this.wxClock(g.when||Date.parse(w.startTime)))+' \u00b7 '+mpTxt(g.mile)+'</b>'
+      +'<br><span style="opacity:.65">'+(g.h===0?'where the day starts'
+        :fmtWin(hh)+'h in, at '+this.avgSpeed+' mph')+'</span>'
       +'<br>'+esc(r.short)+(r.temp!=null?' · <b>'+r.temp+'\u00b0'+esc(r.unit)+'</b>':'');
     if(r.pop!=null) h+='<br>Rain '+r.pop+'%';
     if(r.mph!=null){
@@ -2301,6 +2420,9 @@ class TrailApp {
           +(cr>=5?' · '+Math.round(cr)+' mph across':'');
       } else h+='<br><span style="opacity:.65">No heading here to call it head or tail.</span>';
     }
+    // Ours is six numbers off a grid point; theirs is the discussion, the radar and
+    // any warning in force.
+    h+='<br><a href="'+nwsLink(g.lat,g.lng)+'" target="_blank" rel="noopener">Full forecast at weather.gov</a>';
     return h;
   }
   // The one-line version for the map sheet.
@@ -2646,7 +2768,10 @@ class TrailApp {
       h+='</div>';
     });
     const at=new Date(pl.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
-    h+='<div class="wx-asof">Forecast read at '+esc(at)+' \u00b7 sampled at '+sp+' mph, starting 8am each day</div>';
+    const a0=(pl.legs&&pl.legs[0]&&pl.legs[0].anchors&&pl.legs[0].anchors[0])||null;
+    h+='<div class="wx-asof">Forecast read at '+esc(at)+' \u00b7 sampled at '+sp+' mph, starting 8am each day'
+      +(a0&&a0.lat!=null?' · <a href="'+nwsLink(a0.lat,a0.lng)+'" target="_blank" rel="noopener">weather.gov</a>':'')
+      +'</div>';
     el.innerHTML=h;
   }
 
@@ -2701,7 +2826,7 @@ class TrailApp {
        looking at. Redrawn on moveend — which is also what a zoom ends in. */
     this.mileLayer=L.layerGroup().addTo(map);
     this.regLayer('miles', this.mileLayer,'Mileposts');
-    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); });
+    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
        control. The Shoreline is free to draw; the counts cost a request per view. */
@@ -2726,7 +2851,7 @@ class TrailApp {
     this.wxLayer=L.layerGroup();
     this.regLayer('wx', this.wxLayer,'Wind &amp; weather');
     map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
-    map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.renderMapSheet(); } });
+    map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.wxAt0=null; this.renderMapSheet(); } });
     map.on('click',e=>this.tapPopup(e.latlng));
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });

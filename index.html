@@ -225,18 +225,24 @@
   .wx-k-h::before{background:#b3261e}
   .wx-k-l::before{background:#146c2e}
   .wx-k-c::before{background:var(--color-neutral-400)}
-  .wx-ic{background:none;border:0}
-  .wx-pin{display:flex;align-items:center;gap:3px;padding:2px 5px;white-space:nowrap;
-    font-family:var(--font-body);font-size:11px;font-weight:600;line-height:1;
-    background:var(--color-bg);border:1px solid currentColor;border-radius:999px;
-    box-shadow:var(--shadow-md);font-variant-numeric:tabular-nums}
-  .wx-arrow{display:inline-block;font-size:13px;line-height:1}
-  .wx-s{font-weight:700}
-  .wx-p{font-weight:400;opacity:.7}
+  /* The map's forecast: one dial per riding-hour, readable without a tap. */
+  .wx-ic{background:none;border:0;overflow:visible}
+  .wx-pin{display:flex;flex-direction:column;align-items:center;gap:1px;
+    font-family:var(--font-body);font-variant-numeric:tabular-nums}
+  .wx-dial{display:block;overflow:visible;filter:drop-shadow(0 1px 3px rgba(0,0,0,.3))}
+  .wx-d-bg{fill:var(--color-bg)}
+  .wx-d-tr{fill:none;stroke:var(--color-neutral-300);stroke-width:3}
+  .wx-d-arc{fill:none;stroke-width:3;stroke-linecap:round}
+  .wx-d-t{font-size:14px;font-weight:700;fill:var(--color-text)}
+  .wx-d-w{font-size:9.5px;font-weight:700}
+  .wx-when{display:inline-flex;align-items:center;gap:3px;padding:1px 5px;
+    font-size:9.5px;font-weight:600;line-height:1.5;white-space:nowrap;
+    color:var(--color-neutral-700);background:var(--color-bg);
+    border:1px solid var(--color-divider);border-radius:999px;box-shadow:var(--shadow-sm)}
+  .wx-wet{font-style:normal;color:var(--color-accent-700)}
   .wx-head{color:#b3261e}
   .wx-tail{color:#146c2e}
   .wx-cross{color:var(--color-neutral-700)}
-  .wx-pin .wx-t{color:var(--color-text)}
   .sheet-wx{margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-700);
     font-variant-numeric:tabular-nums}
   /* Outlook */
@@ -660,12 +666,12 @@
         <div class="set-lbl">Shops, fuel and beds</div>
         <button id="osmBtn" type="button" class="poi-band-view">Load them from OpenStreetMap</button>
         <div id="osmStat" class="ul-stat"></div>
-        <p class="poi-band-note">The state\u2019s own layer is a trail layer \u2014 it knows the lock campsites and the canal museum, and next to nothing about where you buy food. This asks OpenStreetMap for the supermarkets, convenience stores, dollar and big-box shops, gas stations and hotels within 5 miles of the route, 25 miles either side of you, and folds them into Nearby and the map with everything else. Overpass is a shared public service and can take a few seconds.</p>
+        <p class="poi-band-note">The state’s own layer is a trail layer — it knows the lock campsites and the canal museum, and next to nothing about where you buy food. This asks OpenStreetMap for the supermarkets, restaurants and cafes, convenience stores, dollar and big-box shops, gas stations and hotels within 5 miles of the route, 25 miles either side of you, and folds them into Nearby and the map with everything else. Overpass is a shared public service and can take a few seconds.</p>
         <div class="set-lbl">Your own layers</div>
         <div class="poi-band">
           <label class="ul-lbl">ArcGIS layer URL
             <input id="ulUrl" type="url" class="input" inputmode="url" autocomplete="off"
-              placeholder="https://\u2026/FeatureServer/0"></label>
+              placeholder="https://…/FeatureServer/0"></label>
           <button id="ulAdd" type="button" class="poi-band-view">Add</button>
         </div>
         <div class="poi-band">
@@ -674,7 +680,7 @@
         </div>
         <div id="ulStat" class="ul-stat"></div>
         <div id="ulList" class="ul-list"></div>
-        <p class="poi-band-note">Anything you add turns up in the map\u2019s layers control, off until you switch it on, and can be dragged into whatever order you want it drawn in. An ArcGIS URL is a single layer\u2019s endpoint \u2014 the one ending in a number. It\u2019s fetched over New York, up to 2,000 features, and stored as the URL so it stays current. A GPX is stored as its points, since there\u2019s nowhere to fetch it back from.</p>
+        <p class="poi-band-note">Anything you add turns up in the map’s layers control, off until you switch it on, and can be dragged into whatever order you want it drawn in. An ArcGIS URL is a single layer’s endpoint — the one ending in a number. It’s fetched over New York, up to 2,000 features, and stored as the URL so it stays current. A GPX is stored as its points, since there’s nowhere to fetch it back from.</p>
         <div id="locStatus" class="locstat">Tap Locate on the map, tap the map itself, or pick a simulated spot to set where you are.</div>
         <div class="about">
           Route and every trail-mile are measured along the official Empire State Trail GPX (Oct 2025). Facility pins load live from NY State's public service; confirm a specific business before relying on it.<br><br>
