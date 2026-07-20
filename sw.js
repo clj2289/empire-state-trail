@@ -1,5 +1,5 @@
 // Empire State Trail Companion — service worker (offline support)
-const CACHE='est-shell-v3';
+const CACHE='est-shell-v4';
 const RUNTIME='est-runtime-v2';
 const SHELL=['./','./index.html','./est-core.js','./broadsheet/styles.css','./manifest.json','./icon-192.png','./icon-512.png'];
 
@@ -15,12 +15,20 @@ self.addEventListener('fetch',e=>{
   const req=e.request;
   if(req.method!=='GET') return;
   const url=new URL(req.url);
-  // App shell (same origin): cache-first, fall back to index.html for navigations
+  // App shell (same origin): network-first, falling back to cache when offline.
+  //
+  // This used to be cache-first (`caches.match(req).then(r => r || fetch(req))`),
+  // which never revalidated: once index.html and est-core.js were in the cache
+  // they were served forever and no shipped change could reach an existing
+  // install. Bumping CACHE only helped once the browser happened to notice a new
+  // sw.js. The shell is small and same-origin, so paying a network round-trip for
+  // freshness is the right trade — offline still works via the cache fallback.
   if(url.origin===location.origin){
     e.respondWith(
-      caches.match(req).then(r=> r || fetch(req).then(res=>{
-        const copy=res.clone(); caches.open(CACHE).then(c=>c.put(req,copy)); return res;
-      }).catch(()=> caches.match('./index.html')))
+      fetch(req).then(res=>{
+        if(res && res.status===200){ const copy=res.clone(); caches.open(CACHE).then(c=>c.put(req,copy)); }
+        return res;
+      }).catch(()=> caches.match(req).then(r=> r || caches.match('./index.html')))
     );
     return;
   }
