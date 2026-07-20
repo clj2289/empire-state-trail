@@ -104,6 +104,8 @@ const POI_LABEL_Z=13;
 const HI_PANE_Z='1200';
 // Beats any z-index Leaflet derives from a marker's y position within the same pane.
 const HI_Z_OFFSET=100000;
+// How far the NWS hourly grid actually runs, and therefore how many days we show.
+const WX_MAX_DAYS=6;
 
 /* ---- NYSDOT traffic counts -------------------------------------------------
    The AADT layer behind the state's Traffic Data Viewer: annual average daily
@@ -574,7 +576,7 @@ class TrailApp {
     this.tapToSet=true;
     this.showTrip=false; this.screen='map'; this.panelSnap='shut';
     this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
-    this.showWx=true; this.wxPerDay=60; this.wxDays=4; this.wxPlan=null; this.wxBusy=false;
+    this.showWx=true; this.wxPerDay=60; this.wxPlan=null; this.wxBusy=false;
     this.prices={}; this.poiMarker={};
     // Planning mode: no usable trail position, so distances run from the start of the
     // trip. offTrail records how far a real fix was, for the note that explains it.
@@ -637,7 +639,6 @@ class TrailApp {
     this.wireControls();
     this.wireTabAutohide();
     this.wirePanelDrag();
-    this.buildWxDest();
     this.initMap();
     this.renderAll();
     // Peek is measured off the rendered stats, so it can only be set once they exist.
@@ -670,7 +671,6 @@ class TrailApp {
     if(isFinite(p.avgSpeed)&&p.avgSpeed>0) this.avgSpeed=p.avgSpeed;
     if(typeof p.showWx==='boolean') this.showWx=p.showWx;
     if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
-    if(isFinite(p.wxDays)&&p.wxDays>0) this.wxDays=p.wxDays;
     if(isFinite(p.miMin)) this.miMin=p.miMin;
     if(isFinite(p.miMax)) this.miMax=p.miMax;
     if(isFinite(p.mpFrom)&&p.mpFrom>=0) this.mpFrom=p.mpFrom;
@@ -691,7 +691,6 @@ class TrailApp {
     const spd=this.$('avgSpeed'); if(spd) spd.value=this.avgSpeed;
     const sw=this.$('showWx'); if(sw) sw.checked=this.showWx;
     const pd=this.$('wxPerDay'); if(pd) pd.value=this.wxPerDay;
-    const wd=this.$('wxDays'); if(wd) wd.value=this.wxDays;
     const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
     const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
     const c=this.$('mpFrom'); if(c && this.mpFrom!=null) c.value=this.mpFrom;
@@ -701,7 +700,7 @@ class TrailApp {
     this.syncFollowUi();
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxDays:this.wxDays,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder})); }catch(e){}
   }
@@ -1043,8 +1042,8 @@ class TrailApp {
     const wg=this.$('wxGo');
     if(wg) wg.addEventListener('click',()=>this.loadOutlook());
     const rd=id=>{ const el=this.$(id); if(!el) return;
-      el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this[id==='wxDays'?'wxDays':'wxPerDay']=n; this.savePrefs(); } }); };
-    rd('wxPerDay'); rd('wxDays');
+      el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this.wxPerDay=n; this.savePrefs(); } }); };
+    rd('wxPerDay');
     const sw=this.$('showWx');
     if(sw) sw.addEventListener('change',()=>{ this.showWx=sw.checked; this.savePrefs(); this.applyWxTab(); });
     const as=this.$('avgSpeed');
@@ -1256,18 +1255,18 @@ class TrailApp {
     // that stays distinct whichever way you're travelling.
     const ridden = this.dir==='B2NYC' ? TOTAL-this.myMile : this.myMile;
     const pct = Math.max(0,Math.min(100,(ridden/TOTAL)*100));
-    // Every figure below is measured from myMile. When that is an anchor rather than a
-    // fix, saying so once here is the difference between a plan and a wrong readout.
-    let h = this.planning
-      ? '<div class="sheet-plan">Planning from <b>'+esc(this.anchorName())+'</b>'
-        +(this.offTrail?' · you are ~'+this.offTrail+' mi away':'')
-        +' — distances switch to your position once you are on the trail.</div>' : '';
-    h+='<div class="sheet-row"><div><div class="sheet-k">'+(this.planning?'Starting at':'Trail mile')+'</div><div class="sheet-v">'+fmtMp(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
-      +'<div class="sheet-r"><div class="sheet-k">ridden</div><div class="sheet-v">'+Math.round(pct)+'%</div></div></div>';
+    /* One line. This was a stat block — trail mile and percent ridden as display
+       figures, a next-stop button, and a planning banner — stacked above a list whose
+       whole job is to be read. On a map screen the map is the thing worth the pixels,
+       so what survives is the mile you are measuring from, the fact that it might be
+       an anchor rather than a fix, and the weather if there is any. Percent ridden,
+       the next stop and the pager are all a tab away or a pan away. */
+    const bits=['<b>TM '+fmtMp(this.myMile)+'</b> <span class="sheet-of">of '+Math.round(TOTAL)+'</span>'];
+    if(this.planning) bits.push('planning from '+esc(this.anchorName()));
+    else bits.push(Math.round(pct)+'% ridden');
     const wl=this.wxLine();
-    if(wl) h+='<div class="sheet-wx">'+esc(wl)+'</div>';
-    if(nx){ h+='<button class="sheet-next" data-lat="'+nx.lat+'" data-lng="'+nx.lng+'" data-town="'+esc(nx.n)+'"><span class="sheet-k">Next stop</span><span class="sheet-nm">'+esc(nx.n)+' · '+mpTxt(nx.mi)+' · ~'+fmtMi(abs(nx.mi-this.myMile))+' mi</span>'+icon('chevR',18)+'</button>'; }
-    el.innerHTML=h;
+    if(wl) bits.push(esc(wl));
+    el.innerHTML='<div class="sheet-line">'+bits.join(' <span class="sheet-dot">·</span> ')+'</div>';
   }
 
   renderNext(){
@@ -1504,7 +1503,9 @@ class TrailApp {
     this.renderFilterState();
     const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length);
     if(!keys.length){ list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
-    let h=this.pagerHTML();
+    // No pager while the list follows the map: panning IS how you move the window,
+    // and a stepper for it only repeated what the map already does, three rows deep.
+    let h=view?'':this.pagerHTML();
     keys.forEach(cat=>{
       const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
@@ -1781,7 +1782,7 @@ class TrailApp {
     });
     this.poiLayers={}; this.poiMarker={};
     this.buildPOILayers(on);
-    this.buildWxDest(); this.renderNext(); this.renderCategories(); this.renderNearby();
+    this.renderNext(); this.renderCategories(); this.renderNearby();
     this.renderFilterState && this.renderFilterState();
   }
 
@@ -2655,29 +2656,6 @@ class TrailApp {
     return TOWNS.filter(t=>t.mi>=lo-0.2 && t.mi<=hi+0.2)
       .slice().sort((a,b)=> fwd ? a.mi-b.mi : b.mi-a.mi);
   }
-  buildWxDest(){
-    const sel=this.$('wxDest'); if(!sel) return;
-    const keep=sel.value;
-    let h='<option value="">nowhere in particular — just ride</option><optgroup label="Trail stops">';
-    TOWNS.forEach(t=>{ h+='<option value="t:'+t.mi+'">'+esc(t.n)+' — TM '+fmtMp(t.mi)+'</option>'; });
-    h+='</optgroup>';
-    const stay=this.POIS.filter(p=>(p.asset==='Lodging'||p.asset==='Campground') && p.mile!=null)
-      .slice().sort((a,b)=>a.mile-b.mile);
-    if(stay.length){
-      h+='<optgroup label="Lodging &amp; campgrounds">';
-      stay.forEach(p=>{ h+='<option value="p:'+p.i+'">'+esc(p.name)+' — TM '+fmtMp(p.mile)+'</option>'; });
-      h+='</optgroup>';
-    }
-    sel.innerHTML=h;
-    if(keep) sel.value=keep;
-  }
-  wxDestMile(){
-    const sel=this.$('wxDest'); if(!sel||!sel.value) return null;
-    const k=sel.value.slice(0,1), v=sel.value.slice(2);
-    if(k==='t') return +v;
-    const p=this.POIS[+v];
-    return p && p.mile!=null ? p.mile : null;
-  }
   /* Days are cut by distance, then capped by the destination if there is one. Six is
      the ceiling because NWS hourly runs about six and a half days out — past that
      there is nothing to report, and a made-up seventh day is worse than none. */
@@ -2686,23 +2664,17 @@ class TrailApp {
     if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
     const sgn=this.dir==='B2NYC'?-1:1;
     const per=Math.max(5, this.wxPerDay||60);
-    const dest=this.wxDestMile();
-    let days=Math.max(1, Math.min(6, this.wxDays||4));
-    if(dest!=null){
-      const gap=(dest-anchor)*sgn;                  // positive when it lies ahead of you
-      if(gap<=0.5) return {err:'That one is behind you. Flip your direction in More, or pick something further along.'};
-      days=Math.ceil(gap/per);
-      if(days>6) return {err:'That is '+Math.round(gap)+' mi — about '+days+' days at '+Math.round(per)+' a day, and the forecast only runs six out. Raise the miles a day, or aim closer.'};
-    }
+    // Always the full six. NWS hourly runs about that far and no further, so a box
+    // asking how many days you wanted only ever offered you less than there was.
+    const days=WX_MAX_DAYS;
     const legs=[]; let from=anchor;
     for(let d=0; d<days; d++){
-      let to=from+sgn*per;
-      if(dest!=null && (to-dest)*sgn>0) to=dest;
-      to=Math.max(0,Math.min(TOTAL,to));
+      // The end of the trail is the only thing that shortens a day now that there is
+      // no destination to ride at.
+      const to=Math.max(0,Math.min(TOTAL,from+sgn*per));
       if(abs(to-from)<0.5) break;
       legs.push({d, from, to, miles:abs(to-from)});
       from=to;
-      if(dest!=null && abs(from-dest)<0.5) break;
     }
     return legs.length?legs:{err:'That works out to no riding at all — check the miles a day.'};
   }
@@ -3076,7 +3048,7 @@ class TrailApp {
     // live data
     const stat=this.$('poiStat'); if(stat) stat.textContent='Loading live data from the NY State service…';
     Promise.allSettled([
-      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); this.buildWxDest(); return n; }),
+      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); return n; }),
       this.fetchRouteLine().then(feats=>{ this.drawLiveRoute(feats); return feats.length; })
     ]).then(([poi,route])=>{
       if(stat){

@@ -253,16 +253,12 @@
   .wx-cross{color:var(--color-neutral-700)}
   .sheet-wx{margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-700);
     font-variant-numeric:tabular-nums}
-  /* Planning banner: every figure under it is measured from an anchor, not a fix. */
-  .sheet-plan{margin-bottom:var(--space-2);padding:5px 8px;font-size:11px;line-height:1.45;
-    color:var(--color-accent-800);background:var(--color-accent-100);
-    border-left:2px solid var(--color-accent);border-radius:var(--radius-sm)}
+  /* One line, because the map is what the screen is for. */
+  .sheet-line{font-size:12px;line-height:1.5;color:var(--color-neutral-700);
+    font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sheet-line b{color:var(--color-text);font-size:13px}
+  .sheet-dot{color:var(--color-neutral-400)}
   /* Outlook */
-  .wx-dest{margin:var(--space-2) 0}
-  .wx-dest label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)}
-  .wx-dest select{flex:1;min-width:0;font-family:inherit;font-size:12px;padding:6px 8px;
-    background:var(--color-surface);color:var(--color-text);
-    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
   .wx-out{display:flex;flex-direction:column;gap:var(--space-3);margin-top:var(--space-3)}
   .wx-day{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
   .wx-day-h{display:flex;align-items:baseline;gap:7px}
@@ -274,9 +270,11 @@
   .wx-night{margin-top:5px;padding:5px 8px;font-size:12px;color:var(--color-neutral-700);
     background:var(--color-neutral-100);border-radius:var(--radius-md)}
   .wx-night b{color:var(--color-text)}
-  .wx-day-w{font-size:13px;margin-top:5px}
+  /* Sky, temperature and rain are what you decide a day on; wind is a detail you
+     read after. It used to be the other way round on the page. */
+  .wx-day-w{font-size:16px;font-weight:600;color:var(--color-text);margin-top:6px;line-height:1.4}
   .wx-none{font-size:12px;color:var(--color-neutral-500);margin-top:5px}
-  .wx-wind{display:flex;align-items:center;gap:5px;margin-top:4px;font-size:13px;font-weight:600}
+  .wx-wind{display:flex;align-items:center;gap:5px;margin-top:3px;font-size:12px;font-weight:400}
   .wx-wind .ic{flex:none}
   .wx-asof{font-size:11px;color:var(--color-neutral-500);border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
   /* Zoom is one control in two halves, so it sits tighter than the gap between the
@@ -291,18 +289,7 @@
     padding:0 calc(var(--space-4) + env(safe-area-inset-right)) var(--space-3) calc(var(--space-4) + env(safe-area-inset-left))}
   .map-sheet[hidden]{display:none}
   .sheet-empty{font-size:13px;color:var(--color-neutral-700);line-height:1.5}
-  .sheet-row{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-3)}
-  .sheet-k{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent)}
-  .sheet-v{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:23px;line-height:1.05}
-  .sheet-of{font-size:12px;color:var(--color-neutral-600);font-family:var(--font-body);font-weight:400}
-  .sheet-r{text-align:right}
-  .sheet-next{margin-top:var(--space-3);width:100%;display:flex;align-items:center;gap:var(--space-2);cursor:pointer;
-    background:var(--color-surface);border:1px solid var(--color-divider);border-radius:var(--radius-md);
-    padding:var(--space-2) var(--space-3);text-align:left;color:var(--color-text)}
-  .sheet-next .ic{margin-left:auto;color:var(--color-accent)}
-  .sheet-next:hover{border-color:var(--color-accent)}
-  .sheet-next .sheet-k{display:block}
-  .sheet-nm{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:14px}
+  .sheet-of{font-size:12px;color:var(--color-neutral-600);font-weight:400}
 
   /* ---- next up ---- */
   .hero{margin-bottom:var(--space-4)}
@@ -692,12 +679,10 @@
         <h1 class="screen-title">Outlook</h1>
         <div class="poi-band">
           <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
-          <label>Days <input id="wxDays" type="number" min="1" max="6" step="1" inputmode="numeric" placeholder="4"></label>
         </div>
-        <div class="wx-dest"><label>Riding to <select id="wxDest"><option value="">nowhere in particular — just ride</option></select></label></div>
         <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
         <div id="wxOut" class="wx-out"></div>
-        <p class="poi-band-note">Forecast from the US National Weather Service (api.weather.gov), read where you’d be at <b id="wxSpeedEcho">12</b> mph rather than where you are now. Wind is split into the part you ride into and the part crossing you. NWS hourly runs about six days out, which is the ceiling on days here.</p>
+        <p class="poi-band-note">Forecast from the US National Weather Service (api.weather.gov), read where you’d be at <b id="wxSpeedEcho">12</b> mph rather than where you are now. NWS hourly runs about six days out, so you get all six.</p>
       </div>
     </section>
 
