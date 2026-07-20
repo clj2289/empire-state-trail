@@ -62,8 +62,57 @@ const TEST=[
    All three design-system apps load this; only their CSS differs.
    ============================================================ */
 const TOTAL = ROUTE[ROUTE.length-1][2];
+
+/* ---- the Shoreline Trail: imported, not adopted -----------------------------
+   Somebody's GPX off RideWithGPS — Buffalo's Outer Harbor up the Niagara to
+   Youngstown by way of the West River path on Grand Island. It is drawn and
+   nothing else. Trail miles are what make a line part of this app's arithmetic:
+   give it mileposts and it starts turning up in Nearby, in the day planner and in
+   every distance quoted, off a stranger's track nobody has checked against the
+   ground. So the geometry lands now and the mileage decision waits.
+   The file in gpx/ is the line — it is parsed at the moment the layer is first
+   switched on rather than pasted into this file as a second copy that can drift,
+   and its length is measured from those same points rather than quoted. */
+const SHORE={
+  name:'Shoreline Trail',
+  sub:'Buffalo \u2192 Youngstown, via the West River path',
+  file:'gpx/Total_Shoreline_Trail_via_West_River.gpx',
+  src:'https://ridewithgps.com/routes/38214982',
+  srcName:'RideWithGPS',
+  drawn:'2021-12-20',           // the GPX's own stamp, not the day it was imported
+  color:'#6b3fa0'
+};
+
+// The trail's own home page, which is also where the official GPX for a GPS unit
+// lives — the layers control links to it the same way the borrowed layers link to
+// theirs, because "where did this line come from" is the same question either way.
+const EST_SRC='https://empiretrail.ny.gov/import-instructions';
+
+/* ---- NYSDOT traffic counts -------------------------------------------------
+   The AADT layer behind the state's Traffic Data Viewer: annual average daily
+   traffic, which is the number that answers the question a rider actually has
+   about a road — how much of it will be going past me. Off by default and drawn
+   only from close in, because a square mile of Syracuse holds about a thousand
+   of these segments and half a megabyte a pan is worse than no layer at all. */
+const AADT_URL='https://gis.dot.ny.gov/hostingny/rest/services/Roadways/Traffic_Monitoring/FeatureServer/1/query';
+const AADT_SRC='https://www.dot.ny.gov/tdv';
+const AADT_MINZ=10, AADT_CAP=400;
+// Bands as a bike feels them, not as a traffic engineer files them. The weights are
+// deliberately heavier than the route line: this layer is the answer to "which way
+// round do I go", and a hairline you have to hunt for cannot answer it.
+const AADT_BANDS=[[1000,'#2e7d32','quiet',4],[5000,'#c98a00','moderate',5],
+                  [15000,'#e06c00','busy',6.5],[Infinity,'#b3261e','heavy',8]];
+/* Zoomed out, the quiet streets are not what you are looking for and there is not
+   the room to draw them anyway, so the floor rises with the scale — the same idea
+   as the milepost interval. Where more is in view than will be drawn the busiest
+   survive regardless; this only decides what is worth asking for in the first
+   place, which is what keeps a rural county from being drawn as every farm lane. */
+const AADT_FLOOR=[[13,0],[12,1000],[11,2500],[10,6000]];
 const abs = Math.abs;
 const fmtMi = m => m < 10 ? m.toFixed(1) : String(Math.round(m));
+// Window bounds are typed by hand and land on round numbers, so they read as
+// integers unless a step actually produced a fraction.
+const fmtWin = m => abs(m-Math.round(m))<0.05 ? String(Math.round(m)) : m.toFixed(1);
 /* A distance answers "how far", a milepost answers "where" — and the milepost is
    the number on the trail sign, in the itinerary column, and in whatever else the
    rider is cross-checking against. Anything that prints a distance prints the mile
@@ -71,12 +120,47 @@ const fmtMi = m => m < 10 ? m.toFixed(1) : String(Math.round(m));
    fmtMi rounds anything over 10 to whole miles, which read as a different scale
    sitting next to the one-decimal mileposts the TOWNS table has always used. */
 const fmtMp = m => (m==null || !isFinite(m)) ? '' : m.toFixed(1);
+// Intervals a person reads without doing arithmetic — no 3s, no 15s. The cap is a
+// backstop on a pathological viewport, not a design limit: at 48px a label the whole
+// trail never puts more than a few dozen on screen.
+const MILE_LADDER=[1,2,5,10,25,50,100], MILE_CAP=300;
 const mpTxt = m => { const s=fmtMp(m); return s ? 'TM '+s : ''; };
 
 /* Facility names/addresses come from a third-party service and land in innerHTML
    and in data-* attributes, so everything interpolated goes through esc() first.
    safeUrl() keeps a hostile record from smuggling a javascript: URL into an href. */
 const PREFS='est-prefs-v1';
+const PRICES='est-prices-v1';
+/* Chain pins carry a wordmark rather than a logo: brand logos are trademarks, and
+   shipping them into this repo — or hotlinking them, which the offline story rules
+   out anyway — is not ours to do. An abbreviation in the chain's own colour scans
+   from the same distance and costs nobody a lawyer. Longest name first, so Hilton
+   Garden and Holiday Inn Express aren't eaten by Hilton and Holiday Inn. */
+const BRANDS=[
+  [/hilton garden/i,'HGI','#00457c'],[/home2/i,'HOME2','#00457c'],[/homewood/i,'HWS','#00457c'],
+  [/doubletree/i,'DBLTREE','#00457c'],[/tru by hilton/i,'TRU','#00457c'],[/hampton/i,'HAMPTON','#00457c'],
+  [/embassy suites/i,'EMBASSY','#00457c'],[/\bhilton\b/i,'HILTON','#00457c'],
+  [/holiday inn express/i,'HIEX','#1f7a3f'],[/holiday inn/i,'HOL INN','#1f7a3f'],
+  [/candlewood/i,'CANDLE','#1f7a3f'],[/staybridge/i,'STAYBR','#1f7a3f'],[/crowne plaza/i,'CROWNE','#1f7a3f'],
+  [/fairfield/i,'FAIRFLD','#8b1a1a'],[/courtyard/i,'COURTYD','#8b1a1a'],[/residence inn/i,'RESIDNC','#8b1a1a'],
+  [/springhill/i,'SPRINGH','#8b1a1a'],[/towneplace/i,'TOWNEPL','#8b1a1a'],[/sheraton/i,'SHERATON','#8b1a1a'],
+  [/westin/i,'WESTIN','#8b1a1a'],[/\bmarriott\b/i,'MARRIOTT','#8b1a1a'],
+  [/days inn/i,'DAYS','#b8860b'],[/super 8/i,'SUPER 8','#b8860b'],[/ramada/i,'RAMADA','#b8860b'],
+  [/howard johnson/i,'HOJO','#b8860b'],[/travelodge/i,'TRVLDG','#b8860b'],[/microtel/i,'MICROTEL','#b8860b'],
+  [/baymont/i,'BAYMONT','#b8860b'],[/la quinta/i,'LA QUINTA','#b8860b'],[/\bwyndham\b/i,'WYNDHAM','#b8860b'],
+  [/comfort (inn|suites)/i,'COMFORT','#0a5c9e'],[/quality inn/i,'QUALITY','#0a5c9e'],
+  [/sleep inn/i,'SLEEP','#0a5c9e'],[/clarion/i,'CLARION','#0a5c9e'],[/econo ?lodge/i,'ECONO','#0a5c9e'],
+  [/rodeway/i,'RODEWAY','#0a5c9e'],[/mainstay/i,'MAINSTAY','#0a5c9e'],[/cambria/i,'CAMBRIA','#0a5c9e'],
+  [/best western/i,'BEST WN','#123c7b'],[/americinn/i,'AMERICINN','#123c7b'],
+  [/motel 6/i,'MOTEL 6','#0d6b3f'],[/extended stay/i,'EXTSTAY','#0d6b3f'],
+  [/red roof/i,'RED ROOF','#b3261e']
+];
+function brandOf(name){
+  const n=String(name||'');
+  for(let i=0;i<BRANDS.length;i++) if(BRANDS[i][0].test(n)) return {tag:BRANDS[i][1], color:BRANDS[i][2]};
+  return null;
+}
+const fmtMoney = n => (n==null||!isFinite(n)) ? '' : '$'+(Math.round(n)===+n ? n : (+n).toFixed(2));
 const ESCMAP={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>ESCMAP[c]);
 const safeUrl = u => /^https?:\/\//i.test(String(u||'')) ? esc(u) : '';
@@ -100,6 +184,10 @@ const P = {
   park:'M7 4h6a4 4 0 0 1 0 8H7z|M7 4v16',
   lock:'M6 10V7a6 6 0 0 1 12 0v3|M5 10h14v10H5z',
   pin:'M12 21s-7-6-7-12a7 7 0 0 1 14 0c0 6-7 12-7 12Z|c12 9 2.5',
+  search:'c10 10 6.5|M14.9 14.9L20 20',
+  wind:'M3 8h10a3 3 0 1 0-3-3|M3 13h14a3 3 0 1 1-3 3|M3 18h7a2 2 0 1 1-2 2',
+  // sun behind a cloud — the outlook tab, distinct from the plain wind glyph
+  fcast:'M8.5 2.6v1.8|M3.6 4.6l1.3 1.3|M1.6 9.5h1.8|M13.4 4.6l-1.3 1.3|c8.5 9.5 3|M10 20h7.5a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8.6 11.4 4.3 4.3 0 0 0 10 20Z',
   chevR:'M9 6l6 6-6 6',
   chevL:'M15 6l-6 6 6 6'
 };
@@ -131,12 +219,60 @@ const AMICON={store:'store',lodging:'bed',camp:'tent',rail:'train'};
 const AMQ={store:'grocery store supermarket',lodging:'hotel motel lodging',camp:'campground',rail:'train station'};
 function iconStrTxt(t){ const c=cats(t); return AMKEYS.filter(k=>c[k]).map(k=>({store:'resupply',lodging:'lodging',camp:'camping',rail:'rail'}[k])).join(' · '); }
 
+/* ---- finding a place ----
+   Two questions wear the same box. A pair of numbers is answered here and offline:
+   decimal degrees, degrees with a hemisphere letter at either end, or degrees-
+   minutes-seconds off a sign or a paper map. Anything else is a name, and names go
+   to Photon — OpenStreetMap's search, no key, boxed to New York and biased to
+   wherever you are looking. Trail stops are matched locally first, so the towns
+   this app already knows come back instantly and keep working with no signal. */
+const PHOTON='https://photon.komoot.io/api/';
+const FIND_BOX='-79.95,40.45,-73.15,45.05';
+function angleOf(t){
+  const hemi=(t.match(/[NSEW]/)||[''])[0];
+  const nums=(t.match(/-?\d+(?:\.\d+)?/g)||[]).map(Number);
+  if(!nums.length || nums.length>3 || nums.some(n=>!isFinite(n))) return null;
+  // Minutes and seconds are always positive; only the degrees carry the sign.
+  let v=abs(nums[0]) + (nums[1]||0)/60 + (nums[2]||0)/3600;
+  if(nums[0]<0 || hemi==='S' || hemi==='W') v=-v;
+  return {v, hemi};
+}
+function parseLL(str){
+  const s=String(str||'').trim().toUpperCase();
+  if(!s || /[^0-9NSEW\u00b0'"\u2032\u2033.,;:\s+-]/.test(s)) return null;
+  let parts = s.indexOf(',')>=0 ? s.split(',')
+    : (s.match(/^(.*?[NS])\s*(.*[EW])$/) || s.match(/^(.*?[EW])\s*(.*[NS])$/) || []).slice(1);
+  if(!parts || parts.length!==2) parts = s.split(/\s+/).length===2 ? s.split(/\s+/) : null;
+  if(!parts || parts.length!==2) return null;
+  const a=angleOf(parts[0]), b=angleOf(parts[1]);
+  if(!a||!b) return null;
+  let lat=a.v, lng=b.v;
+  // The letters say which is which, so "78W 42N" is as good as "42N 78W". Failing
+  // letters, a first number past 90 cannot have been a latitude.
+  if(/[EW]/.test(a.hemi) || /[NS]/.test(b.hemi)){ lat=b.v; lng=a.v; }
+  else if(abs(lat)>90 && abs(lng)<=90){ const t=lat; lat=lng; lng=t; }
+  if(!isFinite(lat)||!isFinite(lng)||abs(lat)>90||abs(lng)>180) return null;
+  return {lat, lng};
+}
+
 /* ---- trail-mile projection (not crow-flies) ---- */
+/* The nearest point on the line, not the nearest vertex on it. Vertices sit about a
+   third of a mile apart, so measuring to them alone put a floor of up to a sixth of a
+   mile under every off-trail figure — and reported a tap that landed exactly on the
+   drawn line as being off it, which is now the first thing a map tap tells you.
+   Projecting onto the leg costs one dot product each and carries the mile with it,
+   interpolated the same way. Flat-earth within a leg, which at this length is exact. */
 function projectRoute(lat,lng){
-  const kx=Math.cos(lat*Math.PI/180); let best=Infinity, mile=0;
-  for(let i=0;i<ROUTE.length;i++){
-    const dy=ROUTE[i][0]-lat, dx=(ROUTE[i][1]-lng)*kx, d=dx*dx+dy*dy;
-    if(d<best){ best=d; mile=ROUTE[i][2]; }
+  const kx=Math.cos(lat*Math.PI/180);
+  let best=Infinity, mile=ROUTE[0][2];
+  for(let i=1;i<ROUTE.length;i++){
+    const a=ROUTE[i-1], b=ROUTE[i];
+    const ay=a[0]-lat, ax=(a[1]-lng)*kx, vy=b[0]-a[0], vx=(b[1]-a[1])*kx;
+    const len=vx*vx+vy*vy;
+    let t = len>0 ? -(ax*vx+ay*vy)/len : 0;
+    t = t<0?0:t>1?1:t;                       // stay on the leg, not on its extension
+    const dy=ay+vy*t, dx=ax+vx*t, d=dx*dx+dy*dy;
+    if(d<best){ best=d; mile=a[2]+(b[2]-a[2])*t; }
   }
   return {mile, off:Math.sqrt(best)*69};
 }
@@ -154,7 +290,22 @@ function mapsLink(t,q,from){
 // Hands the query off to Google Hotels rather than fetching rates ourselves: nightly
 // price is date- and occupancy-dependent, needs a keyed API behind a proxy, and the
 // small trail-town inns in the ArcGIS layer mostly aren't in bookable inventory anyway.
-function ratesLink(q){ return 'https://www.google.com/travel/search?q='+encodeURIComponent(q); }
+/* Dated, because a rate without a night attached is not a rate. Google Travel takes
+   its dates in an undocumented protobuf blob, which I am not willing to guess at and
+   have wrong silently; Booking spells checkin and checkout out in the query string,
+   so the link lands on the night you are actually asking about. */
+function nextDay(ymd){
+  const d=new Date(ymd+'T12:00:00');
+  if(isNaN(d)) return '';
+  d.setDate(d.getDate()+1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function ratesLink(q, date){
+  const p=['ss='+encodeURIComponent(q),'group_adults=1','no_rooms=1','group_children=0'];
+  const out=date?nextDay(date):'';
+  if(date && out) p.push('checkin='+date,'checkout='+out);
+  return 'https://www.booking.com/searchresults.html?'+p.join('&');
+}
 // Same reasoning for star ratings and reviews: reading them out of the Places API
 // needs a key and a proxy, and the ArcGIS layer carries none of its own. The map
 // search lands on the place card, where the rating and the reviews already sit.
@@ -170,20 +321,19 @@ function findNearbyRow(lat,lng){
   return '<div class="pa-lbl">Find nearby:</div><div class="pa-row">'
     +FINDQ.map(f=>'<a href="'+searchAt(f[0],lat,lng)+'" target="_blank" rel="noopener" class="pa">'+f[1]+'</a>').join('')+'</div>';
 }
+/* A tapped point, handed to Google two ways. Street View asks for a panorama at the
+   viewpoint and falls back to the map when there is none within range, which along a
+   rail trail is common enough to be worth knowing about before you tap it. */
+function atLink(lat,lng){
+  return 'https://www.google.com/maps/search/?api=1&query='+lat.toFixed(6)+','+lng.toFixed(6);
+}
+function panoLink(lat,lng){
+  return 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+lat.toFixed(6)+','+lng.toFixed(6);
+}
 function reviewsLink(q,lat,lng){
   const u='https://www.google.com/maps/search/'+encodeURIComponent(q);
   return (lat!=null&&lng!=null&&isFinite(lat)&&isFinite(lng)) ? u+'/@'+lat+','+lng+',17z' : u;
 }
-// How far off the route a facility sits. projectRoute already computes this to
-// filter POIs to within 5 mi, it was just never shown. Straight-line from the
-// nearest route vertex — the real pedal distance up whatever side road serves it
-// is longer, so this is a floor, and the wording says so rather than implying a
-// routed number we don't have. Under a tenth of a mile reads as on-trail.
-function offTrailTxt(off){
-  if(off==null || !isFinite(off) || off<0.1) return '';
-  return ' · '+fmtMi(off)+' mi off trail';
-}
-
 /* ---- live POI service (NY State ArcGIS) ---- */
 const ARC="https://services.arcgis.com/1xFZPtKn1wKC6POA/arcgis/rest/services/";
 const BBOX={xmin:-78.95,ymin:40.65,xmax:-73.55,ymax:43.35};
@@ -195,6 +345,41 @@ const POI_SOURCES=[
   { url:ARC+"Attractions_Public/FeatureServer/0/query", fields:"Attraction,FullAddress,Theme,WebPage", bbox:true,
     map:p=>({asset:'Attraction',name:p.Attraction||'(attraction)',addr:p.FullAddress||'',phone:'',url:p.WebPage||'',sub:p.Theme||''}) }
 ];
+/* ---------- weather ---------- */
+/* NWS reports the direction wind comes FROM, as a compass point. Keeping that
+   convention straight is the whole game: a wind "from the north" while you ride
+   north is a headwind, not a tailwind. */
+const COMPASS={N:0,NNE:22.5,NE:45,ENE:67.5,E:90,ESE:112.5,SE:135,SSE:157.5,
+  S:180,SSW:202.5,SW:225,WSW:247.5,W:270,WNW:292.5,NW:315,NNW:337.5};
+// "10 mph" and "5 to 10 mph" both come back; a range's mean is the sustained wind.
+function windMph(s){
+  const n=String(s||'').match(/\d+/g);
+  if(!n||!n.length) return null;
+  return n.reduce((a,b)=>a+ +b,0)/n.length;
+}
+// Initial great-circle bearing, degrees clockwise from north.
+// Great-circle miles. projectRoute's flat-earth is fine inside one 300 m leg;
+// adding up a 47-mile track is not that, so this one is spherical.
+function miBetween(a,b){
+  const p=Math.PI/180;
+  const h=Math.sin((b[0]-a[0])*p/2)**2
+    + Math.cos(a[0]*p)*Math.cos(b[0]*p)*Math.sin((b[1]-a[1])*p/2)**2;
+  return 2*3958.7613*Math.asin(Math.sqrt(h));
+}
+function bearing(a1,o1,a2,o2){
+  const R=Math.PI/180, dl=(o2-o1)*R;
+  const y=Math.sin(dl)*Math.cos(a2*R);
+  const x=Math.cos(a1*R)*Math.sin(a2*R)-Math.sin(a1*R)*Math.cos(a2*R)*Math.cos(dl);
+  return (Math.atan2(y,x)/R+360)%360;
+}
+/* Split a wind into the part fighting you and the part shoving you sideways.
+   Because `from` is where it blows from, a wind from dead ahead has from === your
+   heading, cos(0)=1, and comes out as a full positive headwind. Negative is a push. */
+function windParts(fromDeg, hdgDeg, mph){
+  const d=(fromDeg-hdgDeg)*Math.PI/180;
+  return {head: mph*Math.cos(d), cross: abs(mph*Math.sin(d))};
+}
+
 async function fetchSource(src){
   const feats=[]; let offset=0;
   for(let page=0;page<8;page++){
@@ -236,7 +421,10 @@ class TrailApp {
     // moving the rider re-sorts Nearby, the itinerary, and every distance on screen.
     // On by default so nothing changes for anyone who hasn't gone looking for it.
     this.tapToSet=true;
-    this.showTrip=false; this.screen='map'; this.panelSnap='peek';
+    this.showTrip=false; this.screen='map'; this.panelSnap='shut';
+    this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
+    this.showWx=true; this.wxPerDay=60; this.wxDays=4; this.wxPlan=null; this.wxBusy=false;
+    this.prices={}; this.poiMarker={};
     // Absolute stretch of trail to list, independent of the rider. The mileage band
     // above it asks "how far from me", which needs a location and moves as you ride;
     // this asks "what's between mile X and Y", which answers the map-shaped question
@@ -246,6 +434,9 @@ class TrailApp {
     // expansion. Filters start collapsed — the list is the reason you opened the tab.
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
+    this.mileLayer=null; this.mileSig='';
+    this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
+    this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
     // Nearby-list shape only. Map pin visibility is the layers control's job.
     this.catOrder=[...CAT_ORDER]; this.catHidden=new Set();
@@ -261,13 +452,16 @@ class TrailApp {
 
   init(){
     this.loadPrefs();
+    this.loadPrices();
     this.buildDropdowns();
     this.buildTestRows();
     this.wireTabs();
     this.applyTripTab();
+    this.applyWxTab();
     this.wireControls();
     this.wireTabAutohide();
     this.wirePanelDrag();
+    this.buildWxDest();
     this.initMap();
     this.renderAll();
     // Peek is measured off the rendered stats, so it can only be set once they exist.
@@ -285,13 +479,17 @@ class TrailApp {
     this.showPassed=!!p.showPassed;
     if('tapToSet' in p) this.tapToSet=!!p.tapToSet;
     this.showTrip=!!p.showTrip;
-    if(p.panelSnap==='peek'||p.panelSnap==='half'||p.panelSnap==='full') this.panelSnap=p.panelSnap;
+    if(['shut','peek','half','full'].indexOf(p.panelSnap)>=0) this.panelSnap=p.panelSnap;
     if(p.myLL && isFinite(p.myLL.lat) && isFinite(p.myLL.lng)){
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       this.myMile=projectMile(this.myLL.lat,this.myLL.lng);
     }
-    if(isFinite(p.miMin)&&p.miMin>=0) this.miMin=p.miMin;
-    if(isFinite(p.miMax)&&p.miMax>=0) this.miMax=p.miMax;
+    if(isFinite(p.avgSpeed)&&p.avgSpeed>0) this.avgSpeed=p.avgSpeed;
+    if(typeof p.showWx==='boolean') this.showWx=p.showWx;
+    if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
+    if(isFinite(p.wxDays)&&p.wxDays>0) this.wxDays=p.wxDays;
+    if(isFinite(p.miMin)) this.miMin=p.miMin;
+    if(isFinite(p.miMax)) this.miMax=p.miMax;
     if(isFinite(p.mpFrom)&&p.mpFrom>=0) this.mpFrom=p.mpFrom;
     if(isFinite(p.mpTo)&&p.mpTo>=0) this.mpTo=p.mpTo;
     // Stored keys aren't checked against CAT_ORDER — the service can serve asset
@@ -303,18 +501,19 @@ class TrailApp {
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
     const tr=this.$('showTrip'); if(tr) tr.checked=this.showTrip;
-    this.filtersOpen=!!p.filtersOpen;
+    const spd=this.$('avgSpeed'); if(spd) spd.value=this.avgSpeed;
+    const sw=this.$('showWx'); if(sw) sw.checked=this.showWx;
+    const pd=this.$('wxPerDay'); if(pd) pd.value=this.wxPerDay;
+    const wd=this.$('wxDays'); if(wd) wd.value=this.wxDays;
     const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
     const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
     const c=this.$('mpFrom'); if(c && this.mpFrom!=null) c.value=this.mpFrom;
     const d=this.$('mpTo'); if(d && this.mpTo!=null) d.value=this.mpTo;
-    const fl=this.$('poiFilters'); if(fl) fl.open=this.filtersOpen;
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxDays:this.wxDays,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,
-      catOrder:this.catOrder,catHidden:[...this.catHidden],
-      filtersOpen:this.filtersOpen})); }catch(e){}
+      catOrder:this.catOrder,catHidden:[...this.catHidden]})); }catch(e){}
   }
   /* Summary shown on the collapsed header. A filter you can't see is a filter you
      forget you set, so the closed state has to say when something is narrowing. */
@@ -371,24 +570,85 @@ class TrailApp {
      and full hands the list most of the screen with the map still visible above it.
      Peek is measured rather than guessed: the stats block changes height depending on
      whether there's a next stop and whether its name wrapped. */
-  peekHeight(){
-    const g=this.$('panelGrab'), st=this.$('mapSheet');
-    return (g?g.offsetHeight:0) + (st && !st.hidden ? st.offsetHeight : 0);
+  /* The stats block is display:none while shut, so it measures zero — flip the
+     state off just long enough to read its real height rather than collapsing peek
+     down onto shut. Cheap: it only runs on a snap change, and sets no height. */
+  /* The panel and the tab bar sit ON the map — #map is inset:0 underneath both — so
+     the map's own centre is not the centre of anything you can see. Everything that
+     aims the map has to work from the strip that's actually left. */
+  obstructedH(){
+    const m=this.map; if(!m) return 0;
+    const mr=m.getContainer().getBoundingClientRect();
+    let top=mr.bottom;
+    const p=this.$('mapPanel');
+    if(p){ const r=p.getBoundingClientRect(); if(r.height && r.top<top) top=r.top; }
+    const t=document.querySelector('.tabbar');
+    if(t && !t.classList.contains('is-hidden')){ const r=t.getBoundingClientRect(); if(r.height && r.top<top) top=r.top; }
+    return Math.max(0, mr.bottom-top);
   }
-  setPanelSnap(snap){
+  // Put a point in the middle of the visible strip rather than the middle of the map.
+  centerVisible(lat,lng,zoom){
+    const m=this.map; if(!m) return;
+    const z=zoom!=null?zoom:m.getZoom();
+    const pt=m.project([lat,lng], z).add([0, this.obstructedH()/2]);
+    m.setView(m.unproject(pt, z), z);
+  }
+  /* Leaflet's own autoPan fits a popup to the map container, which runs on behind the
+     panel — so it thinks a popup buried under the sheet is fine. Ours is switched off
+     and this runs instead, fitting to the strip you can see. */
+  fitPopup(pop){
+    const m=this.map; if(!m||!pop) return;
+    const el=pop.getElement(); if(!el) return;
+    const r=el.getBoundingClientRect(), mr=m.getContainer().getBoundingClientRect();
+    const bottomLimit=mr.height-this.obstructedH();
+    const top=r.top-mr.top, bottom=r.bottom-mr.top;
+    let dy=0;
+    if(bottom > bottomLimit-8) dy = bottom-(bottomLimit-8);
+    dy=Math.min(dy, top-8);          // never push its head off the top to save its feet
+    let dx=0;
+    const left=r.left-mr.left, right=r.right-mr.left;
+    if(right > mr.width-8) dx = right-(mr.width-8);
+    if(left-dx < 8) dx = left-8;
+    if(abs(dy)>1 || abs(dx)>1) m.panBy([dx,dy],{animate:true,duration:.2});
+  }
+  measureSheet(){
+    const st=this.$('mapSheet'), p=this.$('mapPanel');
+    if(!st || st.hidden || !p) return 0;
+    if(st.offsetHeight) return st.offsetHeight;
+    const prev=p.dataset.snap;
+    p.dataset.snap='peek';
+    const h=st.offsetHeight;
+    p.dataset.snap=prev;
+    return h;
+  }
+  panelH(snap){
+    const g=this.$('panelGrab'), gh=g?g.offsetHeight:0;
+    return snap==='shut' ? gh : gh+this.measureSheet();
+  }
+  setPanelSnap(snap, fromH){
     const p=this.$('mapPanel'); if(!p) return;
+    const h0 = fromH!=null ? fromH : p.getBoundingClientRect().height;
     this.panelSnap=snap;
     p.dataset.snap=snap;
-    p.style.height = snap==='peek' ? this.peekHeight()+'px'
+    const avail=p.parentElement?p.parentElement.clientHeight:0;
+    const h1 = (snap==='shut'||snap==='peek') ? this.panelH(snap) : avail*(snap==='full'?.86:.52);
+    p.style.height = (snap==='shut'||snap==='peek') ? h1+'px'
       : snap==='full' ? '86%' : '52%';
+    /* The panel covers the map instead of resizing it, so sliding it up used to push
+       whatever you were looking at down behind the sheet. Moving the map half the
+       height change keeps it in the middle of what's left. */
+    if(this.map && this.panelReady && abs(h1-h0)>2) this.map.panBy([0,(h1-h0)/2],{animate:true,duration:.24});
+    this.panelReady=true;
     const hint=this.$('panelHint');
-    if(hint) hint.textContent = snap==='peek' ? (this.POIS.length?'Pull up for the list':'') : '';
+    if(hint) hint.textContent = snap==='shut' ? 'Pull up'
+      : snap==='peek' ? (this.POIS.length?'Pull up for the list':'') : '';
     this.savePrefs();
     // Leaflet has to be told the viewport changed, and only once the height settles.
     if(this.map) setTimeout(()=>this.map.invalidateSize(),260);
   }
   cyclePanel(){
-    this.setPanelSnap(this.panelSnap==='peek'?'half':this.panelSnap==='half'?'full':'peek');
+    const order=['shut','peek','half','full'], i=order.indexOf(this.panelSnap);
+    this.setPanelSnap(order[(i+1)%order.length]);
   }
   /* Drag beats a three-way tap for reaching a height directly, but the tap has to keep
      working — so anything under 6px of travel is treated as a tap, not a stalled drag. */
@@ -405,7 +665,7 @@ class TrailApp {
       const dy=y0-e.clientY;
       if(abs(dy)>6) moved=true;
       const max=p.parentElement.clientHeight*0.86;
-      p.style.height=Math.max(this.peekHeight(), Math.min(max, h0+dy))+'px';
+      p.style.height=Math.max(this.panelH('shut'), Math.min(max, h0+dy))+'px';
     });
     const end=()=>{
       if(id==null) return;
@@ -414,10 +674,9 @@ class TrailApp {
       if(!moved){ this.cyclePanel(); return; }
       // Snap to whichever height the release landed nearest.
       const avail=p.parentElement.clientHeight, frac=p.getBoundingClientRect().height/avail;
-      const peekFrac=this.peekHeight()/avail;
-      const d=[['peek',peekFrac],['half',.52],['full',.86]]
+      const d=[['shut',this.panelH('shut')/avail],['peek',this.panelH('peek')/avail],['half',.52],['full',.86]]
         .sort((a,b)=>abs(frac-a[1])-abs(frac-b[1]));
-      this.setPanelSnap(d[0][0]);
+      this.setPanelSnap(d[0][0], h0);
     };
     grab.addEventListener('pointerup',end);
     grab.addEventListener('pointercancel',end);
@@ -474,20 +733,39 @@ class TrailApp {
       this.markReturn(el);
       if(el.closest('#panelList') && this.panelSnap==='full') this.setPanelSnap('half');
       const pi=el.dataset.poi;
-      this.zoomTo(+el.dataset.lat, +el.dataset.lng, +el.dataset.z||13, el.dataset.town,
+      this.zoomTo(+el.dataset.lat, +el.dataset.lng, el.dataset.z?+el.dataset.z:null, el.dataset.town,
         pi!=null ? this.POIS[+pi] : null);
     });
     const mb=this.$('mapBack'); if(mb) mb.addEventListener('click',()=>this.goBack());
+    const fb=this.$('findBtn'); if(fb) fb.addEventListener('click',()=>this.openFind());
+    const fx=this.$('findX'); if(fx) fx.addEventListener('click',()=>this.closeFind());
+    // A form, so the phone keyboard's Go key runs the search like the button does.
+    const ff=this.$('mapFind'); if(ff) ff.addEventListener('submit',e=>{ e.preventDefault(); this.runFind(); });
+    document.addEventListener('click',e=>{
+      const r=e.target.closest('.find-r'); if(!r) return;
+      this.gotoFound(+r.dataset.flat, +r.dataset.flng, +r.dataset.fz, r.dataset.ftown||'');
+    });
     // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
+    document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
+    document.addEventListener('click',e=>{
+      const sv=e.target.closest('.pr-save'); if(sv){ this.savePriceFrom(sv); return; }
+      const cl=e.target.closest('.pr-clear'); if(cl) this.clearPriceFrom(cl);
+    });
     document.addEventListener('click',e=>{
       const t=e.target.closest('.poi-toggle'); if(!t) return;
       const c=t.dataset.cat; this.poiOpen[c]=!this.poiOpen[c]; this.renderNearby();
     });
-    const g=id=>{ const el=this.$(id); if(!el) return null; const v=el.value.trim(); if(v==='') return null;
-      const n=+v; return isFinite(n)&&n>=0 ? n : null; };
+    document.addEventListener('click',e=>{
+      const t=e.target.closest('.poi-page');
+      if(t && t.dataset.page) this.applyPage(t);
+    });
+    // Trail miles are absolute and can't go below zero; the band is relative to you,
+    // so a negative one is just the road behind — that's what Prev steps into.
+    const g=(id,neg)=>{ const el=this.$(id); if(!el) return null; const v=el.value.trim(); if(v==='') return null;
+      const n=+v; if(!isFinite(n)) return null; return (neg||n>=0) ? n : null; };
     const readBand=()=>{
-      this.miMin=g('miMin'); this.miMax=g('miMax');
+      this.miMin=g('miMin',1); this.miMax=g('miMax',1);
       this.savePrefs(); this.renderNearby();
     };
     ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readBand); });
@@ -512,8 +790,26 @@ class TrailApp {
     });
     const mc=this.$('miClear');
     if(mc) mc.addEventListener('click',()=>{ ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readBand(); });
+    const wg=this.$('wxGo');
+    if(wg) wg.addEventListener('click',()=>this.loadOutlook());
+    const rd=id=>{ const el=this.$(id); if(!el) return;
+      el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this[id==='wxDays'?'wxDays':'wxPerDay']=n; this.savePrefs(); } }); };
+    rd('wxPerDay'); rd('wxDays');
+    const sw=this.$('showWx');
+    if(sw) sw.addEventListener('change',()=>{ this.showWx=sw.checked; this.savePrefs(); this.applyWxTab(); });
+    const as=this.$('avgSpeed');
+    if(as) as.addEventListener('input',()=>{
+      const n=+as.value;
+      if(isFinite(n)&&n>0&&n<40){ this.avgSpeed=n; this.savePrefs();
+        const e2=this.$('wxSpeedEcho'); if(e2) e2.textContent=n;
+        // Speed decides where each forecast hour lands, so the layer is now wrong.
+        if(this.wxLayer && this.map && this.map.hasLayer(this.wxLayer)) this.loadWeather();
+      }
+    });
     const fl=this.$('poiFilters');
-    if(fl) fl.addEventListener('toggle',()=>{ this.filtersOpen=fl.open; this.savePrefs(); });
+    // Deliberately not remembered: the list is the point of the screen, and a filter
+    // block left open from three days ago costs a third of a phone screen to say so.
+    if(fl) fl.addEventListener('toggle',()=>{ this.filtersOpen=fl.open; });
   }
   status(msg){ const el=this.$('locStatus'); if(el) el.textContent=msg; }
   /* The direction control is no longer one button in a bar that no longer exists —
@@ -527,6 +823,11 @@ class TrailApp {
   }
   /* Trip duplicates what Next up and Nearby already answer, so it is off by default
      and its tab is simply absent — not greyed, not reordered. */
+  applyWxTab(){
+    const btn=document.querySelector('[data-tab="wx"]');
+    if(btn) btn.hidden=!this.showWx;
+    if(!this.showWx && this.screen==='wx') this.showTab('map');
+  }
   applyTripTab(){
     const btn=document.querySelector('[data-tab="itin"]');
     if(btn) btn.hidden=!this.showTrip;
@@ -555,8 +856,12 @@ class TrailApp {
      was about to do. Everything on screen keys off myMile, so a stray tap while
      panning silently re-sorted Nearby, the itinerary and every distance in the app.
      The popup anchors the decision to the point you actually hit and names the mile
-     before you commit — dismissing it costs nothing, which is the common case. */
-  askMove(ll){
+     before you commit — dismissing it costs nothing, which is the common case.
+     It now opens on every tap rather than only when moving is armed, because the
+     question a map tap most often asks is "what is this place" — which the milepost
+     answers roughly, and Google Maps and Street View answer exactly. Moving stays
+     behind its setting: it is the one thing here that changes the app's state. */
+  tapPopup(ll){
     if(!this.map) return;
     const pr=projectRoute(ll.lat,ll.lng);
     this.pendingLL={lat:ll.lat,lng:ll.lng};
@@ -564,10 +869,14 @@ class TrailApp {
     // elsewhere: the further off, the looser the milepost it snapped to.
     const off=pr.off>=0.1 ? '<div class="mv-s">'+fmtMi(pr.off)+' mi off the route</div>' : '';
     const delta=this.myMile==null ? '' : '<div class="mv-s">'+fmtMi(abs(pr.mile-this.myMile))+' mi from where you are now</div>';
-    L.popup({className:'mv-pop'}).setLatLng(ll).setContent(
-      '<div class="mv"><div class="mv-k">Move your location here?</div>'
+    const a=(u,t)=>'<a href="'+u+'" target="_blank" rel="noopener" class="pa">'+t+'</a>';
+    L.popup({className:'mv-pop',autoPan:false}).setLatLng(ll).setContent(
+      '<div class="mv"><div class="mv-k">This spot</div>'
       +'<div class="mv-v">Trail mile '+fmtMp(pr.mile)+'</div>'+off+delta
-      +'<button type="button" class="mv-go">Move me here</button>'
+      +'<div class="mv-ll">'+ll.lat.toFixed(5)+', '+ll.lng.toFixed(5)+'</div>'
+      +'<div class="pa-row mv-lk">'+a(atLink(ll.lat,ll.lng),'Google Maps')
+      +a(panoLink(ll.lat,ll.lng),'Street View')+'</div>'
+      +(this.tapToSet?'<button type="button" class="mv-go">Move me here</button>':'')
       // Same chips the town popups carry — a tap anywhere is often about "what's
       // around here", not "put me here", and that shouldn't need a known town.
       +'<div class="mv-find">'+findNearbyRow(ll.lat,ll.lng)+'</div></div>'
@@ -603,10 +912,30 @@ class TrailApp {
     if(!this.map||isNaN(lat)||isNaN(lng)) return;
     this.showTab('map');
     setTimeout(()=>{
-      this.map.setView([lat,lng], z||13);
+      this.centerVisible(lat,lng,z);
       if(townName && this.townMarker[townName]) this.townMarker[townName].openPopup();
-      else if(poi) L.popup().setLatLng([lat,lng]).setContent(this.poiPopup(poi)).openOn(this.map);
+      else if(poi){
+        this.markPick(lat,lng);
+        L.popup({autoPan:false}).setLatLng([lat,lng]).setContent(this.poiPopup(poi)).openOn(this.map);
+      }
     },80);
+  }
+  /* A ring around the one you asked for. Forty identical bed pins in one town is
+     exactly when "where is it" stops being answerable by moving the map alone. */
+  markPick(lat,lng){
+    if(!this.map) return;
+    const c=this.accent2||'#d6006c';
+    if(!this.pick) this.pick=L.circleMarker([lat,lng],{radius:15,weight:3,color:c,fill:false,className:'map-pick',interactive:false}).addTo(this.map);
+    else this.pick.setLatLng([lat,lng]);
+  }
+  clearPick(){ if(this.pick&&this.map){ this.map.removeLayer(this.pick); this.pick=null; } }
+  // Zoom is the second question, so it's a button rather than something a tap on a
+  // row does for you — moving the map at your zoom is what "show me where" means.
+  zoomHere(el){
+    const m=this.map; if(!m) return;
+    const lat=+el.dataset.zlat, lng=+el.dataset.zlng;
+    if(isNaN(lat)||isNaN(lng)) return;
+    this.centerVisible(lat,lng,Math.min(17, Math.max(m.getZoom()+3, 15)));
   }
 
   /* ---------- dropdowns / test rows ---------- */
@@ -652,6 +981,8 @@ class TrailApp {
     const pct = Math.max(0,Math.min(100,(ridden/TOTAL)*100));
     let h='<div class="sheet-row"><div><div class="sheet-k">Trail mile</div><div class="sheet-v">'+fmtMp(this.myMile)+' <span class="sheet-of">of '+Math.round(TOTAL)+'</span></div></div>'
       +'<div class="sheet-r"><div class="sheet-k">ridden</div><div class="sheet-v">'+Math.round(pct)+'%</div></div></div>';
+    const wl=this.wxLine();
+    if(wl) h+='<div class="sheet-wx">'+esc(wl)+'</div>';
     if(nx){ h+='<button class="sheet-next" data-lat="'+nx.lat+'" data-lng="'+nx.lng+'" data-town="'+esc(nx.n)+'"><span class="sheet-k">Next stop</span><span class="sheet-nm">'+esc(nx.n)+' · '+mpTxt(nx.mi)+' · ~'+fmtMi(abs(nx.mi-this.myMile))+' mi</span>'+icon('chevR',18)+'</button>'; }
     el.innerHTML=h;
   }
@@ -769,10 +1100,100 @@ class TrailApp {
   inBand(d){
     if(this.miMin==null && this.miMax==null) return true;
     if(d==null) return true;
-    if(d < -0.3) return false;
+    // A bare max means "within 30 miles", which nobody means to include the 30 behind
+    // them. An explicit min speaks for itself, negative or not.
+    if(this.miMin==null && d < -0.3) return false;
     if(this.miMin!=null && d < this.miMin) return false;
     if(this.miMax!=null && d > this.miMax) return false;
     return true;
+  }
+  /* ---------- stepping the window ---------- */
+  /* Which window Prev/Next moves. The band wins when both filters are on: it's the
+     one anchored to you, so a step means "the next day's ride" rather than "the next
+     stretch of map". Either way it needs two finite ends — "0 to any" has no width. */
+  pagerWin(){
+    if(this.myMile!=null && this.miMax!=null){
+      const lo=this.miMin!=null?this.miMin:0;
+      if(this.miMax>lo) return {kind:'band', lo, hi:this.miMax};
+    }
+    if(this.mpFrom!=null && this.mpTo!=null){
+      const lo=Math.min(this.mpFrom,this.mpTo), hi=Math.max(this.mpFrom,this.mpTo);
+      if(hi>lo) return {kind:'range', lo, hi};
+    }
+    return null;
+  }
+  /* One window on (mult 1) or back (mult -1). Trail miles count up from the NYC end,
+     so for the absolute range "on" is whichever way you're riding — heading for NYC
+     walks the numbers down. The band is already relative to you, so on is always up
+     and back runs negative: the miles you've already covered. */
+  pageStep(w, mult){
+    const span=w.hi-w.lo, r=n=>Math.round(n*10)/10;
+    const fwd = w.kind==='band' ? 1 : (this.dir==='B2NYC' ? -1 : 1);
+    let lo=w.lo+span*mult*fwd, hi=w.hi+span*mult*fwd;
+    if(w.kind==='range'){
+      if(hi<=0 || lo>=TOTAL) return null;   // stepped clean off the end of the trail
+      lo=Math.max(0,lo); hi=Math.min(TOTAL,hi);
+      if(hi-lo<0.5) return null;
+    }
+    return {lo:r(lo), hi:r(hi)};
+  }
+  /* What sits in a window we aren't showing yet. The pager only offers a step that
+     lands on something, so an empty direction reads as unavailable rather than as a
+     button that appears to work and doesn't. The other filter still applies. */
+  countInWin(w, lo, hi){
+    const byCat=this.poisByCat();
+    let n=0;
+    Object.keys(byCat).forEach(c=>{
+      if(this.catHidden.has(c)) return;
+      byCat[c].forEach(p=>{
+        if(w.kind==='band'){
+          if(!this.inMileRange(p)) return;
+          const d=this.rideMi(p);
+          if(d==null || d<lo || d>hi) return;
+        } else {
+          if(p.mile==null || !isFinite(p.mile) || p.mile<lo || p.mile>hi) return;
+          if(this.myMile!=null && !this.inBand(this.rideMi(p))) return;
+        }
+        n++;
+      });
+    });
+    return n;
+  }
+  // A band window straddles you once Prev has run it negative, so it gets three
+  // readings rather than one format with a minus sign buried in it.
+  winLabel(w, lo, hi){
+    if(w.kind==='range') return 'TM '+fmtWin(lo)+'\u2013'+fmtWin(hi);
+    if(lo>=0) return fmtWin(lo)+'\u2013'+fmtWin(hi)+' mi ahead';
+    if(hi<=0) return fmtWin(abs(hi))+'\u2013'+fmtWin(abs(lo))+' mi back';
+    return fmtWin(abs(lo))+' back \u2013 '+fmtWin(hi)+' ahead';
+  }
+  pagerHTML(){
+    const w=this.pagerWin();
+    if(!w) return '';
+    const prev=this.pageStep(w,-1), next=this.pageStep(w,1);
+    const pc=prev?this.countInWin(w,prev.lo,prev.hi):0;
+    const nc=next?this.countInWin(w,next.lo,next.hi):0;
+    const cell=(dir,win,ct)=>{
+      const back=dir<0;
+      if(!win || !ct) return '<span class="poi-page is-off">'+(back?'Nothing back there':'Nothing further on')+'</span>';
+      return '<button type="button" class="poi-page" data-page="'+dir+'" data-lo="'+win.lo+'" data-hi="'+win.hi+'">'
+        +'<span class="pg-w">'+(back?'\u2039 ':'')+esc(this.winLabel(w,win.lo,win.hi))+(back?'':' \u203a')+'</span>'
+        +'<span class="pg-n">'+ct+(ct===1?' place':' places')+'</span></button>';
+    };
+    return '<div class="poi-pager"><div class="poi-page-now">Showing '+esc(this.winLabel(w,w.lo,w.hi))+'</div>'
+      +'<div class="poi-page-row">'+cell(-1,prev,pc)+cell(1,next,nc)+'</div></div>';
+  }
+  // Stepping writes the new window straight into the boxes, so the filter you can see
+  // and the list you're reading never disagree about what's on.
+  applyPage(el){
+    const w=this.pagerWin(); if(!w) return;
+    const lo=+el.dataset.lo, hi=+el.dataset.hi;
+    if(!isFinite(lo)||!isFinite(hi)) return;
+    const ids = w.kind==='band' ? ['miMin','miMax'] : ['mpFrom','mpTo'];
+    if(w.kind==='band'){ this.miMin=lo; this.miMax=hi; } else { this.mpFrom=lo; this.mpTo=hi; }
+    const a=this.$(ids[0]); if(a) a.value=lo;
+    const b=this.$(ids[1]); if(b) b.value=hi;
+    this.savePrefs(); this.renderNearby();
   }
   renderNearby(){
     // Two mounts, one list: the Nearby tab and the map panel show the same thing, so
@@ -791,7 +1212,7 @@ class TrailApp {
     this.renderFilterState();
     const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length);
     if(!keys.length){ list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
-    let h='';
+    let h=this.pagerHTML();
     keys.forEach(cat=>{
       const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
@@ -832,14 +1253,925 @@ class TrailApp {
         // The milepost sits in the middle column, which on-trail rows leave empty —
         // so every row carries one whether or not it has a detour to break down.
         const mp = mpTxt(p.mile);
-        h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="14"><span class="poi-nm">'+esc(p.name)+'</span>'
-          +(mp?'<span class="poi-mp">'+mp+'</span>':'')+brk
+        const pr = this.priceOf(p);
+        h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'"><span class="poi-nm">'+esc(p.name)+'</span>'
+          +(mp?'<span class="poi-mp">'+mp+'</span>':'')
+          +(pr?'<span class="poi-pr">'+esc(fmtMoney(pr.amt))+'</span>':'')+brk
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
       if(items.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+items.length)+'</button>';
       h+='</div>';
     });
     list.innerHTML=h;
+  }
+
+  /* ---------- rates you looked up ---------- */
+  /* There is no free, legitimate way to pull nightly rates: the booking APIs are
+     partner-only and scraping them from a browser is both CORS-blocked and against
+     their terms. So the app does the honest version — the popup already has a link
+     out to check rates, and this catches the number on the way back. Kept in its own
+     storage key so clearing preferences doesn't take your research with it.
+     Keyed on name and coordinates rather than list index, which shifts when the
+     upstream service reorders its rows. */
+  poiKey(p){ return [p.name, (+p.lat).toFixed(4), (+p.lng).toFixed(4)].join('|'); }
+  loadPrices(){ try{ this.prices=JSON.parse(localStorage.getItem(PRICES)||'{}')||{}; }catch(e){ this.prices={}; } }
+  savePrices(){ try{ localStorage.setItem(PRICES, JSON.stringify(this.prices)); }catch(e){} }
+  priceOf(p){ return (p && this.prices[this.poiKey(p)]) || null; }
+  /* The night you'd actually be there, at your planned daily distance — so the date
+     box opens on the date you're about to go and look up, not on today. */
+  ymd(t){ return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); }
+  // Anything within today's riding is tonight; past that, a day per planned day.
+  dateAfterMi(d){
+    const t=new Date();
+    if(d!=null && isFinite(d) && d>0.3)
+      t.setDate(t.getDate() + Math.max(1,Math.ceil(d/Math.max(5,this.wxPerDay||60))) - 1);
+    return this.ymd(t);
+  }
+  arrivalDate(p){
+    const d=this.rideMi(p);
+    if(d==null || d<-0.3) return '';
+    return this.dateAfterMi(d);
+  }
+  // A town's night is the same sum, but a town has no spur to add on.
+  townDate(t){
+    if(this.myMile==null) return this.dateAfterMi(null);
+    const gap=(t.mi-this.myMile)*(this.dir==='B2NYC'?-1:1);
+    return this.dateAfterMi(gap>0.3?gap:null);
+  }
+  savePriceFrom(btn){
+    const row=btn.closest('.pr-row'); if(!row) return;
+    const p=this.POIS[+row.dataset.pi]; if(!p) return;
+    const amtEl=row.querySelector('.pr-amt'), dtEl=row.querySelector('.pr-date');
+    const amt=amtEl?+amtEl.value:NaN;
+    if(!isFinite(amt)||amt<=0){ this.status('Put a nightly rate in first.'); return; }
+    this.prices[this.poiKey(p)]={amt:Math.round(amt*100)/100, date:dtEl?dtEl.value:'', at:Date.now()};
+    this.savePrices(); this.refreshPin(p); this.renderNearby();
+    if(this.map) this.map.closePopup();
+    this.status(fmtMoney(amt)+' saved for '+p.name+'.');
+  }
+  clearPriceFrom(btn){
+    const row=btn.closest('.pr-row'); if(!row) return;
+    const p=this.POIS[+row.dataset.pi]; if(!p) return;
+    delete this.prices[this.poiKey(p)];
+    this.savePrices(); this.refreshPin(p); this.renderNearby();
+    if(this.map) this.map.closePopup();
+    this.status('Rate cleared for '+p.name+'.');
+  }
+  /* A chain wordmark, a rate, or both, in place of the generic bed — the point being
+     that a map of forty identical pins tells you nothing you couldn't already see. */
+  poiIcon(p, cfg){
+    const pr=this.priceOf(p), br=(p.asset==='Lodging')?brandOf(p.name):null;
+    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]});
+    const col=br?br.color:'';
+    let h='<span class="poi-chip'+(pr?' has-price':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
+      + (br ? '<span class="chip-b">'+esc(br.tag)+'</span>' : icon(cfg.icon,13))
+      + (pr ? '<span class="chip-p">'+esc(fmtMoney(pr.amt))+'</span>' : '')
+      + '</span>';
+    return L.divIcon({html:h, className:'poi-chip-ic', iconSize:[0,0], iconAnchor:[0,0]});
+  }
+  refreshPin(p){
+    const mk=this.poiMarker[p.i];
+    if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
+  }
+
+  /* ---------- find a place ---------- */
+  openFind(){
+    const f=this.$('mapFind'), q=this.$('findQ');
+    if(!f) return;
+    const on=f.hasAttribute('hidden');
+    f.toggleAttribute('hidden', !on);
+    const sc=document.querySelector('[data-screen="map"]');
+    if(sc) sc.classList.toggle('is-finding', on);
+    if(on && q){ q.focus(); q.select(); }
+    if(!on) this.clearFind();
+  }
+  closeFind(){
+    const f=this.$('mapFind'); if(f) f.setAttribute('hidden','');
+    const sc=document.querySelector('[data-screen="map"]');
+    if(sc) sc.classList.remove('is-finding');
+    this.clearFind();
+  }
+  clearFind(){ const o=this.$('findOut'); if(o) o.innerHTML=''; }
+  /* A pair of numbers never touches the network — it is already an answer. A name
+     gets the trail stops we hold locally straight away, then whatever Photon adds
+     when it replies, so a search works at whatever level of signal you have. */
+  async runFind(){
+    const el=this.$('findQ'), out=this.$('findOut');
+    if(!el||!out) return;
+    const raw=el.value.trim();
+    const ll=parseLL(raw);
+    if(ll){ this.gotoFound(ll.lat, ll.lng, 15); return; }
+    if(raw.length<2){ out.innerHTML='<div class="find-n">A town, a place, or a pair of coordinates.</div>'; return; }
+    const near=raw.toLowerCase();
+    const local=TOWNS.filter(t=>t.n.toLowerCase().indexOf(near)>=0)
+      .map(t=>({lat:t.lat, lng:t.lng, z:14, town:t.n, name:this.shortTown(t.n), note:'trail stop \u00b7 '+mpTxt(t.mi)}));
+    this.renderFind(local, 'Searching\u2026');
+    let far=[];
+    try{ far=await this.geocode(raw); }
+    catch(e){
+      // Saying nothing here would let a list of trail stops pass for the whole
+      // answer, which is the one way this can quietly mislead.
+      this.renderFind(local, local.length
+        ? 'Trail stops only \u2014 the wider place search didn\u2019t answer.'
+        : 'No answer from the place search. Coordinates and trail stops still work.');
+      return;
+    }
+    /* Photon knows the trail towns too, so the same place would otherwise be listed
+       twice — once with its milepost and once without. Matched on name and nearness
+       rather than on coordinates alone: the two sources put a town centre in
+       slightly different spots, which is exactly what a coordinate test misses. */
+    const rows=local.concat(far.filter(r=>!local.some(t=>
+      t.name.toLowerCase()===r.name.toLowerCase() && miBetween([t.lat,t.lng],[r.lat,r.lng])<8)));
+    this.renderFind(rows, rows.length?'':'Nothing found for \u201c'+raw+'\u201d.');
+  }
+  async geocode(q){
+    const c=this.map?this.map.getCenter():{lat:42.9,lng:-76.0};
+    const u=PHOTON+'?limit=6&lang=en&q='+encodeURIComponent(q)
+      +'&lat='+c.lat.toFixed(3)+'&lon='+c.lng.toFixed(3)+'&bbox='+FIND_BOX;
+    const r=await fetch(u);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return (((await r.json())||{}).features||[]).map(f=>{
+      const p=f.properties||{}, g=(f.geometry||{}).coordinates||[];
+      if(!isFinite(g[0])||!isFinite(g[1])) return null;
+      const name=p.name || [p.housenumber,p.street].filter(Boolean).join(' ') || p.postcode || p.city || '';
+      const where=[p.city&&p.city!==name?p.city:(p.county||''), p.state||''].filter(Boolean).join(', ');
+      /* A city wants the whole city on screen, a building wants its own street.
+         Photon files most addressable things as 'house', museum or doorstep alike,
+         so that case stops one short of the tightest zoom — near enough to see what
+         is around it, which is the question being asked of a map. */
+      const z = p.type==='house' ? 16 : p.type==='street' ? 16 : p.type==='city' ? 12 : 14;
+      return name ? {lat:g[1], lng:g[0], z, name, note:where||p.countrycode||''} : null;
+    }).filter(Boolean);
+  }
+  renderFind(rows, note){
+    const out=this.$('findOut'); if(!out) return;
+    let h=rows.map(r=>'<button type="button" class="find-r" data-flat="'+r.lat+'" data-flng="'+r.lng+'"'
+      +' data-fz="'+r.z+'"'+(r.town?' data-ftown="'+esc(r.town)+'"':'')+'>'
+      +'<b>'+esc(r.name)+'</b>'+(r.note?'<span>'+esc(r.note)+'</span>':'')+'</button>').join('');
+    if(note) h+='<div class="find-n">'+esc(note)+'</div>';
+    out.innerHTML=h;
+  }
+  /* A found place gets the popup a map tap gets — the milepost, how far off the route
+     it sits, the two Google links — because "where is this" turns into exactly those
+     questions the moment you can see it. A trail stop opens its own, which is richer. */
+  gotoFound(lat,lng,z,town){
+    if(!this.map || !isFinite(lat) || !isFinite(lng)) return;
+    this.closeFind();
+    this.showTab('map');
+    setTimeout(()=>{
+      this.centerVisible(lat,lng,z||14);
+      this.markPick(lat,lng);
+      if(town && this.townMarker[town]) this.townMarker[town].openPopup();
+      else this.tapPopup({lat,lng});
+    },80);
+  }
+
+  /* ---------- borrowed layers ---------- */
+  /* A layer's name in the control doubles as its provenance: tap it and you get the
+     page its data came from. The checkbox still toggles, and so does the chip after
+     the name — an anchor inside a label doesn't trip the label's own activation, so
+     nothing has to be intercepted for both to work. */
+  lyrSrc(label,url,note){
+    return '<a class="lyr-src" href="'+url+'" target="_blank" rel="noopener" title="'+esc(note)+'">'
+      +esc(label)+'</a>';
+  }
+  /* Parsed once, on the first switch-on: 170 KB of XML is not worth spending on
+     every load for a layer that is off by default. A GPX is a list of trkpt, and
+     that is all this needs from it — no elevation, no timestamps, no waypoints. */
+  async loadShore(){
+    if(this.shorePts) return this.shorePts;
+    const r=await fetch(SHORE.file);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const doc=new DOMParser().parseFromString(await r.text(),'application/xml');
+    const pts=[].slice.call(doc.getElementsByTagName('trkpt'))
+      .map(n=>[+n.getAttribute('lat'), +n.getAttribute('lon')])
+      .filter(p=>isFinite(p[0]) && isFinite(p[1]));
+    if(pts.length<2) throw new Error('no track in the file');
+    let d=0;
+    for(let i=1;i<pts.length;i++) d+=miBetween(pts[i-1],pts[i]);
+    this.shorePts=pts; this.shoreMi=d;
+    return pts;
+  }
+  async showShore(){
+    if(this.shorePts || !this.shoreLayer) return;
+    this.status('Reading '+SHORE.name+' from its GPX\u2026');
+    try{
+      this.shoreLayer.setLatLngs(await this.loadShore());
+      this.status(SHORE.name+': '+fmtMi(this.shoreMi)+' mi from '+SHORE.srcName
+        +', drawn only \u2014 it carries no trail miles here.');
+    }catch(e){
+      this.status('Couldn\u2019t read '+SHORE.file+', so the '+SHORE.name+' layer stays empty.');
+    }
+  }
+  shorePopup(){
+    return '<b>'+esc(SHORE.name)+'</b>'
+      +'<br><span style="opacity:.65">'+esc(SHORE.sub)+'</span>'
+      +(this.shoreMi?'<br><b>'+fmtMi(this.shoreMi)+' mi</b>':'')
+      +'<br><span style="opacity:.65">From a GPX on <a href="'+SHORE.src+'" target="_blank" rel="noopener">'
+      +esc(SHORE.srcName)+'</a>, '+esc(SHORE.drawn)+'.</span>'
+      +'<br><span style="opacity:.65">Drawn only: it carries no trail miles, so it stays out of '
+      +'Nearby, the outlook, and every distance this app quotes.</span>';
+  }
+
+  /* ---------- traffic counts ---------- */
+  aadtFloor(z){
+    for(let i=0;i<AADT_FLOOR.length;i++) if(z>=AADT_FLOOR[i][0]) return AADT_FLOOR[i][1];
+    return AADT_FLOOR[AADT_FLOOR.length-1][1];
+  }
+  aadtBand(v){
+    for(let i=0;i<AADT_BANDS.length;i++) if(v<AADT_BANDS[i][0]) return AADT_BANDS[i];
+    return AADT_BANDS[AADT_BANDS.length-1];
+  }
+  // 430, 3.2k, 89k — a count read at a glance, not audited.
+  fmtAadt(v){ return v>=10000 ? Math.round(v/1000)+'k' : v>=1000 ? (v/1000).toFixed(1)+'k' : String(Math.round(v)); }
+  async loadAadt(){
+    const m=this.map, g=this.aadtLayer;
+    if(!m||!g||!m.hasLayer(g)) return;
+    const z=m.getZoom();
+    if(z<AADT_MINZ){
+      g.clearLayers(); this.aadtSig='';
+      this.status('Traffic counts draw from zoom '+AADT_MINZ+' in \u2014 further out than that the whole state is one smear of road.');
+      return;
+    }
+    const b=m.getBounds();
+    const sig=z+':'+[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(v=>v.toFixed(4)).join(',');
+    if(sig===this.aadtSig) return;
+    this.aadtSig=sig;
+    // A pan that outruns its own fetch must not have the older answer land on top
+    // of the newer one, so only the most recent request is allowed to draw.
+    const my=++this.aadtReq;
+    // Generalised to about two pixels at this zoom: past that the detail is being
+    // downloaded to be thrown away by the screen.
+    const tol=2*360/(256*Math.pow(2,z));
+    const q=new URLSearchParams({
+      where:'AADT>'+this.aadtFloor(z),
+      geometry:JSON.stringify({xmin:b.getWest(),ymin:b.getSouth(),xmax:b.getEast(),ymax:b.getNorth(),spatialReference:{wkid:4326}}),
+      geometryType:'esriGeometryEnvelope', inSR:'4326', outSR:'4326',
+      spatialRel:'esriSpatialRelIntersects',
+      outFields:'AADT,RoadwayName,RouteNumber,RouteSigning,SpeedLimit,AvgTruckPercent,CalculationYear',
+      returnGeometry:'true', geometryPrecision:'5', maxAllowableOffset:String(tol),
+      // When more is in view than will be drawn, the busiest survive: a quiet street
+      // you can guess at, a truck route you cannot.
+      orderByFields:'AADT DESC', resultRecordCount:String(AADT_CAP), f:'geojson'
+    });
+    this.status('Reading traffic counts from NYSDOT\u2026');
+    let feats;
+    try{
+      const r=await fetch(AADT_URL+'?'+q.toString());
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const j=await r.json();
+      if(j.error) throw new Error(j.error.message||'service error');
+      feats=j.features||[];
+    }catch(e){
+      if(my!==this.aadtReq) return;
+      this.aadtSig='';
+      this.status('No answer from the NYSDOT traffic service. The rest of the map is unaffected.');
+      return;
+    }
+    if(my!==this.aadtReq) return;
+    const n=this.drawAadt(feats);
+    this.status(feats.length>=AADT_CAP
+      ? 'Traffic counts: the '+n+' busiest roads in view. Zoom in for the quieter ones.'
+      : 'Traffic counts on '+n+' road segments in view.');
+  }
+  drawAadt(feats){
+    const g=this.aadtLayer; g.clearLayers();
+    const rows=[];
+    feats.forEach(f=>{
+      const gm=f.geometry||{}, pr=f.properties||{}, v=+pr.AADT;
+      if(!isFinite(v) || v<=0) return;
+      // ArcGIS hands back a MultiLineString whenever a segment has more than one path.
+      const paths = gm.type==='LineString' ? [gm.coordinates]
+                  : gm.type==='MultiLineString' ? gm.coordinates : [];
+      const band=this.aadtBand(v);
+      let longest=null;
+      paths.forEach(path=>{
+        if(!path || path.length<2) return;
+        const ll=path.map(c=>[c[1],c[0]]);
+        const ln=L.polyline(ll,{color:band[1],weight:band[3],opacity:.85,className:'aadt-ln'});
+        ln.bindPopup('',{maxWidth:250,autoPan:false});
+        ln.on('popupopen',()=>ln.setPopupContent(this.aadtPopup(pr)));
+        ln.addTo(g);
+        if(!longest || ll.length>longest.length) longest=ll;
+      });
+      if(longest) rows.push({v, band, mid:longest[Math.floor(longest.length/2)],
+        name:String(pr.RoadwayName||pr.RouteNumber||'').trim()});
+    });
+    this.labelAadt(rows);
+    return rows.length;
+  }
+  /* One number per road, and only where it fits. Labelling every segment stacks a
+     dozen copies of the same count down one street; going busiest-first means that
+     when two labels compete, the road you most need to know about keeps its number. */
+  labelAadt(rows){
+    const m=this.map, g=this.aadtLayer, placed=[], seen={};
+    rows.slice().sort((a,b)=>b.v-a.v).forEach(r=>{
+      const nm=r.name||('#'+Math.round(r.v));
+      if(seen[nm]) return;
+      const pt=m.latLngToContainerPoint(r.mid);
+      const txt=this.fmtAadt(r.v), w=txt.length*7+10, h=16;
+      const box={l:pt.x-w/2, t:pt.y-h/2, r:pt.x+w/2, b:pt.y+h/2};
+      if(placed.some(q=>!(box.r<q.l||box.l>q.r||box.b<q.t||box.t>q.b))) return;
+      placed.push(box); seen[nm]=1;
+      g.addLayer(L.marker(r.mid,{interactive:false,keyboard:false,zIndexOffset:-400,
+        icon:L.divIcon({className:'aadt-ic',iconSize:[w,h],iconAnchor:[w/2,h/2],
+          html:'<span class="aadt-n" style="border-color:'+r.band[1]+';color:'+r.band[1]+'">'+esc(txt)+'</span>'})}));
+    });
+  }
+  aadtPopup(p){
+    const v=+p.AADT, band=this.aadtBand(v);
+    const sign=String(p.RouteSigning||'').trim(), num=String(p.RouteNumber||'').trim();
+    const nm=String(p.RoadwayName||'').trim() || (sign+' '+num).trim() || 'Unnamed road';
+    let h='<b>'+esc(nm)+'</b>'
+      +'<br><b style="color:'+band[1]+'">'+v.toLocaleString()+' vehicles a day</b> \u00b7 '+band[2]
+      +'<br><span style="opacity:.65">NYSDOT count'+(p.CalculationYear?', '+p.CalculationYear:'')+'</span>';
+    const bits=[];
+    if(p.SpeedLimit) bits.push(p.SpeedLimit+' mph limit');
+    if(p.AvgTruckPercent) bits.push(Math.round(p.AvgTruckPercent)+'% trucks');
+    if(bits.length) h+='<br>'+esc(bits.join(' \u00b7 '));
+    return h;
+  }
+
+  /* ---------- mileposts ---------- */
+  /* A number every mile is right over a town and unreadable over the state, so the
+     interval is picked from how many pixels a mile is actually worth at the zoom you
+     are on rather than from a table of zoom levels: the labels land about a thumb
+     apart whatever you are looking at, and only the ones on screen get built. */
+  // Web Mercator, so this is exact rather than fitted, and the ladder below reads off it.
+  milePx(){
+    const m=this.map; if(!m) return 0;
+    const lat=m.getCenter().lat, z=m.getZoom();
+    return 256*Math.pow(2,z)*1609.344/(40075016.686*Math.cos(lat*Math.PI/180));
+  }
+  // The finest interval whose labels still clear each other — 48px is "355" and its
+  // padding, so at worst the numbers sit shoulder to shoulder and never overlap.
+  mileStep(px){
+    for(let i=0;i<MILE_LADDER.length;i++) if(MILE_LADDER[i]*px>=48) return MILE_LADDER[i];
+    return MILE_LADDER[MILE_LADDER.length-1];
+  }
+  /* Unlabelled ticks between the numbers, the way the small marks on a ruler let you
+     read a distance without counting the numbered ones. Dropped once they would crowd
+     into a dotted line, which is decoration rather than a scale. */
+  mileMinor(step,px){
+    const i=MILE_LADDER.indexOf(step)-1;
+    return (i>=0 && MILE_LADDER[i]*px>=7) ? MILE_LADDER[i] : 0;
+  }
+  // Interpolated along the leg rather than snapped to a vertex the way routePtAt is:
+  // a milepost sitting a tenth of a mile off the line looks like a mistake up close.
+  milePoint(mile){
+    const last=ROUTE[ROUTE.length-1];
+    if(mile<=ROUTE[0][2]) return [ROUTE[0][0],ROUTE[0][1]];
+    if(mile>=last[2]) return [last[0],last[1]];
+    let lo=0, hi=ROUTE.length-1;
+    while(lo<hi-1){ const m=(lo+hi)>>1; if(ROUTE[m][2]<=mile) lo=m; else hi=m; }
+    const a=ROUTE[lo], b=ROUTE[hi], den=b[2]-a[2], f=den>0?(mile-a[2])/den:0;
+    return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f];
+  }
+  // Matching the two route lines, so a milepost says which half of the trail it is on.
+  mileColor(mile){ return mile<=201.1 ? (this.accent||'#0088b0') : (this.accent2||'#d6006c'); }
+  renderMileposts(){
+    const m=this.map, g=this.mileLayer;
+    if(!m||!g||!m.hasLayer(g)) return;
+    const px=this.milePx(), step=this.mileStep(px), minor=this.mileMinor(step,px);
+    const b=m.getBounds().pad(0.2);
+    const sig=step+':'+minor+':'+[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()]
+      .map(v=>v.toFixed(3)).join(',');
+    if(sig===this.mileSig) return;      // the same stretch at the same scale — leave it be
+    this.mileSig=sig;
+    g.clearLayers();
+    let n=0;
+    for(let mi=0; mi<=TOTAL && n<MILE_CAP; mi+=(minor||step)){
+      const p=this.milePoint(mi);
+      if(!b.contains(p)) continue;      // off screen, so it costs nothing to skip
+      n++;
+      g.addLayer(mi%step===0 ? this.mileLabel(mi,p) : this.mileTick(mi,p));
+    }
+  }
+  mileLabel(mile,p){
+    const c=this.mileColor(mile);
+    const html='<div class="mp-lb" style="color:'+c+'">'
+      +'<span class="mp-n'+(mile%50===0?' mp-maj':'')+'" style="border-color:'+c+'">'+mile+'</span>'
+      +'<i class="mp-dot"></i></div>';
+    // Under everything else in the z-order: a milepost is a reference, not a
+    // destination, and it should never be the thing your thumb lands on.
+    const mk=L.marker(p,{keyboard:false, zIndexOffset:-500,
+      icon:L.divIcon({className:'mp-ic',html,iconSize:[46,26],iconAnchor:[23,26]})});
+    mk.bindPopup('',{maxWidth:250,autoPan:false});
+    mk.on('popupopen',()=>mk.setPopupContent(this.milePopup(mile,p)));
+    return mk;
+  }
+  mileTick(mile,p){
+    return L.circleMarker(p,{radius:2.2,weight:0,fillColor:this.mileColor(mile),
+      fillOpacity:.9,interactive:false,className:'mp-tick'});
+  }
+  milePopup(mile,p){
+    // Not mpTxt: these are whole miles by construction, and a trailing .0 on every
+    // one of them reads as precision that isn't being claimed.
+    const n=this.nearestTown(mile), tm='TM '+mile;
+    let h='<b>'+tm+'</b>';
+    if(n) h+='<br><span style="opacity:.65">'+esc(this.townLabel(n))+'</span>';
+    if(this.myMile!=null){
+      const gap=(mile-this.myMile)*(this.dir==='B2NYC'?-1:1);
+      h+='<br><b>~'+fmtMi(abs(gap))+' mi '+(gap>=-0.3?'ahead of you':'behind you')+'</b>';
+    }
+    h+='<br><span style="opacity:.65">'+fmtMi(mile)+' mi from Manhattan · '
+      +fmtMi(TOTAL-mile)+' mi to Buffalo</span>';
+    // Same offer a town popup makes, on the same setting: a milepost is a finer place
+    // to drop yourself than the nearest town when you are simulating a day.
+    if(this.tapToSet) h+='<button type="button" class="mv-go" data-mvlat="'+p[0]+'" data-mvlng="'+p[1]
+      +'">Move me to '+tm+'</button>';
+    return h;
+  }
+
+  /* ---------- weather ---------- */
+  /* Sampled by riding-hour rather than by distance. The question a cyclist has is not
+     "what is it doing twenty miles up the trail" but "what will it be doing when I get
+     there" — which is what makes the average-speed setting load-bearing rather than
+     decorative, and what makes a headwind reading worth trusting. */
+  wxAnchorMile(){
+    if(this.myMile!=null) return this.myMile;
+    if(!this.map) return null;
+    const c=this.map.getCenter(), pr=projectRoute(c.lat,c.lng);
+    return pr && pr.mile!=null ? pr.mile : null;
+  }
+  routePtAt(mile){
+    const last=ROUTE[ROUTE.length-1];
+    if(mile<=ROUTE[0][2]) return ROUTE[0];
+    if(mile>=last[2]) return last;
+    let lo=0, hi=ROUTE.length-1;
+    while(lo<hi-1){ const m=(lo+hi)>>1; if(ROUTE[m][2]<=mile) lo=m; else hi=m; }
+    return ROUTE[hi];
+  }
+  // The way you're pointed at a milepost. Mileposts run up from the NYC end, so riding
+  // to NYC walks them down — the sign is what turns a compass into a heading.
+  /* A chord centred on the milepost, not one running off it: a one-sided chord
+     measures the next stretch of trail rather than the tangent at your feet, so
+     flipping direction sampled a different bend and the two headings came back
+     155 degrees apart instead of exactly reversed. */
+  routeBearing(mile){
+    const sgn=this.dir==='B2NYC'?-1:1;
+    const a=this.routePtAt(mile-sgn*0.75), b=this.routePtAt(mile+sgn*0.75);
+    if(!a||!b||(a[0]===b[0]&&a[1]===b[1])) return null;
+    return bearing(a[0],a[1],b[0],b[1]);
+  }
+  /* api.weather.gov, in two hops: a point maps to a forecast grid, the grid has the
+     hourly. Kept in memory only — a stale forecast presented as current is worse than
+     no forecast, so it dies with the tab rather than lingering in storage. */
+  async nwsHourly(lat,lng){
+    // Grid cells are a couple of km, so rounding the key stops six samples in one town
+    // from becoming six pairs of requests.
+    const key=lat.toFixed(2)+','+lng.toFixed(2);
+    const hit=this.wxCache[key];
+    if(hit && Date.now()-hit.t < 18e5) return hit.v;
+    const pr=await fetch('https://api.weather.gov/points/'+lat.toFixed(4)+','+lng.toFixed(4));
+    if(!pr.ok) throw new Error('points '+pr.status);
+    const url=((await pr.json()).properties||{}).forecastHourly;
+    if(!url) throw new Error('no hourly grid here');
+    const fr=await fetch(url);
+    if(!fr.ok) throw new Error('forecast '+fr.status);
+    const periods=((await fr.json()).properties||{}).periods||[];
+    this.wxCache[key]={t:Date.now(), v:periods};
+    return periods;
+  }
+  // Periods are hourly buckets; find the one holding a given moment.
+  wxAt(periods, when){
+    for(let i=0;i<periods.length;i++){
+      const p=periods[i], a=Date.parse(p.startTime), b=Date.parse(p.endTime);
+      if(when>=a && when<b) return p;
+    }
+    return periods[0]||null;
+  }
+  /* The layer covers today's ride — from where you are out to the miles a day you set,
+     stepped by the hour at your average speed. Direction stays on the map even though
+     the outlook drops it: an arrow on a map has somewhere to point, and seeing the
+     whole day's wind swing round is worth the ink. */
+  wxSamples(){
+    const anchor=this.wxAnchorMile();
+    if(anchor==null) return [];
+    const sgn=this.dir==='B2NYC'?-1:1, sp=this.avgSpeed>0?this.avgSpeed:12;
+    const dist=Math.max(sp, this.wxPerDay||60);
+    const steps=Math.max(1, Math.min(8, Math.round(dist/sp)));
+    const out=[], seen={};
+    for(let i=0;i<=steps;i++){
+      const f=i/steps;
+      const mile=Math.max(0,Math.min(TOTAL, anchor+sgn*dist*f));
+      const k=Math.round(mile);
+      if(seen[k]) continue;        // the route ran out — stop restating its last point
+      seen[k]=1;
+      const p=this.routePtAt(mile);
+      out.push({h: dist*f/sp, mile, lat:p[0], lng:p[1], hdg:this.routeBearing(mile)});
+    }
+    return out;
+  }
+  async loadWeather(){
+    if(!this.map||!this.wxLayer) return;
+    const pts=this.wxSamples();
+    if(!pts.length){ this.status('Weather follows your route, so it needs a position on the trail first.'); return; }
+    this.status('Reading the forecast along your route…');
+    const now=Date.now();
+    const res=await Promise.allSettled(pts.map(async pt=>{
+      const periods=await this.nwsHourly(pt.lat,pt.lng);
+      return {...pt, w:this.wxAt(periods, now+pt.h*36e5)};
+    }));
+    const got=res.filter(r=>r.status==='fulfilled' && r.value.w).map(r=>r.value);
+    this.wxLayer.clearLayers();
+    this.wxAsOf=now;
+    this.wxNow=got.filter(g=>g.h===0)[0]||null;
+    got.forEach(g=>this.addWxMarker(g));
+    this.renderMapSheet();
+    if(!got.length){ this.status('No answer from api.weather.gov. It’s the US forecast service — it covers the whole trail, but it does go down.'); return; }
+    const ride=abs(pts[pts.length-1].mile-pts[0].mile);
+    this.status(got.length<pts.length
+      ? 'Forecast in for '+got.length+' of '+pts.length+' points along your route.'
+      : 'Forecast in for today\u2019s '+fmtWin(Math.round(ride))+' mi at '+this.avgSpeed+' mph.');
+  }
+  // One reading, in the units a rider thinks in.
+  wxRead(g){
+    const w=g.w, mph=windMph(w.windSpeed), from=COMPASS[String(w.windDirection||'').toUpperCase()];
+    const parts=(mph!=null && from!=null && g.hdg!=null) ? windParts(from,g.hdg,mph) : null;
+    const pop=w.probabilityOfPrecipitation ? w.probabilityOfPrecipitation.value : null;
+    return {mph, from, parts, pop, temp:w.temperature, unit:w.temperatureUnit||'F', short:w.shortForecast||''};
+  }
+  // Under 3 mph either way is noise, not a wind you'd notice on a bike.
+  wxKind(r){ return !r.parts ? 'cross' : r.parts.head>3 ? 'head' : r.parts.head<-3 ? 'tail' : 'cross'; }
+  addWxMarker(g){
+    const r=this.wxRead(g), kind=this.wxKind(r);
+    const rot = r.from==null ? 0 : (r.from+180)%360;   // the arrow flies the way it blows
+    const html='<div class="wx-pin wx-'+kind+'">'
+      +'<span class="wx-arrow" style="transform:rotate('+Math.round(rot)+'deg)">\u2191</span>'
+      +(r.mph!=null?'<span class="wx-s">'+Math.round(r.mph)+'</span>':'')
+      +'<span class="wx-t">'+(r.temp==null?'—':r.temp+'\u00b0')+'</span>'
+      +(r.pop?'<span class="wx-p">'+r.pop+'%</span>':'')+'</div>';
+    const mk=L.marker([g.lat,g.lng],{icon:L.divIcon({className:'wx-ic',html,iconSize:[80,24],iconAnchor:[40,12]})});
+    mk.bindPopup('',{maxWidth:260,autoPan:false});
+    mk.on('popupopen',()=>mk.setPopupContent(this.wxPopup(g)));
+    mk.addTo(this.wxLayer);
+  }
+  wxPopup(g){
+    const r=this.wxRead(g), w=g.w;
+    const t=new Date(Date.parse(w.startTime)).toLocaleTimeString([], {hour:'numeric'});
+    const hh=Math.round(g.h*10)/10;
+    let h='<b>'+(g.h===0?'Where you are now':'About '+fmtWin(hh)+'h up the trail')+'</b>'
+      +'<br><span style="opacity:.65">'+mpTxt(g.mile)+' · around '+t+'</span>'
+      +'<br>'+esc(r.short)+(r.temp!=null?' · <b>'+r.temp+'\u00b0'+esc(r.unit)+'</b>':'');
+    if(r.pop!=null) h+='<br>Rain '+r.pop+'%';
+    if(r.mph!=null){
+      h+='<br>Wind '+Math.round(r.mph)+' mph from the '+esc(w.windDirection||'?');
+      if(r.parts){
+        const hd=r.parts.head, cr=r.parts.cross;
+        h+='<br>'+(hd>3 ? '<b>'+Math.round(hd)+' mph headwind</b>'
+          : hd<-3 ? '<b>'+Math.round(-hd)+' mph tailwind</b>'
+          : 'nothing much head-on')
+          +(cr>=5?' · '+Math.round(cr)+' mph across':'');
+      } else h+='<br><span style="opacity:.65">No heading here to call it head or tail.</span>';
+    }
+    return h;
+  }
+  // The one-line version for the map sheet.
+  wxLine(){
+    if(!this.wxNow) return '';
+    const r=this.wxRead(this.wxNow), bits=[];
+    if(r.temp!=null) bits.push(r.temp+'\u00b0'+r.unit);
+    if(r.parts){
+      const hd=r.parts.head;
+      bits.push(hd>3?Math.round(hd)+' mph headwind':hd<-3?Math.round(-hd)+' mph tailwind':'little wind either way');
+    } else if(r.mph!=null) bits.push(Math.round(r.mph)+' mph wind');
+    if(r.pop) bits.push('rain '+r.pop+'%');
+    return bits.join(' · ');
+  }
+
+  /* ---------- multi-day outlook ---------- */
+  /* The map layer answers "what am I riding into today". This answers the question you
+     ask the night before: split the route into days, work out where you'd be and when,
+     and report the weather waiting for you there rather than the weather here now. */
+  /* Town names do more work than mileposts here: nobody plans a day around TM 299.
+     The nearest one gets named even when it is a few miles off, because "near Rome"
+     still tells you where you are in a way a number never will. */
+  nearestTown(mile){
+    if(mile==null || !isFinite(mile)) return null;
+    let best=null, bd=Infinity;
+    TOWNS.forEach(t=>{ const d=abs(t.mi-mile); if(d<bd){ bd=d; best=t; } });
+    return best ? {t:best, off:bd} : null;
+  }
+  townLabel(n){ return !n ? '' : (n.off<=3 ? n.t.n : 'near '+n.t.n); }
+  // Chart labels get the first name only — "Chittenango", not the whole park.
+  shortTown(n){ return String(n||'').split(' / ')[0]; }
+  // Every town you'd roll through that day, in the order you'd reach them.
+  legTowns(leg){
+    const lo=Math.min(leg.from,leg.to), hi=Math.max(leg.from,leg.to), fwd=leg.to>=leg.from;
+    return TOWNS.filter(t=>t.mi>=lo-0.2 && t.mi<=hi+0.2)
+      .slice().sort((a,b)=> fwd ? a.mi-b.mi : b.mi-a.mi);
+  }
+  buildWxDest(){
+    const sel=this.$('wxDest'); if(!sel) return;
+    const keep=sel.value;
+    let h='<option value="">nowhere in particular — just ride</option><optgroup label="Trail stops">';
+    TOWNS.forEach(t=>{ h+='<option value="t:'+t.mi+'">'+esc(t.n)+' — TM '+fmtMp(t.mi)+'</option>'; });
+    h+='</optgroup>';
+    const stay=this.POIS.filter(p=>(p.asset==='Lodging'||p.asset==='Campground') && p.mile!=null)
+      .slice().sort((a,b)=>a.mile-b.mile);
+    if(stay.length){
+      h+='<optgroup label="Lodging &amp; campgrounds">';
+      stay.forEach(p=>{ h+='<option value="p:'+p.i+'">'+esc(p.name)+' — TM '+fmtMp(p.mile)+'</option>'; });
+      h+='</optgroup>';
+    }
+    sel.innerHTML=h;
+    if(keep) sel.value=keep;
+  }
+  wxDestMile(){
+    const sel=this.$('wxDest'); if(!sel||!sel.value) return null;
+    const k=sel.value.slice(0,1), v=sel.value.slice(2);
+    if(k==='t') return +v;
+    const p=this.POIS[+v];
+    return p && p.mile!=null ? p.mile : null;
+  }
+  /* Days are cut by distance, then capped by the destination if there is one. Six is
+     the ceiling because NWS hourly runs about six and a half days out — past that
+     there is nothing to report, and a made-up seventh day is worse than none. */
+  wxLegs(){
+    const anchor=this.wxAnchorMile();
+    if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
+    const sgn=this.dir==='B2NYC'?-1:1;
+    const per=Math.max(5, this.wxPerDay||60);
+    const dest=this.wxDestMile();
+    let days=Math.max(1, Math.min(6, this.wxDays||4));
+    if(dest!=null){
+      const gap=(dest-anchor)*sgn;                  // positive when it lies ahead of you
+      if(gap<=0.5) return {err:'That one is behind you. Flip your direction in More, or pick something further along.'};
+      days=Math.ceil(gap/per);
+      if(days>6) return {err:'That is '+Math.round(gap)+' mi — about '+days+' days at '+Math.round(per)+' a day, and the forecast only runs six out. Raise the miles a day, or aim closer.'};
+    }
+    const legs=[]; let from=anchor;
+    for(let d=0; d<days; d++){
+      let to=from+sgn*per;
+      if(dest!=null && (to-dest)*sgn>0) to=dest;
+      to=Math.max(0,Math.min(TOTAL,to));
+      if(abs(to-from)<0.5) break;
+      legs.push({d, from, to, miles:abs(to-from)});
+      from=to;
+      if(dest!=null && abs(from-dest)<0.5) break;
+    }
+    return legs.length?legs:{err:'That works out to no riding at all — check the miles a day.'};
+  }
+  // Day 0 starts now if you're already up and riding; every other day starts at eight.
+  wxDepart(d){
+    const now=new Date();
+    const start=new Date(now.getFullYear(),now.getMonth(),now.getDate()+d,8,0,0,0).getTime();
+    return (d===0 && now.getTime()>start) ? now.getTime() : start;
+  }
+  /* Three grid points per day, start / middle / end. Each one hands back 150-odd
+     hourly periods, so an hour-by-hour chart costs nothing beyond these three calls:
+     for any given hour we read the anchor nearest to where you'd be. That is what a
+     gridded forecast means, so the chart is real data throughout rather than a curve
+     drawn between two dots. Day boundaries share a milepost, so the cache absorbs one
+     of the three on every day after the first. */
+  wxLegAnchors(leg){
+    return [0,0.5,1].map(f=>{
+      const mile=leg.from+(leg.to-leg.from)*f, p=this.routePtAt(mile);
+      return {mile, lat:p[0], lng:p[1]};
+    });
+  }
+  wxLegSeries(leg){
+    const sp=this.avgSpeed>0?this.avgSpeed:12, dep=this.wxDepart(leg.d);
+    const steps=Math.max(1, Math.min(14, Math.ceil(leg.miles/sp)));
+    const out=[];
+    for(let i=0;i<=steps;i++){
+      const f=i/steps, mile=leg.from+(leg.to-leg.from)*f;
+      const when=dep+(leg.miles*f/sp)*36e5;
+      let best=null, bd=Infinity;
+      (leg.anchors||[]).forEach(a=>{ const d=abs(a.mile-mile); if(a.periods && d<bd){ bd=d; best=a; } });
+      out.push({mile, when, hdg:this.routeBearing(mile), w: best?this.wxAt(best.periods, when):null});
+    }
+    return out;
+  }
+  /* Mean rather than worst for the wind: one gusty sample shouldn't brand a whole day
+     a headwind day. Rain and temperature take their extremes, because those are what
+     you pack for. */
+  wxSummary(samples){
+    const rs=samples.filter(x=>x.w).map(x=>this.wxRead({w:x.w, hdg:x.hdg}));
+    if(!rs.length) return null;
+    const nums=a=>a.filter(v=>v!=null && isFinite(v));
+    const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+    const temps=nums(rs.map(r=>r.temp)), pops=nums(rs.map(r=>r.pop));
+    const heads=rs.filter(r=>r.parts).map(r=>r.parts.head);
+    const cross=rs.filter(r=>r.parts).map(r=>r.parts.cross);
+    return {
+      tLo: temps.length?Math.min.apply(null,temps):null,
+      tHi: temps.length?Math.max.apply(null,temps):null,
+      pop: pops.length?Math.max.apply(null,pops):null,
+      head: heads.length?mean(heads):null,
+      cross: cross.length?mean(cross):null,
+      unit: rs[0].unit, short: rs[rs.length-1].short
+    };
+  }
+  /* The night where the day leaves you: the low you'd sleep in and whether it rains on
+     the tent, read at the far anchor between 7pm and 6am. No wind — a crosswind at 2am
+     is nobody's problem. Later days fall off the end of the hourly forecast, and those
+     simply go without rather than being extrapolated. */
+  wxOvernight(leg){
+    const as=leg.anchors||[], a=as[as.length-1];
+    if(!a || !a.periods || !a.periods.length) return null;
+    const d0=new Date(this.wxDepart(leg.d));
+    const from=new Date(d0.getFullYear(),d0.getMonth(),d0.getDate(),19,0,0,0).getTime();
+    const to=from+11*36e5;
+    const win=a.periods.filter(p=>{ const t=Date.parse(p.startTime); return t>=from && t<to; });
+    if(win.length<3) return null;
+    const temps=win.map(p=>p.temperature).filter(t=>t!=null && isFinite(t));
+    const pops=win.map(p=>p.probabilityOfPrecipitation?p.probabilityOfPrecipitation.value:null)
+      .filter(v=>v!=null && isFinite(v));
+    const mid=win[Math.floor(win.length/2)];
+    return {
+      lo: temps.length?Math.min.apply(null,temps):null,
+      hi: temps.length?Math.max.apply(null,temps):null,
+      pop: pops.length?Math.max.apply(null,pops):null,
+      unit: win[0].temperatureUnit||'F',
+      short: mid?(mid.shortForecast||''):''
+    };
+  }
+  // All three of head, tail and cross, said the way you'd say them out loud.
+  windWord(head, cross){
+    const h=head==null?0:head, c=cross==null?0:cross, mag=abs(h);
+    if(mag<3 && c<5) return {cls:'cross', txt:'barely any wind'};
+    if(mag<3) return {cls:'cross', txt:Math.round(c)+' mph crosswind'};
+    let t=Math.round(mag)+' mph '+(h>0?'headwind':'tailwind');
+    if(c>=5) t+=', '+Math.round(c)+' mph across';
+    return {cls: h>0?'head':'tail', txt:t};
+  }
+  async loadOutlook(){
+    if(this.wxBusy) return;
+    const legs=this.wxLegs();
+    if(legs.err){ this.wxPlan={err:legs.err}; this.renderOutlook(); return; }
+    this.wxBusy=true; this.wxPlan={loading:true}; this.renderOutlook();
+    const jobs=[];
+    legs.forEach(leg=>{ leg.anchors=this.wxLegAnchors(leg); leg.anchors.forEach(a=>jobs.push(a)); });
+    await Promise.allSettled(jobs.map(async a=>{ a.periods=await this.nwsHourly(a.lat,a.lng); }));
+    legs.forEach(leg=>{ leg.series=this.wxLegSeries(leg); leg.sum=this.wxSummary(leg.series); });
+    this.wxBusy=false;
+    this.wxPlan={legs, at:Date.now(), got:legs.filter(l=>l.sum).length};
+    this.renderOutlook();
+  }
+  /* Laid out the way the NWS hourly graph is: stacked panels over one shared time
+     axis, so reading straight down a column gives you the temperature, the rain and
+     the wind at that hour. The wind panel is the part rewritten for a bicycle. The
+     compass bearing is gone — it is a number you have to do trigonometry on before it
+     means anything — and what is drawn instead is the component that actually reaches
+     you: up and red when it is in your face, down and green at your back, straddling
+     the line in grey when it is only shoving you sideways. Height is its speed.
+     Towns are ruled in down the whole stack, because "the headwind starts after
+     Canajoharie" is the sentence you actually want out of a chart like this. */
+  wxChart(leg){
+    const S=(leg.series||[]).filter(x=>x.w);
+    if(S.length<2) return '';
+    const rd=S.map(p=>this.wxRead(p));
+    const temps=rd.map(r=>r.temp).filter(t=>t!=null && isFinite(t));
+    if(!temps.length) return '';
+    const W=340, L=27, R=10, H=196, span=W-L-R;
+    const x=i=>L+span*(i/(S.length-1));
+    const den=leg.to-leg.from;
+    const xm=m=>L+span*(den===0?0:(m-leg.from)/den);
+    const bw=Math.max(3.5, Math.min(15, span/S.length*0.5));
+    const T0=30, T1=70;            // temperature band
+    const RB=112, RH=30;           // rain baseline, full-height bar
+    const WZ=158, WH=24;           // wind zero line, half height
+    const TOP=14, BOT=WZ+WH;       // the run of a town's rule
+    const n2=v=>(Math.round(v*10)/10).toFixed(1);
+    const tHi=Math.max.apply(null,temps), tLo=Math.min.apply(null,temps);
+    let tMax=tHi, tMin=tLo;
+    if(tMax-tMin<4){ const m=(tMin+tMax)/2; tMin=m-2; tMax=m+2; }
+    const ty=t=>T1-((t-tMin)/(tMax-tMin))*(T1-T0);
+    const tag=(y,t,c)=>'<text class="wx-gt'+(c?' '+c:'')+'" x="'+(L-5)+'" y="'+y+'" text-anchor="end">'+esc(t)+'</text>';
+    let g='<svg class="wx-svg" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Hour by hour along the day’s ride: temperature, rain chance, and head or tail wind">';
+
+    /* ---- towns, ruled first so every series draws over them ---- */
+    const tw=this.legTowns(leg).map(t=>({t, x:xm(t.mi)}))
+      .filter(o=>isFinite(o.x) && o.x>=L-1 && o.x<=W-R+1).sort((a,b)=>a.x-b.x);
+    let last=-1e9;
+    tw.forEach(o=>{
+      g+='<line class="wx-tn" x1="'+n2(o.x)+'" y1="'+TOP+'" x2="'+n2(o.x)+'" y2="'+BOT+'"/>';
+      const nm=this.shortTown(o.t.n), wpx=nm.length*4.4+4;
+      let anch='middle', tx=o.x;
+      if(tx-wpx/2<1){ anch='start'; tx=1; }
+      else if(tx+wpx/2>W-1){ anch='end'; tx=W-1; }
+      const lft = anch==='start' ? tx : anch==='end' ? tx-wpx : tx-wpx/2;
+      if(lft<last+3) return;                     // it would sit on the last name
+      last=lft+wpx;
+      g+='<text class="wx-tnl" x="'+n2(tx)+'" y="9" text-anchor="'+anch+'">'+esc(nm)+'</text>';
+    });
+
+    /* ---- temperature ---- */
+    g+='<line class="wx-gl" x1="'+L+'" y1="'+T0+'" x2="'+(W-R)+'" y2="'+T0+'"/>'
+      +'<line class="wx-gl" x1="'+L+'" y1="'+T1+'" x2="'+(W-R)+'" y2="'+T1+'"/>';
+    g+=tag(T0+3, Math.round(tMax)+'°')+tag(T1+3, Math.round(tMin)+'°');
+    const pts=S.map((p,i)=>rd[i].temp==null?null:n2(x(i))+','+n2(ty(rd[i].temp))).filter(Boolean);
+    if(pts.length>1){
+      g+='<polygon class="wx-tfill" points="'+L+','+T1+' '+pts.join(' ')+' '+(W-R)+','+T1+'"/>';
+      g+='<polyline class="wx-temp" points="'+pts.join(' ')+'"/>';
+    }
+    rd.forEach((r,i)=>{ if(r.temp!=null) g+='<circle class="wx-dot" cx="'+n2(x(i))+'" cy="'+n2(ty(r.temp))+'" r="1.9"/>'; });
+    const iHi=rd.findIndex(r=>r.temp===tHi), iLo=rd.findIndex(r=>r.temp===tLo);
+    if(iHi>=0) g+='<text class="wx-tl" x="'+n2(x(iHi))+'" y="'+n2(ty(tHi)-5)+'" text-anchor="middle">'+tHi+'°</text>';
+    if(iLo>=0 && iLo!==iHi) g+='<text class="wx-tl" x="'+n2(x(iLo))+'" y="'+n2(ty(tLo)+11)+'" text-anchor="middle">'+tLo+'°</text>';
+
+    /* ---- rain ---- */
+    g+='<line class="wx-gl wx-dash" x1="'+L+'" y1="'+(RB-RH/2)+'" x2="'+(W-R)+'" y2="'+(RB-RH/2)+'"/>';
+    g+='<line class="wx-ax" x1="'+L+'" y1="'+RB+'" x2="'+(W-R)+'" y2="'+RB+'"/>';
+    g+=tag(RB-RH/2+3, '50%');
+    let wet=0;
+    rd.forEach((r,i)=>{
+      if(!r.pop) return;
+      wet++;
+      const hgt=Math.max(1.5,(r.pop/100)*RH);
+      g+='<rect class="wx-rain" x="'+n2(x(i)-bw/2)+'" y="'+n2(RB-hgt)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1.5"/>';
+    });
+    if(!wet) g+='<text class="wx-xl" x="'+(L+3)+'" y="'+(RB-4)+'">no rain in the forecast</text>';
+
+    /* ---- wind, as a rider meets it ---- */
+    const wv=rd.map(r=>{
+      if(!r.parts) return null;
+      const k=this.wxKind(r);
+      return {k, v: k==='cross' ? r.parts.cross : abs(r.parts.head)};
+    });
+    const seen=wv.filter(Boolean);
+    const wMax=Math.max(10, Math.ceil(Math.max.apply(null, seen.length?seen.map(o=>o.v):[0])/5)*5);
+    g+='<line class="wx-ax" x1="'+L+'" y1="'+WZ+'" x2="'+(W-R)+'" y2="'+WZ+'"/>';
+    g+=tag(WZ-WH+7,'head','wx-g-head')+tag(WZ+WH-1,'tail','wx-g-tail');
+    wv.forEach((o,i)=>{
+      // A calm hour draws nothing. A floored minimum bar would put a grey nub on the
+      // line at every still hour, which reads as a light crosswind rather than as calm.
+      if(!o || o.v<1) return;
+      const hgt=Math.max(1.5,(o.v/wMax)*WH), lx=n2(x(i)-bw/2);
+      const y = o.k==='head' ? WZ-hgt : o.k==='tail' ? WZ : WZ-hgt/2;
+      g+='<rect class="wx-b-'+o.k+'" x="'+lx+'" y="'+n2(y)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1"/>';
+    });
+    // Print the strongest of them, so the panel's scale never has to be inferred.
+    let iw=-1, top=0;
+    wv.forEach((o,i)=>{ if(o && o.v>top){ top=o.v; iw=i; } });
+    if(iw>=0 && top>=3){
+      const o=wv[iw], hgt=(o.v/wMax)*WH;
+      const y = o.k==='head' ? WZ-hgt-3 : o.k==='tail' ? WZ+hgt+8 : WZ-hgt/2-3;
+      g+='<text class="wx-wl wx-'+o.k+'" x="'+n2(x(iw))+'" y="'+n2(y)+'" text-anchor="middle">'+Math.round(top)+' mph</text>';
+    }
+
+    /* ---- the clock, thinned so it never collides on a narrow screen ---- */
+    const every=Math.max(1, Math.ceil(S.length/5));
+    S.forEach((p,i)=>{
+      if(i%every && i!==S.length-1) return;
+      const t=new Date(p.when).toLocaleTimeString([], {hour:'numeric'}).replace(/\s?([AP])M/i,(m,a)=>a.toLowerCase());
+      const anch=i===0?'start':i===S.length-1?'end':'middle';
+      g+='<text class="wx-xl" x="'+n2(x(i))+'" y="190" text-anchor="'+anch+'">'+esc(t)+'</text>';
+    });
+    return g+'</svg>';
+  }
+  renderOutlook(){
+    const el=this.$('wxOut'); if(!el) return;
+    const pl=this.wxPlan;
+    const echo=this.$('wxSpeedEcho'); if(echo) echo.textContent=this.avgSpeed;
+    if(!pl){ el.innerHTML='<div class="up-empty">Set a day\u2019s distance and press the button. The forecast comes from the US National Weather Service, so it only asks when you ask.</div>'; return; }
+    if(pl.err){ el.innerHTML='<div class="up-empty">'+esc(pl.err)+'</div>'; return; }
+    if(pl.loading){ el.innerHTML='<div class="up-empty">Reading the forecast along your route\u2026</div>'; return; }
+    if(!pl.got){ el.innerHTML='<div class="up-empty">No answer from api.weather.gov. It covers the whole trail, but it does go down \u2014 worth another try in a minute.</div>'; return; }
+    const sp=this.avgSpeed>0?this.avgSpeed:12;
+    let h='';
+    pl.legs.forEach(leg=>{
+      const dt=new Date(this.wxDepart(leg.d));
+      const day=dt.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+      const hrs=leg.miles/sp;
+      h+='<div class="wx-day"><div class="wx-day-h"><span class="wx-day-n">Day '+(leg.d+1)+'</span>'
+        +'<span class="wx-day-d">'+esc(day)+'</span>'
+        +'<span class="wx-day-m">'+fmtWin(leg.miles)+' mi \u00b7 ~'+(hrs<1?Math.round(hrs*60)+' min':fmtWin(Math.round(hrs*10)/10)+'h')+'</span>'
+        +'</div>';
+      const tA=this.townLabel(this.nearestTown(leg.from)), tB=this.townLabel(this.nearestTown(leg.to));
+      if(tA && tB) h+='<div class="wx-day-tw">'+esc(tA)+' \u2192 '+esc(tB)+'</div>';
+      h+='<div class="wx-day-tm">TM '+fmtMp(leg.from)+' \u2192 '+fmtMp(leg.to)+'</div>';
+      const s=leg.sum;
+      if(!s){ h+='<div class="wx-none">No forecast came back for this stretch.</div>'; }
+      else{
+        const bits=[];
+        if(s.short) bits.push(esc(s.short));
+        if(s.tLo!=null) bits.push(s.tLo===s.tHi ? s.tLo+'\u00b0'+s.unit : s.tLo+'\u2013'+s.tHi+'\u00b0'+s.unit);
+        if(s.pop) bits.push('rain '+s.pop+'%');
+        h+='<div class="wx-day-w">'+bits.join(' \u00b7 ')+'</div>';
+        const ww=this.windWord(s.head, s.cross);
+        h+='<div class="wx-wind wx-'+ww.cls+'">'+icon('wind',15)+'<span>'+esc(ww.txt)+'</span></div>';
+        h+=this.wxChart(leg);
+        h+='<div class="wx-key"><span class="wx-k-t">temp</span><span class="wx-k-r">rain %</span>'
+          +'<span class="wx-k-h">headwind</span><span class="wx-k-l">tailwind</span><span class="wx-k-c">crosswind</span></div>';
+        const ov=this.wxOvernight(leg);
+        if(ov){
+          const nb=[];
+          if(ov.lo!=null) nb.push('low '+ov.lo+'\u00b0'+ov.unit);
+          if(ov.pop) nb.push('rain '+ov.pop+'%');
+          if(ov.short) nb.push(esc(ov.short).toLowerCase());
+          const tn=this.nearestTown(leg.to);
+          h+='<div class="wx-night"><b>Overnight'+(tn?' at '+esc(this.shortTown(tn.t.n)):'')+'</b> \u00b7 '
+            +nb.join(' \u00b7 ')+'</div>';
+        }
+      }
+      h+='</div>';
+    });
+    const at=new Date(pl.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    h+='<div class="wx-asof">Forecast read at '+esc(at)+' \u00b7 sampled at '+sp+' mph, starting 8am each day</div>';
+    el.innerHTML=h;
   }
 
   /* ---------- map + live data ---------- */
@@ -852,6 +2184,10 @@ class TrailApp {
     this.accent=accent; this.accent2=accent2;
     const map=L.map(el,{scrollWheelZoom:false,zoomControl:true,attributionControl:true}).setView([42.9,-76.0],7);
     this.map=map;
+    // One place decides where a popup sits, whoever opened it, using the panel height
+    // as it is right now — a bind-time padding would be stale the moment it moved.
+    map.on('popupopen', e=>setTimeout(()=>this.fitPopup(e.popup),0));
+    map.on('popupclose', e=>{ if(this.pick && !e.popup.options.className) this.clearPick(); });
     const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
     const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Esri'});
     const labels=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19});
@@ -863,20 +2199,56 @@ class TrailApp {
     this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright',collapsed:true}).addTo(map);
     const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
     const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
-    this.embLines=[ L.polyline(rHV,{color:accent,weight:4,opacity:.85}).addTo(map),
-                    L.polyline(rER,{color:accent2,weight:4,opacity:.85}).addTo(map) ];
+    this.embLines=[ L.polyline(rHV,{color:accent,weight:4,opacity:.85}),
+                    L.polyline(rER,{color:accent2,weight:4,opacity:.85}) ];
+    /* The trail itself gets a row in the control like everything else, and like the
+       borrowed layers it names where it comes from — the state's own page, which is
+       also where the official GPX for a GPS unit lives. One group, so the swap from
+       the embedded line to the live ArcGIS one below doesn't lose the row. */
+    this.routeLayer=L.layerGroup(this.embLines).addTo(map);
+    this.layersCtl.addOverlay(this.routeLayer,
+      this.lyrSrc('Empire State Trail', EST_SRC, 'The official route, and the GPX for your GPS')
+      +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
     this.stopLayer=L.layerGroup();
     TOWNS.forEach(t=>{
       const mk=L.circleMarker([t.lat,t.lng],{radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
-      mk.bindPopup('',{maxWidth:300,minWidth:230}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
+      mk.bindPopup('',{maxWidth:300,minWidth:230,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
     this.stopLayer.addTo(map);
     this.layersCtl.addOverlay(this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
-    map.on('click',e=>{ if(this.tapToSet) this.askMove(e.latlng); });
+    /* On from the start, unlike the weather: it costs a few divs and no requests, and
+       a trail map without mileposts makes you guess which end of the line you are
+       looking at. Redrawn on moveend — which is also what a zoom ends in. */
+    this.mileLayer=L.layerGroup().addTo(map);
+    this.layersCtl.addOverlay(this.mileLayer,'Mileposts');
+    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); });
+    map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
+    /* Both off until asked for, and both borrowed, so both name their source in the
+       control. The Shoreline is free to draw; the counts cost a request per view. */
+    this.shoreLayer=L.polyline([],{color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
+    this.shoreLayer.bindPopup('',{maxWidth:270,autoPan:false});
+    this.shoreLayer.on('popupopen',()=>this.shoreLayer.setPopupContent(this.shorePopup()));
+    this.layersCtl.addOverlay(this.shoreLayer,
+      this.lyrSrc(SHORE.name, SHORE.src, 'From '+SHORE.srcName+' \u2014 opens the route this line came from')
+      +' <span class="lyr-ct">GPX</span>');
+    map.on('overlayadd', e=>{ if(e.layer===this.shoreLayer) this.showShore(); });
+    this.aadtLayer=L.layerGroup();
+    this.layersCtl.addOverlay(this.aadtLayer,
+      this.lyrSrc('Traffic counts', AADT_SRC, 'From the NYSDOT Traffic Data Viewer \u2014 opens the source')
+      +' <span class="lyr-ct">AADT</span>');
+    map.on('overlayadd', e=>{ if(e.layer===this.aadtLayer){ this.aadtSig=''; this.loadAadt(); } });
+    map.on('overlayremove', e=>{ if(e.layer===this.aadtLayer) this.aadtLayer.clearLayers(); });
+    // Off until asked for: it costs a dozen requests to a public service, so switching
+    // it on is the fetch trigger rather than something that happens behind your back.
+    this.wxLayer=L.layerGroup();
+    this.layersCtl.addOverlay(this.wxLayer,'Wind &amp; weather');
+    map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
+    map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.renderMapSheet(); } });
+    map.on('click',e=>this.tapPopup(e.latlng));
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
-    setTimeout(()=>map.invalidateSize(),120);
+    setTimeout(()=>{ map.invalidateSize(); this.renderMileposts(); },120);
     if(this.myLL){ // restored from a previous session — place the marker and zoom in
       this.setMyLocation(this.myLL.lat,this.myLL.lng);
       this.status('Showing your last known position — tap Locate to update it.');
@@ -884,7 +2256,7 @@ class TrailApp {
     // live data
     const stat=this.$('poiStat'); if(stat) stat.textContent='Loading live data from the NY State service…';
     Promise.allSettled([
-      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); return n; }),
+      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); this.buildWxDest(); return n; }),
       this.fetchRouteLine().then(feats=>{ this.drawLiveRoute(feats); return feats.length; })
     ]).then(([poi,route])=>{
       if(stat){
@@ -905,7 +2277,7 @@ class TrailApp {
       +'<div class="pa-lbl">Find nearby:</div><div class="pa-row">'
       +b('gas station convenience store','Gas / C-store')+b('grocery store supermarket','Groceries')
       +b('restaurant cafe','Food')+b('hotel motel lodging','Lodging')
-      +'<a href="'+ratesLink(t.n+' NY')+'" target="_blank" rel="noopener" class="pa">Rates</a>'
+      +'<a href="'+ratesLink(t.n+' NY', this.townDate(t))+'" target="_blank" rel="noopener" class="pa">Rates</a>'
       +b('campground','Camping')+b('bicycle shop','Bike shop')+'</div>'
       // Same offer a bare map tap gets, gated on the same setting — a known town is
       // the likeliest place to want it, and it beats hunting the simulate dropdown.
@@ -915,30 +2287,40 @@ class TrailApp {
     const mp=p.mile!=null?' · '+mpTxt(p.mile):'';
     const sub=p.sub?' · '+p.sub:'';
     let h='<b>'+esc(p.name)+'</b><br><span style="opacity:.65">'+esc(p.asset)+esc(sub)+mp+'</span>';
-    /* The popup used to print the trail leg and the spur side by side and leave the
-       addition to the reader — so the one number a rider actually wants, what this
-       costs them to reach, was the one number missing. It now leads with the total
-       and breaks it down underneath, the same total and the same wording the Nearby
-       list shows, computed the same way. The spur stays labelled as straight-line
-       (see offTrailTxt): the real pedal up whatever side road serves it is longer. */
-    const d=this.aheadMi(p), tot=this.rideMi(p);
+    /* Figures in a row, not a sentence to pick apart. Three questions get asked of a
+       pin — what does this cost me, how much of that is trail, how far off the route
+       does it sit — and the last one is the one you squint for, so it is a box of its
+       own rather than the tail of a clause. The spur is straight-line from the route,
+       so the real pedal up whatever side road serves it is longer: the + carries that
+       caveat without spending a line on it. */
+    const fig=(v,l,c)=>'<span class="rd-c'+(c?' '+c:'')+'"><b>'+v+'</b><span>'+l+'</span></span>';
+    const d=this.aheadMi(p), tot=this.rideMi(p), s=this.spurMi(p);
+    const offFig=fig(s?fmtMi(s)+'+':'0', 'mi off trail', s?'rd-off':'');
     if(tot!=null){
-      const s=this.spurMi(p), back=d<-0.3;
-      // "straight-line" was the honest caveat stated as jargon. The spur is measured
-      // direct from the route, so the real pedal up whatever side road serves it is
-      // longer — which "at least", and the + on the total, say without the vocabulary.
-      h+='<br><b>~'+fmtMi(abs(tot))+(s?'+':'')+' mi to ride'+(back?' — back the way you came':'')+'</b>';
-      if(s) h+='<br><span style="opacity:.65">'+fmtMi(abs(d))+' mi along the trail, then at least '+fmtMi(s)+' mi off it</span>';
+      h+='<div class="rd-row">'+fig(fmtMi(abs(tot))+(s?'+':''),'mi to ride','')
+        +fig(fmtMi(abs(d)),'mi on trail','')+offFig+'</div>';
+      if(d<-0.3) h+='<div class="rd-note">Back the way you came.</div>';
     } else {
-      const off=offTrailTxt(p.off);
-      if(off) h+='<br><span style="opacity:.65">'+esc(off.replace(/^ · /,''))+'</span>';
+      // No position yet, so the trail leg is unknowable — but the spur never was.
+      h+='<div class="rd-row">'+offFig+'</div>'
+        +'<div class="rd-note">Set your location for the ride to it.</div>';
+    }
+    // Right under the rates link, because the loop is: tap out, look it up, come back.
+    if(p.asset==='Lodging'||p.asset==='Campground'){
+      const pr=this.priceOf(p);
+      h+='<div class="pr-row" data-pi="'+p.i+'"><span class="pr-c">$</span>'
+        +'<input class="pr-amt" type="number" min="0" step="1" inputmode="decimal" placeholder="rate" value="'+(pr?esc(pr.amt):'')+'">'
+        +'<input class="pr-date" type="date" value="'+esc(pr&&pr.date?pr.date:this.arrivalDate(p))+'">'
+        +'<button type="button" class="pr-save">Save</button>'
+        +(pr?'<button type="button" class="pr-clear">Clear</button>':'')+'</div>';
     }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
-    const lk=[]; const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
+    const lk=['<button type="button" class="pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
+    const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
     // Campgrounds get reviews too — same question a rider is asking of a motel.
     const stay=(p.asset==='Lodging'||p.asset==='Campground');
-    if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '))+'" target="_blank" rel="noopener">Check rates</a>');
+    if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
     if(stay) lk.push('<a href="'+reviewsLink([p.name,p.addr].filter(Boolean).join(' '),p.lat,p.lng)+'" target="_blank" rel="noopener">Reviews</a>');
     // Exact coords here, so this routes precisely — no geocoding guess involved.
     lk.push('<a href="https://www.google.com/maps/dir/?api=1'+(this.myLL?'&origin='+this.myLL.lat+','+this.myLL.lng:'')
@@ -969,8 +2351,9 @@ class TrailApp {
       const items=byCat[asset]; if(!items||!items.length) return;
       const cfg=catCfg(asset), g=L.layerGroup(), def=!!CAT_DEFAULT[asset];
       items.forEach(p=>{
-        const mk=L.marker([p.lat,p.lng],{icon:L.divIcon({html:'<span class="poi-pin">'+icon(cfg.icon,18)+'</span>',className:'',iconSize:[28,28],iconAnchor:[14,14]})});
-        mk.bindPopup('',{maxWidth:280,minWidth:200}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
+        const mk=L.marker([p.lat,p.lng],{icon:this.poiIcon(p,cfg)});
+        mk.bindPopup('',{maxWidth:280,minWidth:200,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
+        this.poiMarker[p.i]=mk;
         g.addLayer(mk);
       });
       this.poiLayers[asset]=g; if(def) g.addTo(this.map);
@@ -1040,15 +2423,20 @@ class TrailApp {
     const j=await r.json(); return j.features||[];
   }
   drawLiveRoute(feats){
-    const g=L.layerGroup();
+    const lines=[];
     feats.forEach(f=>{
       const sec=(f.properties||{}).Section, col = sec==='Hudson Valley' ? this.accent : this.accent2;
       const geom=f.geometry||{};
       const parts = geom.type==='MultiLineString' ? geom.coordinates : [geom.coordinates||[]];
-      parts.forEach(line=>{ const ll=line.map(c=>[c[1],c[0]]); if(ll.length>1) L.polyline(ll,{color:col,weight:4,opacity:.9}).addTo(g); });
+      parts.forEach(line=>{ const ll=line.map(c=>[c[1],c[0]]); if(ll.length>1) lines.push(L.polyline(ll,{color:col,weight:4,opacity:.9})); });
     });
-    g.addTo(this.map);
-    this.embLines.forEach(pl=>this.map.removeLayer(pl));
+    // An empty answer used to clear the embedded line and draw nothing over it,
+    // leaving a map with no trail on it. Keep what we have unless there is a
+    // replacement in hand.
+    if(!lines.length || !this.routeLayer) return;
+    this.routeLayer.clearLayers();
+    lines.forEach(pl=>this.routeLayer.addLayer(pl));
+    this.embLines=lines;
   }
 }
 window.TrailApp = TrailApp;

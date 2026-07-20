@@ -82,6 +82,31 @@
     background:var(--color-bg);color:var(--color-accent-700);border:1px solid var(--color-divider);
     border-radius:999px;box-shadow:var(--shadow-md);white-space:nowrap}
   .map-back[hidden]{display:none}
+  /* The finder takes the top slot when it is open, and the back pill steps down a
+     row rather than sitting under it. Both clear Leaflet's corners by staying narrow. */
+  .map-find{position:absolute;top:calc(var(--space-3) + env(safe-area-inset-top));
+    left:56px;right:56px;z-index:1101;display:flex;flex-wrap:wrap;gap:5px;align-items:center;
+    padding:5px;background:var(--color-bg);border:1px solid var(--color-divider);
+    border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
+  .map-find[hidden]{display:none}
+  .is-finding .map-back{top:calc(var(--space-3) + env(safe-area-inset-top) + 52px)}
+  .map-find input{flex:1;min-width:0;font-family:inherit;font-size:13px;padding:7px 8px;
+    background:var(--color-surface);color:var(--color-text);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .find-go{flex:none;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;
+    padding:7px 10px;background:var(--color-accent);color:var(--color-bg);
+    border:1px solid var(--color-accent);border-radius:var(--radius-md)}
+  .find-x{flex:none;width:28px;font-family:inherit;font-size:17px;line-height:1;cursor:pointer;
+    padding:5px 0;background:transparent;color:var(--color-neutral-600);border:0}
+  .find-out{flex:0 0 100%;max-height:44vh;overflow-y:auto}
+  .find-out:empty{display:none}
+  .find-r{display:block;width:100%;text-align:left;cursor:pointer;font-family:inherit;
+    padding:7px 8px;background:transparent;border:0;border-top:1px solid var(--color-divider)}
+  .find-r:hover{background:var(--color-accent-100)}
+  .find-r b{display:block;font-size:13px;color:var(--color-text)}
+  .find-r span{display:block;font-size:11px;color:var(--color-neutral-600)}
+  .find-n{padding:7px 8px;font-size:11.5px;color:var(--color-neutral-600);
+    border-top:1px solid var(--color-divider)}
   .map-back:hover{background:var(--color-accent-100)}
   .map-back:active{background:var(--color-accent-200)}
   /* The map panel. Sits above the floating tab bar; the map runs edge to edge behind
@@ -107,7 +132,135 @@
   /* Only the list scrolls; the stats above it stay put as the panel grows. */
   .panel-list{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
     padding:0 calc(var(--space-4) + env(safe-area-inset-right)) calc(var(--space-3) + env(safe-area-inset-bottom)) calc(var(--space-4) + env(safe-area-inset-left))}
-  .map-panel[data-snap="peek"] .panel-list{display:none}
+  .map-panel[data-snap="peek"] .panel-list,
+  .map-panel[data-snap="shut"] .panel-list{display:none}
+  /* Shut hands the whole screen back to the map: grab bar only, no stats. */
+  .map-panel[data-snap="shut"] .map-sheet{display:none}
+  .map-pick{animation:pickPulse 1.6s ease-out infinite}
+  @keyframes pickPulse{0%,100%{opacity:1}50%{opacity:.3}}
+  @media (prefers-reduced-motion:reduce){.map-pick{animation:none}}
+  /* Weather pins carry their reading in the label — a bare marker would mean tapping
+     six of them to learn what the layer is for. The arrow flies the way the wind
+     blows, and the colour says whether that helps you or costs you. */
+  /* A chain wordmark or a rate you looked up, in place of the generic bed. Anchored
+     at 0,0 so the chip can size itself to its text and still sit on its coordinate. */
+  .poi-chip-ic{background:none;border:0;overflow:visible}
+  .poi-chip{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;gap:3px;
+    padding:2px 5px;white-space:nowrap;font-family:var(--font-body);font-size:10px;font-weight:700;
+    letter-spacing:.02em;line-height:1;background:var(--color-bg);color:var(--color-neutral-700);
+    border:1.5px solid var(--color-neutral-400);border-radius:999px;box-shadow:var(--shadow-md)}
+  .poi-chip .ic{flex:none}
+  .poi-chip .chip-p{padding-left:3px;border-left:1px solid var(--color-divider);
+    color:var(--color-text);font-variant-numeric:tabular-nums}
+  .poi-chip.has-price{border-width:2px}
+  /* A rate you saved, in the row and in the popup. */
+  .poi-pr{flex:0 0 auto;font-size:11px;font-weight:700;color:var(--color-text);
+    font-variant-numeric:tabular-nums}
+  .pr-row{display:flex;align-items:center;gap:4px;margin-top:6px;padding-top:6px;
+    border-top:1px solid var(--color-divider)}
+  .pr-c{font-size:12px;color:var(--color-neutral-600)}
+  .pr-amt{width:52px}
+  .pr-date{width:112px}
+  .pr-row input{min-width:0;font-family:inherit;font-size:12px;padding:4px 6px;
+    background:var(--color-surface);color:var(--color-text);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .pr-row button{font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;
+    padding:4px 7px;background:transparent;border:1px solid var(--color-divider);
+    border-radius:var(--radius-md);color:var(--color-accent-700)}
+  .pr-row button:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  /* What a pin costs you to reach, as figures rather than a sentence. */
+  .rd-row{display:flex;gap:5px;margin:8px 0 2px;text-align:center;
+    font-variant-numeric:tabular-nums}
+  .rd-c{flex:1;min-width:0;padding:4px 2px;background:var(--color-neutral-100);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .rd-c b{display:block;font-size:15px;line-height:1.15;color:var(--color-text)}
+  .rd-c>span{display:block;margin-top:1px;font-size:9px;letter-spacing:.04em;
+    text-transform:uppercase;color:var(--color-neutral-600)}
+  .rd-off{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .rd-off b{color:var(--color-accent-800)}
+  .rd-note{font-size:11px;color:var(--color-neutral-600)}
+  /* Mileposts: a number on the line, a dot where it actually falls. */
+  .leaflet-marker-icon.mp-ic{background:none;border:0;overflow:visible;pointer-events:none}
+  .mp-lb{display:flex;flex-direction:column;align-items:center;gap:1px}
+  .mp-n{pointer-events:auto;cursor:pointer;padding:1px 4px;font-family:var(--font-body);
+    font-size:10px;font-weight:700;line-height:1.3;color:var(--color-neutral-800);
+    background:var(--color-bg);border:1px solid currentColor;border-radius:var(--radius-md);
+    box-shadow:var(--shadow-sm);font-variant-numeric:tabular-nums}
+  .mp-maj{font-size:11.5px}
+  .mp-dot{width:5px;height:5px;border-radius:50%;background:currentColor;
+    box-shadow:0 0 0 1.5px var(--color-bg)}
+  .mp-tick{opacity:.9}
+  /* The day chart: stacked panels over one time axis, an hour of riding per column. */
+  .wx-svg{display:block;width:100%;height:auto;margin-top:var(--space-2);overflow:visible}
+  .wx-ax{stroke:var(--color-neutral-400);stroke-width:1}
+  .wx-gl{stroke:var(--color-divider);stroke-width:1}
+  .wx-dash{stroke-dasharray:2 3}
+  .wx-rain{fill:var(--color-accent);opacity:.35}
+  .wx-tfill{fill:var(--color-accent-800);opacity:.08}
+  .wx-temp{fill:none;stroke:var(--color-accent-800);stroke-width:1.75;
+    stroke-linejoin:round;stroke-linecap:round}
+  .wx-dot{fill:var(--color-accent-800)}
+  .wx-tl{fill:var(--color-text);font-family:var(--font-body);font-size:10px;font-weight:700}
+  .wx-xl{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:9px}
+  .wx-gt{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:8px}
+  .wx-wl{font-family:var(--font-body);font-size:9px;font-weight:700}
+  /* Wind as a rider meets it: up in your face, down at your back, straddling
+     the line when it only pushes you sideways. */
+  .wx-b-head{fill:#b3261e}
+  .wx-b-tail{fill:#146c2e}
+  .wx-b-cross{fill:var(--color-neutral-400)}
+  .wx-g-head{fill:#b3261e}
+  .wx-g-tail{fill:#146c2e}
+  /* Towns ruled down the stack — the chart's landmarks. */
+  .wx-tn{stroke:var(--color-neutral-400);stroke-width:1;stroke-dasharray:1 3;opacity:.75}
+  .wx-tnl{fill:var(--color-neutral-600);font-family:var(--font-body);font-size:8.5px;font-weight:600}
+  text.wx-head{fill:#b3261e}
+  text.wx-tail{fill:#146c2e}
+  text.wx-cross{fill:var(--color-neutral-500)}
+  .wx-key{display:flex;flex-wrap:wrap;gap:9px;margin-top:3px;font-size:10px;color:var(--color-neutral-500)}
+  .wx-key span::before{content:"";display:inline-block;width:8px;height:8px;margin-right:4px;
+    border-radius:2px;vertical-align:-1px}
+  .wx-k-t::before{background:var(--color-accent-800)}
+  .wx-k-r::before{background:var(--color-accent);opacity:.4}
+  .wx-k-h::before{background:#b3261e}
+  .wx-k-l::before{background:#146c2e}
+  .wx-k-c::before{background:var(--color-neutral-400)}
+  .wx-ic{background:none;border:0}
+  .wx-pin{display:flex;align-items:center;gap:3px;padding:2px 5px;white-space:nowrap;
+    font-family:var(--font-body);font-size:11px;font-weight:600;line-height:1;
+    background:var(--color-bg);border:1px solid currentColor;border-radius:999px;
+    box-shadow:var(--shadow-md);font-variant-numeric:tabular-nums}
+  .wx-arrow{display:inline-block;font-size:13px;line-height:1}
+  .wx-s{font-weight:700}
+  .wx-p{font-weight:400;opacity:.7}
+  .wx-head{color:#b3261e}
+  .wx-tail{color:#146c2e}
+  .wx-cross{color:var(--color-neutral-700)}
+  .wx-pin .wx-t{color:var(--color-text)}
+  .sheet-wx{margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-700);
+    font-variant-numeric:tabular-nums}
+  /* Outlook */
+  .wx-dest{margin:var(--space-2) 0}
+  .wx-dest label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)}
+  .wx-dest select{flex:1;min-width:0;font-family:inherit;font-size:12px;padding:6px 8px;
+    background:var(--color-surface);color:var(--color-text);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .wx-out{display:flex;flex-direction:column;gap:var(--space-3);margin-top:var(--space-3)}
+  .wx-day{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
+  .wx-day-h{display:flex;align-items:baseline;gap:7px}
+  .wx-day-n{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px}
+  .wx-day-d{font-size:12px;color:var(--color-neutral-600)}
+  .wx-day-m{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
+  .wx-day-tw{font-size:13px;font-weight:600;color:var(--color-neutral-800);margin-top:2px}
+  .wx-day-tm{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums;margin-top:1px}
+  .wx-night{margin-top:5px;padding:5px 8px;font-size:12px;color:var(--color-neutral-700);
+    background:var(--color-neutral-100);border-radius:var(--radius-md)}
+  .wx-night b{color:var(--color-text)}
+  .wx-day-w{font-size:13px;margin-top:5px}
+  .wx-none{font-size:12px;color:var(--color-neutral-500);margin-top:5px}
+  .wx-wind{display:flex;align-items:center;gap:5px;margin-top:4px;font-size:13px;font-weight:600}
+  .wx-wind .ic{flex:none}
+  .wx-asof{font-size:11px;color:var(--color-neutral-500);border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
   .fab{width:46px;height:46px;display:grid;place-items:center;cursor:pointer;
     background:var(--color-bg);color:var(--color-accent);border:1px solid var(--color-divider);
     border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
@@ -202,6 +355,17 @@
   .feat.dragging{opacity:.9;border-color:var(--color-accent);box-shadow:0 2px 8px rgba(0,0,0,.18)}
   .feat-hint{font-size:11px;color:var(--color-neutral-500);margin:var(--space-2) 0 var(--space-4);line-height:1.5}
   .lyr-ct{color:var(--color-neutral-500);font-variant-numeric:tabular-nums;font-size:11px}
+  /* A borrowed layer names its source: the link opens it, the chip beside it and the
+     box still toggle the layer, because a link inside a label doesn't trip the label. */
+  .lyr-src{color:var(--color-accent-700);text-decoration:underline;text-underline-offset:2px}
+  .lyr-src:hover{color:var(--color-accent-800)}
+  /* Traffic counts, and the count itself as a chip on the road it belongs to. */
+  .aadt-ic{background:none;border:0}
+  .aadt-n{display:inline-block;padding:1px 4px;background:var(--color-bg);
+    border:1px solid currentColor;border-radius:var(--radius-md);box-shadow:var(--shadow-sm);
+    font-family:var(--font-body);font-size:10px;font-weight:700;line-height:1.3;
+    font-variant-numeric:tabular-nums}
+  .aadt-ln{cursor:pointer}
   .poi-list{display:flex;flex-direction:column;gap:var(--space-3)}
   .poi-h{display:flex;align-items:center;gap:7px;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px;margin-bottom:6px}
   .poi-h .ic{color:var(--color-accent)}
@@ -231,9 +395,29 @@
     background:transparent;border:1px solid var(--color-divider);border-radius:var(--radius-md);
     color:var(--color-accent-700);padding:6px var(--space-2)}
   .poi-band-view:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  /* Stepping the window, at the top of the list where the window is set. Each side
+     names the stretch it would move to and how much is waiting there, so a step is
+     never a guess — and a direction with nothing in it says so instead of moving. */
+  .poi-pager{display:flex;flex-direction:column;gap:5px;margin-bottom:var(--space-2)}
+  .poi-page-now{font-size:11px;color:var(--color-neutral-500);text-align:center;
+    font-variant-numeric:tabular-nums}
+  .poi-page-row{display:flex;gap:var(--space-2)}
+  .poi-page{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:1px;font-family:inherit;font-size:12px;font-weight:600;
+    line-height:1.3;text-align:center;padding:7px 6px;border-radius:var(--radius-md);
+    border:1px solid var(--color-divider);background:var(--color-surface);
+    color:var(--color-accent-700);cursor:pointer;font-variant-numeric:tabular-nums}
+  .poi-page:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .poi-page .pg-n{font-size:10px;font-weight:400;color:var(--color-neutral-500)}
+  .poi-page.is-off{cursor:default;border-style:dashed;font-weight:400;
+    color:var(--color-neutral-500);background:transparent}
+  .poi-page.is-off:hover{border-color:var(--color-divider);background:transparent}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
   /* Collapsible filter block. Closed by default so the list starts near the top;
      the summary carries a live state line so a filter can't be silently on. */
+  .pop-zoom{font-family:inherit;font-size:inherit;font-weight:600;cursor:pointer;
+    background:transparent;border:0;padding:0;color:var(--color-accent-700);
+    text-decoration:underline;text-underline-offset:2px}
   .filters{margin-bottom:var(--space-3);border-bottom:1px solid var(--color-divider)}
   .filters-sum{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none;padding:var(--space-2) 0;
     font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);font-weight:600}
@@ -296,6 +480,9 @@
     background:var(--color-accent);border:0;border-radius:var(--radius-md)}
   .mv-go:hover{background:var(--color-accent-700)}
   .mv-go:active{background:var(--color-accent-900)}
+  .mv-ll{margin-top:2px;font-size:10.5px;color:var(--color-neutral-500);
+    font-variant-numeric:tabular-nums}
+  .mv-lk{justify-content:center;margin-top:var(--space-2)}
   /* Chips are a left-reading list, so they opt out of the dialog's centred column. */
   .mv-find{text-align:left}
   .mv-find .pa-row{justify-content:flex-start}
@@ -329,9 +516,17 @@
   <main class="screens">
     <section data-screen="map" class="screen active">
       <div id="map"></div>
+      <form id="mapFind" class="map-find" hidden autocomplete="off">
+        <input id="findQ" type="search" inputmode="search" enterkeyhint="search" autocomplete="off"
+          placeholder="Town, place, or 43.05, -76.15" aria-label="Find a place or a coordinate">
+        <button type="submit" class="find-go">Find</button>
+        <button id="findX" type="button" class="find-x" aria-label="Close search">&times;</button>
+        <div id="findOut" class="find-out"></div>
+      </form>
       <button id="mapBack" type="button" class="map-back" hidden></button>
       <aside id="mapPanel" class="map-panel" data-snap="peek">
         <div class="map-fabs">
+          <button id="findBtn" type="button" class="fab" title="Find a place" aria-label="Find a place"><span data-ic="search"></span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
         </div>
@@ -383,11 +578,11 @@
           <p class="feat-hint">Drag to reorder · uncheck to hide from this list. Map pins are separate — toggle those from the layers control in the top-right of the map.</p>
           <div class="feat-list-lbl">Trail miles ahead</div>
           <div class="poi-band">
-            <label>Min <input id="miMin" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
-            <label>Max <input id="miMax" type="number" min="0" step="5" inputmode="numeric" placeholder="any"></label>
+            <label>Min <input id="miMin" type="number" step="5" inputmode="numeric" placeholder="0"></label>
+            <label>Max <input id="miMax" type="number" step="5" inputmode="numeric" placeholder="any"></label>
             <button id="miClear" type="button" class="poi-band-clear">Clear</button>
           </div>
-          <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. Needs your location.</p>
+          <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. A negative number looks behind you, which is where <b>Prev</b> steps. Needs your location.</p>
           <div class="feat-list-lbl">Trail mile range</div>
           <div class="poi-band">
             <label>From <input id="mpFrom" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
@@ -401,12 +596,32 @@
       </div>
     </section>
 
+    <section data-screen="wx" class="screen">
+      <div class="screen-pad">
+        <h1 class="screen-title">Outlook</h1>
+        <div class="poi-band">
+          <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
+          <label>Days <input id="wxDays" type="number" min="1" max="6" step="1" inputmode="numeric" placeholder="4"></label>
+        </div>
+        <div class="wx-dest"><label>Riding to <select id="wxDest"><option value="">nowhere in particular — just ride</option></select></label></div>
+        <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
+        <div id="wxOut" class="wx-out"></div>
+        <p class="poi-band-note">Forecast from the US National Weather Service (api.weather.gov), read where you’d be at <b id="wxSpeedEcho">12</b> mph rather than where you are now. Wind is split into the part you ride into and the part crossing you. NWS hourly runs about six days out, which is the ceiling on days here.</p>
+      </div>
+    </section>
+
     <section data-screen="settings" class="screen">
       <div class="screen-pad">
         <h1 class="screen-title">More</h1>
         <label class="switch"><input type="checkbox" id="showPassed"> Show stops I’ve already passed</label>
         <label class="switch"><input type="checkbox" id="tapToSet" checked> Tapping the map can move my location</label>
         <label class="switch"><input type="checkbox" id="showTrip"> Show the Trip tab</label>
+        <label class="switch"><input type="checkbox" id="showWx" checked> Show the Outlook tab</label>
+        <div class="feat-list-lbl">Average riding speed</div>
+        <div class="poi-band">
+          <label>Speed <input id="avgSpeed" type="number" min="4" max="30" step="1" inputmode="numeric" placeholder="12"> mph</label>
+        </div>
+        <p class="poi-band-note">Moving average over a day, not what the computer flashes on a downhill — 10 to 13 is honest for a loaded touring bike. It decides where you’d be at each forecast hour, so the weather layer and the Outlook both hang off it.</p>
         <div class="set-lbl">Direction of travel</div>
         <button type="button" class="dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span class="dir-lbl">Buffalo → NYC</span></button>
         <div class="set-lbl"><label for="simSel">Simulate a location</label></div>
@@ -427,6 +642,7 @@
     <button data-tab="next" type="button" class="tab" aria-current="false" title="Next up" aria-label="Next up"><span class="tab-ic" data-ic="next"></span></button>
     <button data-tab="itin" type="button" class="tab" aria-current="false" title="Trip" aria-label="Trip" hidden><span class="tab-ic" data-ic="list"></span></button>
     <button data-tab="nearby" type="button" class="tab" aria-current="false" title="Nearby" aria-label="Nearby"><span class="tab-ic" data-ic="near"></span></button>
+    <button data-tab="wx" type="button" class="tab" aria-current="false" title="Outlook" aria-label="Outlook"><span class="tab-ic" data-ic="fcast"></span></button>
     <button data-tab="settings" type="button" class="tab" aria-current="false" title="More" aria-label="More"><span class="tab-ic" data-ic="gear"></span></button>
   </nav>
 </div>
