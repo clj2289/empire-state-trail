@@ -523,42 +523,6 @@ async function fetchSource(src){
   }
   return feats;
 }
-/* ---- shops, fuel and beds, out of OpenStreetMap ----
-   The state's own layer is a trail layer: it knows about lock camping and the canal
-   museum, and almost nothing about where you buy food. OSM knows, because somebody
-   who lives there put it in. These come in as ordinary POIs — same distances, same
-   Nearby list, same saved rates — with their source recorded, because a volunteer
-   map and a state asset register deserve different amounts of trust when you are
-   deciding whether to ride nine miles for a shower.
-   Fetched only when asked for: Overpass is a shared public service that takes its
-   time, and a corridor of this length would be an unkind thing to ask it for in the
-   background. A window around wherever you are is the unit. */
-const OSM_EPS=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
-const OSM_WIN=25;                 // miles either way along the route
-const OSM_TAGS=[
-  // Its own category rather than folded into the State's Lodging: that list is
-  // curated and trail-facing, this one is every motel a surveyor ever tagged, and
-  // a rider picking a bed deserves to know which of the two they are reading.
-  ['tourism','^(hotel|motel|guest_house|hostel)$','Hotels & motels'],
-  ['shop','^(supermarket|grocery|greengrocer)$','Groceries'],
-  ['shop','^(convenience|general)$','Convenience'],
-  ['shop','^(variety_store|department_store|wholesale)$','General store'],
-  ['amenity','^(restaurant|fast_food|cafe|pub|bar|ice_cream)$','Food'],
-  ['amenity','^(fuel)$','Fuel']
-];
-function osmCat(t){
-  if(!t) return '';
-  for(let i=0;i<OSM_TAGS.length;i++){
-    const v=t[OSM_TAGS[i][0]];
-    if(v && new RegExp(OSM_TAGS[i][1]).test(v)) return OSM_TAGS[i][2];
-  }
-  return '';
-}
-// House number and street are separate tags in OSM, and a phone is spelled two ways.
-function osmAddr(t){
-  const line=[t['addr:housenumber'],t['addr:street']].filter(Boolean).join(' ');
-  return [line, t['addr:city'], t['addr:state'], t['addr:postcode']].filter(Boolean).join(', ');
-}
 /* grp is the parent each category hangs under. The split is by source, because
    that is the thing a rider actually needs to weigh: the State knows the lock
    campsites and nothing about where you buy food, OpenStreetMap knows every
@@ -571,16 +535,10 @@ const CATCFG={
   'Train Station':{icon:'train',label:'Train stations',grp:'trail'},
   'Restroom':{icon:'drop',label:'Restrooms / water',grp:'trail'},
   'Parking Area':{icon:'park',label:'Parking',grp:'trail'},
-  'Hotels & motels':{icon:'bed',label:'Hotels & motels',grp:'osm'},
-  'Groceries':{icon:'cart',label:'Groceries',grp:'osm'},
-  'Food':{icon:'food',label:'Food',grp:'osm'},
-  'Convenience':{icon:'store',label:'Convenience',grp:'osm'},
-  'General store':{icon:'store',label:'Dollar / big box',grp:'osm'},
-  'Fuel':{icon:'fuel',label:'Fuel / gas',grp:'osm'},
   /* The bundled corridor: a snapshot of OpenStreetMap within 5 mi of the whole route,
      shipped with the app so it is always there without asking Overpass. Its own parent
-     and its own category keys ('nb-…') so it switches independently of the live pull and
-     of the State's list — same data source as the live OSM group, different job. */
+     ('OSM POIs') and its own category keys ('nb-…') so it switches independently of the
+     State's trail list. Off by default — the map must not open under thousands of pins. */
   'nb-grocery':{icon:'cart',label:'Groceries',grp:'bundled'},
   'nb-convenience':{icon:'store',label:'Convenience',grp:'bundled'},
   'nb-food':{icon:'food',label:'Food & drink',grp:'bundled'},
@@ -593,21 +551,19 @@ const CATCFG={
 };
 const CAT_GRP={
   trail:{label:'On the trail', src:'New York State', toc:'Trail POIs'},
-  osm:{label:'In town',       src:'OpenStreetMap', toc:'OSM POIs'},
-  bundled:{label:'Within 5 mi', src:'OpenStreetMap · bundled', toc:'Nearby (5 mi)'}
+  bundled:{label:'Within 5 mi', src:'OpenStreetMap', toc:'OSM POIs'}
 };
-const GRP_ORDER=['trail','osm','bundled'];
+const GRP_ORDER=['trail','bundled'];
 // An asset type the service invented and we don't hardcode is trail data — that
 // is the only place unknown categories can come from.
 const catGrp=a=>(CATCFG[a]&&CATCFG[a].grp)||'trail';
 // Both of these are somewhere to sleep, so both get the chain wordmark treatment.
-const LODGE_CATS={'Lodging':1,'Hotels & motels':1};
+const LODGE_CATS={'Lodging':1,'nb-lodging':1};
 const CAT_DEFAULT={'Lock camping':true,'Campground':true,'Lodging':true};
 /* Fallback order for the Nearby groups — a rider who hasn't dragged anything yet
    gets sleeping options first, sightseeing after, logistics last. Grouped in the
    same order the parents render in, so a fresh install reads top to bottom. */
 const CAT_ORDER=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area',
-                 'Hotels & motels','Food','Groceries','Convenience','General store','Fuel',
                  'nb-grocery','nb-convenience','nb-food','nb-lodging','nb-camp','nb-fuel','nb-water','nb-bike','nb-pharmacy'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
@@ -1058,8 +1014,6 @@ class TrailApp {
 
   /* ---------- controls ---------- */
   wireControls(){
-    const ob=this.$('osmBtn'); if(ob) ob.addEventListener('click',()=>this.loadOsmPois());
-    this.syncOsmBtn();
     const ua=this.$('ulAdd'); if(ua) ua.addEventListener('click',()=>this.addArcgisLayer((this.$('ulUrl')||{}).value));
     const uu=this.$('ulUrl'); if(uu) uu.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); this.addArcgisLayer(uu.value); } });
     const ug=this.$('ulGpx'); if(ug) ug.addEventListener('change',e=>{
@@ -1705,7 +1659,9 @@ class TrailApp {
       || this.mpFrom!=null || this.mpTo!=null;
     const byCat=this.poisByCat();
     this.renderFilterState();
-    const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length);
+    // OSM POIs are a map layer, toggled from the layers control — deliberately kept out
+    // of this browse list, so the Nearby screen stays the State's curated trail POIs.
+    const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length && catGrp(c)!=='bundled');
     if(!keys.length){ list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
     // No pager while the list follows the map: panning IS how you move the window,
     // and a stepper for it only repeated what the map already does, three rows deep.
@@ -1831,9 +1787,9 @@ class TrailApp {
      a phone in sunlight, and at 900 food pins the lighter mark is what keeps the
      curated ones readable underneath. */
   poiIcon(p, cfg){
-    // Both OSM sources — the live pull and the bundled corridor — draw as the small
-    // hollow pin, which is what tells them from the State's solid facilities.
-    const grp=catGrp(poiCat(p)), osm=grp==='osm'||grp==='bundled';
+    // The bundled OSM corridor draws as the small hollow pin, which is what tells it
+    // from the State's solid facilities.
+    const grp=catGrp(poiCat(p)), osm=grp==='bundled';
     const pr=this.priceOf(p), br=LODGE_CATS[poiCat(p)]?brandOf(p.name):null;
     // Every pin carries its name. Hidden by CSS until the map is zoomed in past
     // POI_LABEL_Z, or the pin is hovered — a field of identical dots you have to tap
@@ -1901,136 +1857,6 @@ class TrailApp {
   refreshPin(p){
     const mk=this.poiMarker[p.i];
     if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
-  }
-
-  /* ---------- shops and fuel from OpenStreetMap ---------- */
-  /* A window along the route rather than a box around the map: what you want is
-     what you will ride past, and at this zoom the two are not the same thing. */
-  osmWindow(){
-    const mile=this.wxAnchorMile();
-    if(mile==null) return null;
-    const a=Math.max(0,mile-OSM_WIN), b=Math.min(TOTAL,mile+OSM_WIN);
-    let s=90,w=180,n=-90,e=-180;
-    for(let m=a;m<=b;m+=1){
-      const p=this.milePoint(m);
-      if(p[0]<s)s=p[0]; if(p[0]>n)n=p[0]; if(p[1]<w)w=p[1]; if(p[1]>e)e=p[1];
-    }
-    // A tenth of a degree of margin is about the five miles off-route we keep anyway.
-    return {s:s-0.09, w:w-0.11, n:n+0.09, e:e+0.11, mile};
-  }
-  osmQuery(b){
-    const box='('+b.s.toFixed(4)+','+b.w.toFixed(4)+','+b.n.toFixed(4)+','+b.e.toFixed(4)+')';
-    const parts=OSM_TAGS.map(t=>'nwr["'+t[0]+'"~"'+t[1]+'"]'+box+';').join('');
-    // 'center' so a supermarket mapped as a building comes back as a point like the
-    // rest; without it a way arrives with no coordinates at all.
-    return '[out:json][timeout:90];('+parts+');out center tags;';
-  }
-  async osmFetch(q){
-    let err=null;
-    for(let i=0;i<OSM_EPS.length;i++){
-      try{
-        const r=await fetch(OSM_EPS[i],{method:'POST',body:'data='+encodeURIComponent(q),
-          headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        const j=await r.json();
-        return j.elements||[];
-      }catch(e){ err=e; }          // the main endpoint is busy often enough to be worth a mirror
-    }
-    throw err||new Error('no answer');
-  }
-  /* Merged into the same list the state's POIs live in, so every distance, the
-     Nearby ordering, the saved rates and the popups all work without knowing where
-     a pin came from. Only the popup says, because that is where it matters. */
-  async loadOsmPois(){
-    if(this.osmBusy) return;
-    const b=this.osmWindow();
-    if(!b){ this.osmStatus('That needs a position on the trail first \u2014 locate yourself, or tap the map.'); return; }
-    this.osmBusy=true;
-    this.osmStatus('Asking OpenStreetMap about the '+(OSM_WIN*2)+' miles around you. It can take a few seconds\u2026');
-    let els;
-    try{ els=await this.osmFetch(this.osmQuery(b)); }
-    catch(e){
-      this.osmBusy=false;
-      this.osmStatus('No answer from OpenStreetMap just now. Nothing else is affected \u2014 try again in a minute.');
-      return;
-    }
-    const have={};
-    this.POIS.forEach(p=>{ have[this.osmKey(p.name,p.lat,p.lng)]=1; });
-    let added=0, near=0;
-    // Every one of these categories is seeded hidden — the map must not open under
-    // 700 pins. But asking for them IS asking to see them, and without this a rider
-    // pressed the button, fifteen hundred places arrived, and nothing appeared on
-    // the map or in the list. Only categories this fetch actually filled.
-    const lit=new Set();
-    els.forEach(el=>{
-      const t=el.tags||{};
-      const cat=osmCat(t); if(!cat) return;
-      const lat = el.lat!=null?el.lat:(el.center?el.center.lat:null);
-      const lng = el.lon!=null?el.lon:(el.center?el.center.lon:null);
-      if(lat==null||lng==null) return;
-      const pr=projectRoute(lat,lng);
-      if(pr.off>5) return;
-      near++;
-      // A name is how a rider recognises the place; an unnamed pump is still a pump.
-      const name=t.name || t.brand || t.operator || cat;
-      const k=this.osmKey(name,lat,lng);
-      if(have[k]) return;
-      have[k]=1;
-      this.POIS.push({asset:cat, name, sub:t.brand&&t.brand!==name?t.brand:'',
-        addr:osmAddr(t), phone:t.phone||t['contact:phone']||'',
-        url:t.website||t['contact:website']||'', src:'osm', osmId:el.type+'/'+el.id,
-        lat, lng, mile:pr.mile, off:pr.off});
-      lit.add(cat);
-      added++;
-    });
-    this.POIS.forEach((p,i)=>{ p.i=i; });
-    // A category that already existed keeps whatever the rider set — switching Food
-    // back on because they refetched would undo a choice they made on purpose.
-    lit.forEach(c=>{ if(!this.poiLayers[c]) this.catHidden.delete(c); });
-    this.savePrefs();
-    this.osmAt=b.mile;
-    this.osmBusy=false;
-    this.rebuildPOIs();
-    this.syncOsmBtn();
-    this.osmStatus(added
-      ? added+' added from OpenStreetMap around TM '+fmtMp(b.mile)+' \u2014 shops, fuel and beds within 5 mi of the route.'
-      : (near?'Nothing new here \u2014 the '+near+' places OpenStreetMap knows about were already on the list.'
-             :'OpenStreetMap has nothing within 5 mi of the route just here.'));
-  }
-  /* Once anything is loaded the card stops being the headline and becomes a refresh:
-     the label says so, and the note \u2014 the pitch for a thing you have not done yet \u2014
-     drops away. */
-  syncOsmBtn(){
-    const loaded=this.POIS.some(p=>p.src==='osm');
-    const ob=this.$('osmBtn'); if(ob) ob.textContent=loaded?'Refresh from OpenStreetMap around you':'Load them from OpenStreetMap';
-    const band=ob?ob.closest('.osm-band'):null; if(band) band.classList.toggle('loaded',loaded);
-  }
-  // Name and position together: the same shop mapped twice, or listed by two
-  // services, lands within a few metres of itself.
-  osmKey(name,lat,lng){ return String(name||'').toLowerCase()+'@'+lat.toFixed(4)+','+lng.toFixed(4); }
-  osmStatus(m){ const el=this.$('osmStat'); if(el) el.textContent=m; }
-  /* Layers are rebuilt rather than added to: a category that gained pins needs its
-     count redrawn, and Leaflet has no way to change a row's label in place. Layers
-     that were switched on stay on. */
-  rebuildPOIs(){
-    if(!this.map) return;
-    const on={};
-    /* Guarded end to end. Tearing a layer down calls map.removeLayer on a layer the
-       control still knows about, which fires overlayremove — and that handler's whole
-       job is to record "the rider switched this off". Unguarded, every rebuild wrote
-       all the live categories into catHidden, so an OpenStreetMap fetch silently
-       emptied the list of everything the State layer had while its pins stayed on the
-       map. Exactly the drift the coupling exists to prevent. */
-    this._syncCats=true;
-    Object.keys(this.poiLayers).forEach(a=>{
-      on[a]=this.map.hasLayer(this.poiLayers[a]);
-      this.unregLayer('poi:'+a);
-    });
-    this.poiLayers={}; this.poiMarker={};
-    this.buildPOILayers(on);
-    this._syncCats=false;
-    this.renderNext(); this.renderCategories(); this.renderNearby();
-    this.renderFilterState && this.renderFilterState();
   }
 
   /* ---------- layers the rider adds ---------- */
@@ -3381,11 +3207,11 @@ class TrailApp {
     /* Said plainly, because a volunteer map and a state asset register are worth
        different amounts of trust when you are deciding to ride nine miles for a
        shower — and because whoever mapped it can be told if it has closed. */
-    if((p.src==='osm'||p.src==='bundled') && p.osmId)
+    if(p.src==='bundled' && p.osmId)
       lk.push('<a href="https://www.openstreetmap.org/'+esc(p.osmId)+'" target="_blank" rel="noopener">OpenStreetMap</a>');
     const osmNote = p.src==='bundled'
-      ? 'Bundled from OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
-      : p.src==='osm' ? 'Mapped by OpenStreetMap contributors \u2014 hours and whether it\u2019s still there are worth a call.' : '';
+      ? 'From OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
+      : '';
     return h+'<br>'+lk.join(' \u00b7 ')
       +(osmNote?'<div class="poi-src">'+osmNote+'</div>':'');
   }
@@ -3496,8 +3322,9 @@ class TrailApp {
     const ordered=this.orderedCats(Object.keys(byCat)).filter(c=>byCat[c] && byCat[c].length);
     el.innerHTML='';
     GRP_ORDER.forEach(grp=>{
+      if(grp==='bundled') return;   // OSM POIs are controlled from the map's layers control, not here
       const cats=ordered.filter(c=>catGrp(c)===grp);
-      if(!cats.length) return;   // OpenStreetMap hasn't been asked for yet
+      if(!cats.length) return;   // nothing loaded for this source yet
       const gc=CAT_GRP[grp], shut=this.grpShut.has(grp);
       const lit=cats.filter(c=>!this.catHidden.has(c)).length;
       const n=cats.reduce((s,c)=>s+byCat[c].length,0);

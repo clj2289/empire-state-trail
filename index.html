@@ -502,18 +502,6 @@
     color:var(--color-neutral-500);background:transparent}
   .poi-page.is-off:hover{border-color:var(--color-divider);background:transparent}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
-  /* Shops/fuel/beds loader, on the Nearby screen where you look for them. A tinted
-     card so it reads as an action, not another filter, and it stays until loaded. */
-  .osm-band{background:var(--color-accent-100);border:1px solid var(--color-accent-200);
-    border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3)}
-  .osm-band-h{display:flex;align-items:center;gap:6px;font-family:var(--font-heading);
-    font-weight:var(--font-heading-weight);font-size:14px}
-  .osm-band-h .ic{color:var(--color-accent)}
-  .osm-band-note{font-size:11px;color:var(--color-neutral-700);line-height:1.5;margin:5px 0 var(--space-2)}
-  .osm-band .poi-band-view{margin-top:0;background:var(--color-bg)}
-  /* Loaded, the card goes quiet — it's a refresh now, not the headline of the screen. */
-  .osm-band.loaded{background:var(--color-surface);border-color:var(--color-divider)}
-  .osm-band.loaded .osm-band-note{display:none}
   /* Collapsible filter block. Closed by default so the list starts near the top;
      the summary carries a live state line so a filter can't be silently on. */
   .pop-zoom{font-family:inherit;font-size:inherit;font-weight:600;cursor:pointer;
@@ -602,9 +590,15 @@
     border:1px solid var(--color-divider);border-radius:var(--radius-md);box-shadow:var(--shadow-sm)}
   .leaflet-bar a{border-radius:0}
   .leaflet-bar a:hover{background:var(--color-accent-100);color:var(--color-accent-700)}
-  /* 3 basemaps + 8 facility overlays overflow a phone screen, so cap and scroll */
+  /* The overlay list is long, so let the expanded card use nearly the whole screen
+     height (it opens upward from the FAB) and scroll only if it still overflows.
+     Leaflet 1.9 ALSO caps the inner list with an inline height keyed off the control's
+     offset in the FAB stack — which left ~175px of screen unused above it. Override
+     that inline height so the card itself is the single scroller and can fill the space. */
   .leaflet-control-layers-expanded{padding:var(--space-2) var(--space-3);font-size:12px;
-    max-height:calc(100vh - 200px);overflow-y:auto}
+    max-height:calc(100dvh - 100px);overflow-y:auto}
+  .leaflet-control-layers-list{height:auto !important}
+  .leaflet-control-layers-list.leaflet-control-layers-scrollbar{overflow-y:visible !important}
   .leaflet-control-layers-selector{accent-color:var(--color-accent)}
   .leaflet-control-layers label{line-height:1.9;white-space:nowrap}
   /* The layers control, moved out of the notch and into the FAB stack: collapsed it's
@@ -780,15 +774,6 @@
       <div class="screen-pad">
         <h1 class="screen-title">Nearby</h1>
         <div id="poiStat" class="poi-stat"></div>
-        <!-- Shops, fuel and beds live one tap away, right here rather than buried in
-             More — this is the screen you are on when you want them. Its label flips
-             to "Refresh …" once loaded, and the button carries the state line. -->
-        <div class="osm-band">
-          <div class="osm-band-h"><span data-ic="cart"></span><span>Shops, fuel &amp; beds</span></div>
-          <p class="osm-band-note">The State’s pins are a trail layer — lock campsites and the canal museum, almost nothing about where you buy food. Pull the supermarkets, restaurants, convenience and dollar/big-box stores, gas and hotels within 5 mi of the route, 25 mi either side of you, from OpenStreetMap. A few seconds on a shared service.</p>
-          <button id="osmBtn" type="button" class="poi-band-view">Load them from OpenStreetMap</button>
-          <div id="osmStat" class="ul-stat"></div>
-        </div>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
         <details id="poiFilters" class="filters">
@@ -799,7 +784,7 @@
           </summary>
           <div class="feat-list-lbl">Categories</div>
           <div id="features" class="feat-tree"></div>
-          <p class="feat-hint">Grouped by where the data comes from. The parent box switches a whole source at once; the caret just folds the chips away. Drag to reorder within a group · uncheck to hide. Hiding a category takes its pins off the map too, so what you can see is always what this list can show. OpenStreetMap’s pins are drawn as small hollow squares to tell them from the State’s.</p>
+          <p class="feat-hint">The State’s trail POIs. The parent box switches them all at once; the caret just folds the chips away. Drag to reorder · uncheck to hide. Hiding a category takes its pins off the map too, so what you can see is always what this list can show. The OpenStreetMap corridor (shops, fuel, food, beds within 5 mi) is a separate map layer — switch it on under “OSM POIs” in the map’s layers control.</p>
           <div class="feat-list-lbl">Trail miles ahead</div>
           <div class="poi-band">
             <label>Min <input id="miMin" type="number" step="5" inputmode="numeric" placeholder="0"></label>
