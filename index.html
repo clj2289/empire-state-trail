@@ -660,6 +660,9 @@
     left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;
     max-width:calc(100vw - 20px);padding:6px 8px 6px 10px;background:var(--color-bg);
     border:1px solid var(--color-divider);border-radius:999px;box-shadow:var(--shadow-md);font-size:12px}
+  /* display:flex above outranks the UA [hidden] rule, so say it here: no band over the
+     map, and no "tap to add points" invitation, until the ruler is actually armed. */
+  .measure-bar[hidden]{display:none}
   .measure-bar .measure-ic{display:inline-flex;color:var(--color-accent)}
   .measure-val{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;min-width:92px;text-align:center}
   .measure-btn{font:inherit;font-size:11px;padding:3px 9px;border-radius:999px;cursor:pointer;
