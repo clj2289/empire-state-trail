@@ -6,5 +6,13 @@
 # ignored, so shared project config can still be committed if it's ever added.
 .claude/settings.local.json
 
+# Python bytecode from tools/
+__pycache__/
+*.pyc
+
+# A POI run that hit gaps writes its partial output here instead of clobbering the
+# committed bundle (see tools/fetch_nearby_pois.py). It's a failure artifact — never commit it.
+data/pois-nearby.partial.json
+
 # macOS
 .DS_Store

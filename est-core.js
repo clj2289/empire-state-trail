@@ -106,6 +106,10 @@ const HI_PANE_Z='1200';
 const HI_Z_OFFSET=100000;
 // How far the NWS hourly grid actually runs, and therefore how many days we show.
 const WX_MAX_DAYS=6;
+// The town outlook fetches a forecast per town, so it caps how many one tap will pull
+// and how far out it trusts the hourly grid — arrivals past this simply have no data.
+const WX_MAX_TOWNS=14;
+const WX_HORIZON_MS=6.3*24*36e5;
 
 /* ---- NYSDOT traffic counts -------------------------------------------------
    The AADT layer behind the state's Traffic Data Viewer: annual average daily
@@ -128,6 +132,12 @@ const AADT_MINZ=10, AADT_CAP=400;
 const AADT_BANDS=[[500,'#2e7d32','quiet',4,'#1b5e20'],
                   [1500,'#f0b400','moderate',5.5,'#8a6100'],
                   [Infinity,'#d32f2f','heavy',7,'#b3261e']];
+/* Traffic counts are drawn dashed, the route solid. Colour alone doesn't separate
+   them — a heavy red count running beside the magenta Erie line reads as one more
+   stretch of trail. A dash says "this is a reading laid over the road", not "go this
+   way", so the eye never mistakes a busy road for the route. Round caps keep the
+   dashes from looking like ticks at the heavier weights. */
+const AADT_DASH='7,7';
 /* Zoomed out, the quiet streets are not what you are looking for and there is not
    the room to draw them anyway, so the floor rises with the scale — the same idea
    as the milepost interval. Where more is in view than will be drawn the busiest
@@ -230,7 +240,10 @@ const P = {
   // sun behind a cloud — the outlook tab, distinct from the plain wind glyph
   fcast:'M8.5 2.6v1.8|M3.6 4.6l1.3 1.3|M1.6 9.5h1.8|M13.4 4.6l-1.3 1.3|c8.5 9.5 3|M10 20h7.5a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8.6 11.4 4.3 4.3 0 0 0 10 20Z',
   chevR:'M9 6l6 6-6 6',
-  chevL:'M15 6l-6 6 6 6'
+  chevL:'M15 6l-6 6 6 6',
+  layers:'M12 2 22 7 12 12 2 7Z|M2 12l10 5 10-5|M2 17l10 5 10-5',
+  bike:'c5.5 17.5 3.2|c18.5 17.5 3.2|M5.5 17.5l4-8.5h6.5l-3 8.5|M9.5 9l3.5 8.5|M13.5 9h3',
+  med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z'
 };
 function iconInner(spec){
   return spec.split('|').map(s=>{
@@ -432,8 +445,12 @@ const FINDQ=[['gas station convenience store','Gas / C-store'],['grocery store s
   ['restaurant cafe','Food'],['hotel motel lodging','Lodging'],['campground','Camping'],['bicycle shop','Bike shop']];
 function searchAt(q,lat,lng){ return 'https://www.google.com/maps/search/'+encodeURIComponent(q)+'/@'+lat+','+lng+',14z'; }
 function findNearbyRow(lat,lng){
+  // The chips carry the point and the query so a tap can both open Google Maps AND
+  // drop a marker back here — otherwise you leave the app to look at groceries and
+  // come back with no idea which spot you were checking.
   return '<div class="pa-lbl">Find nearby:</div><div class="pa-row">'
-    +FINDQ.map(f=>'<a href="'+searchAt(f[0],lat,lng)+'" target="_blank" rel="noopener" class="pa">'+f[1]+'</a>').join('')+'</div>';
+    +FINDQ.map(f=>'<a href="'+searchAt(f[0],lat,lng)+'" target="_blank" rel="noopener" class="pa"'
+      +' data-sq="'+esc(f[0])+'" data-slbl="'+esc(f[1])+'" data-slat="'+lat+'" data-slng="'+lng+'">'+f[1]+'</a>').join('')+'</div>';
 }
 /* A tapped point, handed to Google two ways. Street View asks for a panorama at the
    viewpoint and falls back to the map when there is none within range, which along a
@@ -559,13 +576,27 @@ const CATCFG={
   'Food':{icon:'food',label:'Food',grp:'osm'},
   'Convenience':{icon:'store',label:'Convenience',grp:'osm'},
   'General store':{icon:'store',label:'Dollar / big box',grp:'osm'},
-  'Fuel':{icon:'fuel',label:'Fuel / gas',grp:'osm'}
+  'Fuel':{icon:'fuel',label:'Fuel / gas',grp:'osm'},
+  /* The bundled corridor: a snapshot of OpenStreetMap within 5 mi of the whole route,
+     shipped with the app so it is always there without asking Overpass. Its own parent
+     and its own category keys ('nb-…') so it switches independently of the live pull and
+     of the State's list — same data source as the live OSM group, different job. */
+  'nb-grocery':{icon:'cart',label:'Groceries',grp:'bundled'},
+  'nb-convenience':{icon:'store',label:'Convenience',grp:'bundled'},
+  'nb-food':{icon:'food',label:'Food & drink',grp:'bundled'},
+  'nb-lodging':{icon:'bed',label:'Hotels & motels',grp:'bundled'},
+  'nb-camp':{icon:'tent',label:'Campgrounds',grp:'bundled'},
+  'nb-fuel':{icon:'fuel',label:'Fuel / gas',grp:'bundled'},
+  'nb-water':{icon:'drop',label:'Water / restrooms',grp:'bundled'},
+  'nb-bike':{icon:'bike',label:'Bike shops',grp:'bundled'},
+  'nb-pharmacy':{icon:'med',label:'Pharmacies',grp:'bundled'}
 };
 const CAT_GRP={
   trail:{label:'On the trail', src:'New York State', toc:'Trail POIs'},
-  osm:{label:'In town',       src:'OpenStreetMap', toc:'OSM POIs'}
+  osm:{label:'In town',       src:'OpenStreetMap', toc:'OSM POIs'},
+  bundled:{label:'Within 5 mi', src:'OpenStreetMap · bundled', toc:'Nearby (5 mi)'}
 };
-const GRP_ORDER=['trail','osm'];
+const GRP_ORDER=['trail','osm','bundled'];
 // An asset type the service invented and we don't hardcode is trail data — that
 // is the only place unknown categories can come from.
 const catGrp=a=>(CATCFG[a]&&CATCFG[a].grp)||'trail';
@@ -576,7 +607,8 @@ const CAT_DEFAULT={'Lock camping':true,'Campground':true,'Lodging':true};
    gets sleeping options first, sightseeing after, logistics last. Grouped in the
    same order the parents render in, so a fresh install reads top to bottom. */
 const CAT_ORDER=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area',
-                 'Hotels & motels','Food','Groceries','Convenience','General store','Fuel'];
+                 'Hotels & motels','Food','Groceries','Convenience','General store','Fuel',
+                 'nb-grocery','nb-convenience','nb-food','nb-lodging','nb-camp','nb-fuel','nb-water','nb-bike','nb-pharmacy'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
 
@@ -621,6 +653,8 @@ class TrailApp {
     this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
+    // Places you sent to Google Maps, kept as pins so you don't lose the spot. Saved.
+    this.searches=[]; this.searchLayer=null; this.searchMarks={};
     /* One switch per category, driving the list AND the pins together. They were
        briefly independent, which meant the map could show a pin whose row the list
        had filtered away — and a place you can see is a place you expect to be able
@@ -711,6 +745,7 @@ class TrailApp {
     if(p.catCoupled && Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     if(Array.isArray(p.grpShut)) this.grpShut=new Set(p.grpShut.filter(c=>typeof c==='string'));
     if(Array.isArray(p.lyrGrpShut)) this.lyrGrpShut=new Set(p.lyrGrpShut.filter(c=>typeof c==='string'));
+    if(Array.isArray(p.searches)) this.searches=p.searches.filter(s=>s&&isFinite(s.lat)&&isFinite(s.lng)).slice(0,60);
     this.renderDirLabels();
     const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
@@ -730,7 +765,7 @@ class TrailApp {
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
-      grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut]})); }catch(e){}
+      grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches})); }catch(e){}
   }
   /* While following, the two boxes are an output, not an input — say so rather than
      leaving a rider typing into fields the next pan silently overwrites. */
@@ -801,13 +836,31 @@ class TrailApp {
     this.screens=[...document.querySelectorAll('[data-screen]')];
     // Pressing a tab yourself is its own way back, and it invalidates the remembered
     // one — only the programmatic showTab in zoomTo should leave the offer standing.
-    this.tabs.forEach(btn=>btn.addEventListener('click',()=>{ this.clearReturn(); this.showTab(btn.dataset.tab); }));
+    // Tapping the Map tab while already on the map is how you work the sheet now —
+    // dragging that little grip is fiddly on a moving bike, so each tap steps it up:
+    // normal, half, all the way, and back to normal.
+    this.tabs.forEach(btn=>btn.addEventListener('click',()=>{
+      const name=btn.dataset.tab;
+      if(name==='map' && this.screen==='map'){ this.cyclePanelTap(); return; }
+      this.clearReturn(); this.showTab(name);
+    }));
   }
   /* The bar floats over the screens, so hiding it hands its height to the list.
      Only a deliberate downward pull hides it; any upward scroll brings it straight
      back, and it never hides on the map, which has nothing to scroll. */
+  // The tab bar's own laid-out height, transform and all — what the panel reclaims
+  // when the dock slides away.
+  tabbarPx(){ const t=document.querySelector('.tabbar'); return t?t.getBoundingClientRect().height:0; }
   setTabsHidden(h){
     const b=this.$('tabbar'); if(b) b.classList.toggle('is-hidden', !!h);
+    const app=document.querySelector('.phone-app'); if(!app) return;
+    const was=app.classList.contains('dock-hidden');
+    app.classList.toggle('dock-hidden', !!h);
+    // The raised map sheet grows down into the freed strip instead of just sliding —
+    // its top stays put so whatever you were reading doesn't jump. Recompute only when
+    // the state actually flipped, and don't pan the map: the visible strip didn't move.
+    if(was!==!!h && this.map && (this.panelSnap==='half'||this.panelSnap==='full'))
+      this.setPanelSnap(this.panelSnap, null, true);
   }
   wireTabAutohide(){
     this.screens.forEach(sc=>{
@@ -820,6 +873,19 @@ class TrailApp {
         last=y;
       },{passive:true});
     });
+    // The map has no scrolling screen, but its list does — the same gesture, so the
+    // dock behaves the same: pull the list up and it steps out of the way, push the
+    // list back down and it returns. Only the list scrolls, so only half/full reach it.
+    const list=this.$('panelList');
+    if(list){
+      let last=0;
+      list.addEventListener('scroll',()=>{
+        const y=list.scrollTop;
+        if(abs(y-last)<8) return;
+        this.setTabsHidden(y>last && y>24);
+        last=y;
+      },{passive:true});
+    }
   }
   /* Three heights rather than a drawer that is either open or shut: peek is the
      stats alone, half puts map and list on screen together — the point of the thing —
@@ -881,19 +947,29 @@ class TrailApp {
     const g=this.$('panelGrab'), gh=g?g.offsetHeight:0;
     return snap==='shut' ? gh : gh+this.measureSheet();
   }
-  setPanelSnap(snap, fromH){
+  setPanelSnap(snap, fromH, noPan){
     const p=this.$('mapPanel'); if(!p) return;
     const h0 = fromH!=null ? fromH : p.getBoundingClientRect().height;
     this.panelSnap=snap;
     p.dataset.snap=snap;
+    // At rest — peek or shut — the dock always comes back, so a sheet dragged down while
+    // the dock was hidden can never strand you with no tabs to navigate by. Runs after
+    // panelSnap is set, so setTabsHidden reads the new state and doesn't recurse.
+    if(snap==='peek'||snap==='shut') this.setTabsHidden(false);
     const avail=p.parentElement?p.parentElement.clientHeight:0;
-    const h1 = (snap==='shut'||snap==='peek') ? this.panelH(snap) : avail*(snap==='full'?.86:.52);
+    // When the dock is hidden the sheet reaches to the very bottom, so a raised sheet
+    // is that much taller — expressed as a calc so the % base still tracks the screen.
+    const dockHidden=document.querySelector('.phone-app')&&document.querySelector('.phone-app').classList.contains('dock-hidden');
+    const bonus=(snap==='half'||snap==='full')&&dockHidden ? this.tabbarPx() : 0;
+    const frac=snap==='full'?86:52;
+    const h1 = (snap==='shut'||snap==='peek') ? this.panelH(snap) : avail*frac/100 + bonus;
     p.style.height = (snap==='shut'||snap==='peek') ? h1+'px'
-      : snap==='full' ? '86%' : '52%';
+      : bonus ? 'calc('+frac+'% + '+bonus+'px)'
+      : frac+'%';
     /* The panel covers the map instead of resizing it, so sliding it up used to push
        whatever you were looking at down behind the sheet. Moving the map half the
        height change keeps it in the middle of what's left. */
-    if(this.map && this.panelReady && abs(h1-h0)>2) this.map.panBy([0,(h1-h0)/2],{animate:true,duration:.24});
+    if(this.map && this.panelReady && !noPan && abs(h1-h0)>2) this.map.panBy([0,(h1-h0)/2],{animate:true,duration:.24});
     this.panelReady=true;
     const hint=this.$('panelHint');
     if(hint) hint.textContent = snap==='shut' ? 'Pull up'
@@ -905,6 +981,12 @@ class TrailApp {
   cyclePanel(){
     const order=['shut','peek','half','full'], i=order.indexOf(this.panelSnap);
     this.setPanelSnap(order[(i+1)%order.length]);
+  }
+  /* The Map-tab tap skips 'shut' — you're on the map already, so hiding the sheet
+     isn't what that tap is for. Normal, half, all the way, back to normal. */
+  cyclePanelTap(){
+    const order=['peek','half','full'], i=order.indexOf(this.panelSnap);
+    this.setPanelSnap(order[i<0?0:(i+1)%order.length]);
   }
   /* Drag beats a three-way tap for reaching a height directly, but the tap has to keep
      working — so anything under 6px of travel is treated as a tap, not a stalled drag. */
@@ -994,9 +1076,15 @@ class TrailApp {
     const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ if(this.map) this.map.zoomOut(); });
     const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.savePrefs(); this.renderItin(); });
     const tp=this.$('tapToSet'); if(tp) tp.addEventListener('change',e=>{ this.tapToSet=e.target.checked; this.savePrefs();
-      this.status(this.tapToSet?'Tapping the map will offer to move you there.':'Map taps no longer move you — use Locate or a simulated spot.'); });
+      this.status(this.tapToSet?'The map spot dialog (long-press or right-click) can offer to move you there.':'The map spot dialog no longer moves you — use Locate or a simulated spot.'); });
     const dest=this.$('destSel'); if(dest) dest.addEventListener('change',()=>{ this.destIdx=dest.value===''?-1:+dest.value; this.renderNext(); });
     const sim=this.$('simSel'); if(sim) sim.addEventListener('change',()=>{ if(sim.value==='')return; const t=TOWNS[+sim.value]; this.setMyLocation(t.lat+0.03,t.lng+0.02); this.status('Simulating near '+t.n+'.'); });
+    // delegated: a Find-nearby chip both opens Google Maps (its own href) and drops a
+    // marker here, so the spot you were checking is still on the map when you come back.
+    document.addEventListener('click',e=>{
+      const c=e.target.closest('.pa[data-sq]'); if(!c) return;
+      this.dropSearch(+c.dataset.slat, +c.dataset.slng, c.dataset.sq, c.dataset.slbl);
+    });
     // delegated: any [data-lat] element zooms the map
     document.addEventListener('click',e=>{
       const el=e.target.closest('[data-lat]'); if(!el || e.target.closest('a')) return;
@@ -1017,6 +1105,7 @@ class TrailApp {
     });
     // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
+    document.addEventListener('click',e=>{ const r=e.target.closest('.srch-rm'); if(r){ this.removeSearch(r.dataset.sk); if(this.map) this.map.closePopup(); } });
     document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
     document.addEventListener('click',e=>{
       const sv=e.target.closest('.pr-save'); if(sv){ this.savePriceFrom(sv); return; }
@@ -1135,17 +1224,38 @@ class TrailApp {
     if(this.myLL && this.map){ this.showTab('map'); this.map.setView([this.myLL.lat,this.myLL.lng],13); }
     else this.status('Set your location first — tap Locate or pick a simulated spot.');
   }
-  /* A tap used to move the rider outright, with no confirmation and no clue what it
-     was about to do. Everything on screen keys off myMile, so a stray tap while
-     panning silently re-sorted Nearby, the itinerary and every distance in the app.
-     The popup anchors the decision to the point you actually hit and names the mile
-     before you commit — dismissing it costs nothing, which is the common case.
-     It now opens on every tap rather than only when moving is armed, because the
-     question a map tap most often asks is "what is this place" — which the milepost
-     answers roughly, and Google Maps and Street View answer exactly. Moving stays
-     behind its setting: it is the one thing here that changes the app's state. */
+  /* A long press (phone) or right-click (web) asks "what is this spot" — the milepost
+     answers roughly, and Google Maps and Street View answer exactly. It anchors to the
+     point you hit and names the mile before you commit to anything. Moving your location
+     stays behind its setting: it is the one thing here that changes the app's state.
+     A plain tap no longer opens this — it fought the map on every pan. */
+  // Long press on touch fires this AND may also fire a synthesized contextmenu; a short
+  // guard makes the pair open the dialog once, not twice.
+  wireMapLongPress(map){
+    const el=map.getContainer(); if(!el) return;
+    let timer=null, ll=null, sx=0, sy=0;
+    const clear=()=>{ if(timer){ clearTimeout(timer); timer=null; } };
+    el.addEventListener('touchstart',ev=>{
+      if(!ev.touches || ev.touches.length!==1){ clear(); return; }
+      const t=ev.touches[0], r=el.getBoundingClientRect();
+      sx=t.clientX; sy=t.clientY;
+      ll=map.containerPointToLatLng(L.point(t.clientX-r.left, t.clientY-r.top));
+      clear(); timer=setTimeout(()=>{ timer=null; if(ll) this.tapPopup(ll); }, 500);
+    },{passive:true});
+    el.addEventListener('touchmove',ev=>{
+      // Any real drag cancels — a long press is a hold, not a pan.
+      if(ev.touches && ev.touches[0]){ const t=ev.touches[0];
+        if(abs(t.clientX-sx)>10 || abs(t.clientY-sy)>10) clear(); }
+    },{passive:true});
+    el.addEventListener('touchend',clear,{passive:true});
+    el.addEventListener('touchcancel',clear,{passive:true});
+  }
   tapPopup(ll){
     if(!this.map) return;
+    // De-dupe the long-press/contextmenu pair, and swallow a stray double-tap.
+    const now=Date.now();
+    if(this._lastTapPopup && now-this._lastTapPopup<600) return;
+    this._lastTapPopup=now;
     const pr=projectRoute(ll.lat,ll.lng);
     this.pendingLL={lat:ll.lat,lng:ll.lng};
     // How far the tap landed from the route matters here in a way it doesn't
@@ -1173,6 +1283,71 @@ class TrailApp {
     this.map.closePopup();
     this.setMyLocation(ll.lat,ll.lng);
     this.status('Location set from your map tap.');
+  }
+  /* ---------- search markers ---------- */
+  /* A "Find nearby" chip opens Google Maps in a new tab and, in the same tap, leaves a
+     pin here — magenta, the app's rare second spot colour, so it never reads as one of
+     the trail's own facilities. They live in their own layer in the control, switch off
+     as a group, and each one carries a Remove. Saved, so the grocery run you scouted
+     last night is still marked in the morning. */
+  ensureSearchLayer(){
+    if(this.searchLayer || !this.map) return this.searchLayer;
+    this.searchLayer=L.layerGroup();
+    this.regLayer('search', this.searchLayer, this.searchLabel());
+    return this.searchLayer;
+  }
+  searchLabel(){ return 'My map searches <span class="lyr-ct">'+this.searches.length+'</span>'; }
+  syncSearchLabel(){
+    // Relabel the overlay in place so the count tracks add/remove.
+    if(!this.layersCtl || !this.searchLayer) return;
+    this.layersCtl.removeLayer(this.searchLayer);
+    this.layersCtl.addOverlay(this.searchLayer, this.searchLabel());
+    this.decorateLayers();
+  }
+  searchKey(s){ return s.q+'@'+(+s.lat).toFixed(4)+','+(+s.lng).toFixed(4); }
+  addSearchMarker(s){
+    const lyr=this.ensureSearchLayer(); if(!lyr) return;
+    const key=this.searchKey(s);
+    if(this.searchMarks[key]) return this.searchMarks[key];
+    const html='<span class="srch-pin">'+icon('search',12)+'<b>'+esc(s.label||'search')+'</b></span>';
+    const mk=L.marker([s.lat,s.lng],{pane:this.lyrPane('search'),
+      icon:L.divIcon({className:'srch-ic',html,iconSize:[0,0],iconAnchor:[0,0]})});
+    mk.bindPopup('<div class="srch-pop"><b>'+esc(s.label||'Search')+'</b>'
+      +'<div class="srch-cd">'+(+s.lat).toFixed(5)+', '+(+s.lng).toFixed(5)+'</div>'
+      +'<div class="pa-row mv-lk"><a href="'+searchAt(s.q,s.lat,s.lng)+'" target="_blank" rel="noopener" class="pa">Google Maps ↗</a>'
+      +'<a href="'+panoLink(s.lat,s.lng)+'" target="_blank" rel="noopener" class="pa">Street View</a></div>'
+      +'<button type="button" class="srch-rm" data-sk="'+esc(key)+'">Remove this pin</button></div>',
+      {maxWidth:240,autoPan:false});
+    mk.addTo(lyr);
+    this.searchMarks[key]=mk;
+    return mk;
+  }
+  dropSearch(lat,lng,q,label){
+    if(!this.map || !isFinite(lat) || !isFinite(lng)) return;
+    const s={lat:+lat, lng:+lng, q:String(q||''), label:String(label||'Search')};
+    const key=this.searchKey(s);
+    this.ensureSearchLayer();
+    if(this.map && this.searchLayer && !this.map.hasLayer(this.searchLayer)) this.searchLayer.addTo(this.map);
+    if(this.searchMarks[key]){ this.searchMarks[key].openPopup(); return; }
+    if(!this.searches.some(x=>this.searchKey(x)===key)) this.searches.push(s);
+    this.addSearchMarker(s);
+    this.syncSearchLabel();
+    this.savePrefs();
+    this.status('Marked your “'+s.label+'” search on the map — it’s in “My map searches” in the layers control.');
+  }
+  removeSearch(key){
+    const mk=this.searchMarks[key];
+    if(mk && this.searchLayer) this.searchLayer.removeLayer(mk);
+    delete this.searchMarks[key];
+    this.searches=this.searches.filter(s=>this.searchKey(s)!==key);
+    this.syncSearchLabel();
+    this.savePrefs();
+  }
+  restoreSearches(){
+    if(!this.map || !this.searches.length) return;
+    this.searches.forEach(s=>this.addSearchMarker(s));
+    // On by default when there are any: they're yours, and you saved them on purpose.
+    if(this.searchLayer && !this.map.hasLayer(this.searchLayer)) this.searchLayer.addTo(this.map);
   }
   /* `move` is opt-in, and that is the whole point. This used to recentre on every
      call — including each watchPosition tick — so panning the map to read the pins
@@ -1656,7 +1831,9 @@ class TrailApp {
      a phone in sunlight, and at 900 food pins the lighter mark is what keeps the
      curated ones readable underneath. */
   poiIcon(p, cfg){
-    const osm=catGrp(poiCat(p))==='osm';
+    // Both OSM sources — the live pull and the bundled corridor — draw as the small
+    // hollow pin, which is what tells them from the State's solid facilities.
+    const grp=catGrp(poiCat(p)), osm=grp==='osm'||grp==='bundled';
     const pr=this.priceOf(p), br=LODGE_CATS[poiCat(p)]?brandOf(p.name):null;
     // Every pin carries its name. Hidden by CSS until the map is zoomed in past
     // POI_LABEL_Z, or the pin is hovered — a field of identical dots you have to tap
@@ -2408,7 +2585,8 @@ class TrailApp {
       paths.forEach(path=>{
         if(!path || path.length<2) return;
         const ll=path.map(c=>[c[1],c[0]]);
-        const ln=L.polyline(ll,{pane:this.lyrPane('aadt'),color:band[1],weight:band[3],opacity:.85,className:'aadt-ln'});
+        const ln=L.polyline(ll,{pane:this.lyrPane('aadt'),color:band[1],weight:band[3],opacity:.85,
+          dashArray:AADT_DASH,lineCap:'round',className:'aadt-ln'});
         ln.bindPopup('',{maxWidth:250,autoPan:false});
         ln.on('popupopen',()=>ln.setPopupContent(this.aadtPopup(pr)));
         ln.addTo(g);
@@ -2783,33 +2961,34 @@ class TrailApp {
   townLabel(n){ return !n ? '' : (n.off<=3 ? n.t.n : 'near '+n.t.n); }
   // Chart labels get the first name only — "Chittenango", not the whole park.
   shortTown(n){ return String(n||'').split(' / ')[0]; }
-  // Every town you'd roll through that day, in the order you'd reach them.
-  legTowns(leg){
-    const lo=Math.min(leg.from,leg.to), hi=Math.max(leg.from,leg.to), fwd=leg.to>=leg.from;
-    return TOWNS.filter(t=>t.mi>=lo-0.2 && t.mi<=hi+0.2)
-      .slice().sort((a,b)=> fwd ? a.mi-b.mi : b.mi-a.mi);
-  }
-  /* Days are cut by distance, then capped by the destination if there is one. Six is
-     the ceiling because NWS hourly runs about six and a half days out — past that
-     there is nothing to report, and a made-up seventh day is worse than none. */
-  wxLegs(){
+  /* The towns you'd roll through, ahead in your direction of travel, each turned into
+     an arrival: how far off it is, and the day and hour you'd reach it riding at your
+     average speed. The night's stop is baked into the clock — each day resumes at 8am —
+     so a town three days out is read three mornings on, not seventy-two hours from now.
+     Bounded twice: by the miles-a-day window, and by how far the hourly forecast still
+     reaches, because past either there is nothing true to say. Capped in count too,
+     since every town here is a forecast fetched, and a hundred of them is rude. */
+  wxTowns(){
     const anchor=this.wxAnchorMile();
     if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
     const sgn=this.dir==='B2NYC'?-1:1;
-    const per=Math.max(5, this.wxPerDay||60);
-    // Always the full six. NWS hourly runs about that far and no further, so a box
-    // asking how many days you wanted only ever offered you less than there was.
-    const days=WX_MAX_DAYS;
-    const legs=[]; let from=anchor;
-    for(let d=0; d<days; d++){
-      // The end of the trail is the only thing that shortens a day now that there is
-      // no destination to ride at.
-      const to=Math.max(0,Math.min(TOTAL,from+sgn*per));
-      if(abs(to-from)<0.5) break;
-      legs.push({d, from, to, miles:abs(to-from)});
-      from=to;
-    }
-    return legs.length?legs:{err:'That works out to no riding at all — check the miles a day.'};
+    const per=Math.max(5, this.wxPerDay||60), sp=this.avgSpeed>0?this.avgSpeed:12;
+    const horizon=per*WX_MAX_DAYS, forecastEnd=Date.now()+WX_HORIZON_MS;
+    const out=[];
+    TOWNS.forEach(t=>{
+      const ahead=(t.mi-anchor)*sgn;                 // trail miles in front of you
+      if(ahead<-0.3 || ahead>horizon) return;        // behind you, or past the window
+      const day=Math.max(0, Math.floor((ahead-0.001)/per));
+      const when=this.wxDepart(day)+(Math.max(0,ahead-day*per)/sp)*36e5;
+      if(when>forecastEnd) return;                   // you'd arrive past the forecast's reach
+      out.push({t, mile:t.mi, ahead:Math.max(0,ahead), day, when});
+    });
+    out.sort((a,b)=>a.ahead-b.ahead);
+    let truncated=false;
+    if(out.length>WX_MAX_TOWNS){ out.length=WX_MAX_TOWNS; truncated=true; }
+    if(!out.length) return {err:'No towns coming up within your miles-a-day window — try a longer day, or check your direction of travel.'};
+    out.truncated=truncated;
+    return out;
   }
   // Day 0 starts now if you're already up and riding; every other day starts at eight.
   wxDepart(d){
@@ -2817,261 +2996,175 @@ class TrailApp {
     const start=new Date(now.getFullYear(),now.getMonth(),now.getDate()+d,8,0,0,0).getTime();
     return (d===0 && now.getTime()>start) ? now.getTime() : start;
   }
-  /* Three grid points per day, start / middle / end. Each one hands back 150-odd
-     hourly periods, so an hour-by-hour chart costs nothing beyond these three calls:
-     for any given hour we read the anchor nearest to where you'd be. That is what a
-     gridded forecast means, so the chart is real data throughout rather than a curve
-     drawn between two dots. Day boundaries share a milepost, so the cache absorbs one
-     of the three on every day after the first. */
-  wxLegAnchors(leg){
-    return [0,0.5,1].map(f=>{
-      const mile=leg.from+(leg.to-leg.from)*f, p=this.routePtAt(mile);
-      return {mile, lat:p[0], lng:p[1]};
-    });
-  }
-  wxLegSeries(leg){
-    const sp=this.avgSpeed>0?this.avgSpeed:12, dep=this.wxDepart(leg.d);
-    const steps=Math.max(1, Math.min(14, Math.ceil(leg.miles/sp)));
-    const out=[];
-    for(let i=0;i<=steps;i++){
-      const f=i/steps, mile=leg.from+(leg.to-leg.from)*f;
-      const when=dep+(leg.miles*f/sp)*36e5;
-      let best=null, bd=Infinity;
-      (leg.anchors||[]).forEach(a=>{ const d=abs(a.mile-mile); if(a.periods && d<bd){ bd=d; best=a; } });
-      out.push({mile, when, hdg:this.routeBearing(mile), w: best?this.wxAt(best.periods, when):null});
-    }
-    return out;
-  }
-  /* Mean rather than worst for the wind: one gusty sample shouldn't brand a whole day
-     a headwind day. Rain and temperature take their extremes, because those are what
-     you pack for. */
-  wxSummary(samples){
-    const rs=samples.filter(x=>x.w).map(x=>this.wxRead({w:x.w, hdg:x.hdg}));
-    if(!rs.length) return null;
-    const nums=a=>a.filter(v=>v!=null && isFinite(v));
-    const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
-    const temps=nums(rs.map(r=>r.temp)), pops=nums(rs.map(r=>r.pop));
-    const heads=rs.filter(r=>r.parts).map(r=>r.parts.head);
-    const cross=rs.filter(r=>r.parts).map(r=>r.parts.cross);
-    return {
-      tLo: temps.length?Math.min.apply(null,temps):null,
-      tHi: temps.length?Math.max.apply(null,temps):null,
-      pop: pops.length?Math.max.apply(null,pops):null,
-      head: heads.length?mean(heads):null,
-      cross: cross.length?mean(cross):null,
-      unit: rs[0].unit, short: rs[rs.length-1].short
-    };
-  }
-  /* The night where the day leaves you: the low you'd sleep in and whether it rains on
-     the tent, read at the far anchor between 7pm and 6am. No wind — a crosswind at 2am
-     is nobody's problem. Later days fall off the end of the hourly forecast, and those
-     simply go without rather than being extrapolated. */
-  wxOvernight(leg){
-    const as=leg.anchors||[], a=as[as.length-1];
-    if(!a || !a.periods || !a.periods.length) return null;
-    const d0=new Date(this.wxDepart(leg.d));
-    const from=new Date(d0.getFullYear(),d0.getMonth(),d0.getDate(),19,0,0,0).getTime();
-    const to=from+11*36e5;
-    const win=a.periods.filter(p=>{ const t=Date.parse(p.startTime); return t>=from && t<to; });
-    if(win.length<3) return null;
-    const temps=win.map(p=>p.temperature).filter(t=>t!=null && isFinite(t));
-    const pops=win.map(p=>p.probabilityOfPrecipitation?p.probabilityOfPrecipitation.value:null)
-      .filter(v=>v!=null && isFinite(v));
-    const mid=win[Math.floor(win.length/2)];
-    return {
-      lo: temps.length?Math.min.apply(null,temps):null,
-      hi: temps.length?Math.max.apply(null,temps):null,
-      pop: pops.length?Math.max.apply(null,pops):null,
-      unit: win[0].temperatureUnit||'F',
-      short: mid?(mid.shortForecast||''):''
-    };
-  }
-  // All three of head, tail and cross, said the way you'd say them out loud.
-  windWord(head, cross){
-    const h=head==null?0:head, c=cross==null?0:cross, mag=abs(h);
-    if(mag<3 && c<5) return {cls:'cross', txt:'barely any wind'};
-    if(mag<3) return {cls:'cross', txt:Math.round(c)+' mph crosswind'};
-    let t=Math.round(mag)+' mph '+(h>0?'headwind':'tailwind');
-    if(c>=5) t+=', '+Math.round(c)+' mph across';
-    return {cls: h>0?'head':'tail', txt:t};
-  }
   async loadOutlook(){
     if(this.wxBusy) return;
-    const legs=this.wxLegs();
-    if(legs.err){ this.wxPlan={err:legs.err}; this.renderOutlook(); return; }
+    const towns=this.wxTowns();
+    if(towns.err){ this.wxPlan={err:towns.err}; this.renderOutlook(); return; }
     this.wxBusy=true; this.wxPlan={loading:true}; this.renderOutlook();
-    const jobs=[];
-    legs.forEach(leg=>{ leg.anchors=this.wxLegAnchors(leg); leg.anchors.forEach(a=>jobs.push(a)); });
-    await Promise.allSettled(jobs.map(async a=>{ a.periods=await this.nwsHourly(a.lat,a.lng); }));
-    legs.forEach(leg=>{ leg.series=this.wxLegSeries(leg); leg.sum=this.wxSummary(leg.series); });
+    // One hourly grid per town — a single fetch buys the whole six-and-a-half days at
+    // that point, so we read straight down it to whatever hour you'd be standing there.
+    // Cached to a hundredth of a degree, so towns that share a grid cell cost once.
+    await Promise.allSettled(towns.map(async o=>{
+      try{ o.periods=await this.nwsHourly(o.t.lat, o.t.lng); }
+      catch(e){ o.periods=null; }
+    }));
     this.wxBusy=false;
-    this.wxPlan={legs, at:Date.now(), got:legs.filter(l=>l.sum).length};
+    this.wxPlan={towns, at:Date.now(), truncated:!!towns.truncated,
+      got:towns.filter(o=>o.periods && o.periods.length).length};
     this.renderOutlook();
   }
-  /* Laid out the way the NWS hourly graph is: stacked panels over one shared time
-     axis, so reading straight down a column gives you the temperature, the rain and
-     the wind at that hour. The wind panel is the part rewritten for a bicycle. The
-     compass bearing is gone — it is a number you have to do trigonometry on before it
-     means anything — and what is drawn instead is the component that actually reaches
-     you: up and red when it is in your face, down and green at your back, straddling
-     the line in grey when it is only shoving you sideways. Height is its speed.
-     Towns are ruled in down the whole stack, because "the headwind starts after
-     Canajoharie" is the sentence you actually want out of a chart like this. */
-  wxChart(leg){
-    const S=(leg.series||[]).filter(x=>x.w);
-    if(S.length<2) return '';
-    const rd=S.map(p=>this.wxRead(p));
+  /* One town, read the way the NWS hourly graph reads: temperature over rain over
+     wind, all on one clock, so straight down a column is the whole story for that hour.
+     The wind panel is the part rewritten for a bicycle — the compass bearing is gone,
+     and what's drawn is the component that reaches you: up and red into your face, down
+     and green at your back, grey and straddling the line when it only shoves you
+     sideways, height its speed — read against your heading through this town. The day
+     fits without scrolling and the night is tucked off to the right, shaded, reached by
+     a swipe rather than paid for up front. Fixed pixels per hour, not a stretched
+     viewBox, so the strip runs wider than the screen and scrolls; the scales ride in a
+     fixed gutter beside it so they never scroll away. A dashed line marks when you'd
+     roll in. */
+  townChart(o){
+    const P=o.periods||[];
+    if(P.length<2) return '<div class="wx-none">No forecast came back for this town.</div>';
+    const PXH=26, WIN_H=30, H=196, GUT=30, PW=WIN_H*PXH;
+    const d0=new Date(o.when);
+    let winStart=new Date(d0.getFullYear(),d0.getMonth(),d0.getDate(),6,0,0,0).getTime();
+    const first=Date.parse(P[0].startTime);
+    if(winStart<first) winStart=first;               // don't open on hours already spent
+    const winEnd=winStart+WIN_H*36e5;
+    const cols=P.map(p=>({p, s:Date.parse(p.startTime)}))
+      .filter(c=>isFinite(c.s) && c.s>=winStart-1 && c.s<winEnd);
+    if(cols.length<2) return '<div class="wx-none">This town sits past the end of the hourly forecast.</div>';
+    const hdg=this.routeBearing(o.mile);
+    const rd=cols.map(c=>this.wxRead({w:c.p, hdg}));
     const temps=rd.map(r=>r.temp).filter(t=>t!=null && isFinite(t));
-    if(!temps.length) return '';
-    const W=340, L=27, R=10, H=196, span=W-L-R;
-    const x=i=>L+span*(i/(S.length-1));
-    const den=leg.to-leg.from;
-    const xm=m=>L+span*(den===0?0:(m-leg.from)/den);
-    const bw=Math.max(3.5, Math.min(15, span/S.length*0.5));
+    if(!temps.length) return '<div class="wx-none">No forecast came back for this town.</div>';
+    const x=t=>((t-winStart)/36e5)*PXH;
+    const cx=c=>x(c.s)+PXH/2;
+    const bw=PXH*0.6;
     const T0=30, T1=70;            // temperature band
     const RB=112, RH=30;           // rain baseline, full-height bar
     const WZ=158, WH=24;           // wind zero line, half height
-    const TOP=14, BOT=WZ+WH;       // the run of a town's rule
+    const TOP=14, BOT=WZ+WH;
     const n2=v=>(Math.round(v*10)/10).toFixed(1);
     const tHi=Math.max.apply(null,temps), tLo=Math.min.apply(null,temps);
     let tMax=tHi, tMin=tLo;
-    if(tMax-tMin<4){ const m=(tMin+tMax)/2; tMin=m-2; tMax=m+2; }
+    if(tMax-tMin<6){ const m=(tMin+tMax)/2; tMin=m-3; tMax=m+3; }
     const ty=t=>T1-((t-tMin)/(tMax-tMin))*(T1-T0);
-    const tag=(y,t,c)=>'<text class="wx-gt'+(c?' '+c:'')+'" x="'+(L-5)+'" y="'+y+'" text-anchor="end">'+esc(t)+'</text>';
-    let g='<svg class="wx-svg" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Hour by hour along the day’s ride: temperature, rain chance, and head or tail wind">';
 
-    /* ---- towns, ruled first so every series draws over them ---- */
-    const tw=this.legTowns(leg).map(t=>({t, x:xm(t.mi)}))
-      .filter(o=>isFinite(o.x) && o.x>=L-1 && o.x<=W-R+1).sort((a,b)=>a.x-b.x);
-    let last=-1e9;
-    tw.forEach(o=>{
-      g+='<line class="wx-tn" x1="'+n2(o.x)+'" y1="'+TOP+'" x2="'+n2(o.x)+'" y2="'+BOT+'"/>';
-      const nm=this.shortTown(o.t.n), wpx=nm.length*4.4+4;
-      let anch='middle', tx=o.x;
-      if(tx-wpx/2<1){ anch='start'; tx=1; }
-      else if(tx+wpx/2>W-1){ anch='end'; tx=W-1; }
-      const lft = anch==='start' ? tx : anch==='end' ? tx-wpx : tx-wpx/2;
-      if(lft<last+3) return;                     // it would sit on the last name
-      last=lft+wpx;
-      g+='<text class="wx-tnl" x="'+n2(tx)+'" y="9" text-anchor="'+anch+'">'+esc(nm)+'</text>';
-    });
+    let g='';
+    /* ---- night shaded, and the date where it turns over ---- */
+    cols.forEach(c=>{ if(c.p.isDaytime) return;
+      g+='<rect class="wx-nite" x="'+n2(x(c.s))+'" y="'+TOP+'" width="'+n2(PXH)+'" height="'+(BOT-TOP)+'"/>'; });
+    cols.forEach(c=>{ const dt=new Date(c.s); if(dt.getHours()!==0) return;
+      g+='<line class="wx-mid" x1="'+n2(x(c.s))+'" y1="'+TOP+'" x2="'+n2(x(c.s))+'" y2="'+BOT+'"/>'
+        +'<text class="wx-dl" x="'+n2(x(c.s)+3)+'" y="'+(TOP+8)+'">'+esc(dt.toLocaleDateString([], {weekday:'short'}))+'</text>'; });
 
     /* ---- temperature ---- */
-    g+='<line class="wx-gl" x1="'+L+'" y1="'+T0+'" x2="'+(W-R)+'" y2="'+T0+'"/>'
-      +'<line class="wx-gl" x1="'+L+'" y1="'+T1+'" x2="'+(W-R)+'" y2="'+T1+'"/>';
-    g+=tag(T0+3, Math.round(tMax)+'°')+tag(T1+3, Math.round(tMin)+'°');
-    const pts=S.map((p,i)=>rd[i].temp==null?null:n2(x(i))+','+n2(ty(rd[i].temp))).filter(Boolean);
+    g+='<line class="wx-gl" x1="0" y1="'+T0+'" x2="'+PW+'" y2="'+T0+'"/>'
+      +'<line class="wx-gl" x1="0" y1="'+T1+'" x2="'+PW+'" y2="'+T1+'"/>';
+    const pts=cols.map((c,i)=>rd[i].temp==null?null:n2(cx(c))+','+n2(ty(rd[i].temp))).filter(Boolean);
     if(pts.length>1){
-      g+='<polygon class="wx-tfill" points="'+L+','+T1+' '+pts.join(' ')+' '+(W-R)+','+T1+'"/>';
+      const x0=n2(cx(cols[0])), x1=n2(cx(cols[cols.length-1]));
+      g+='<polygon class="wx-tfill" points="'+x0+','+T1+' '+pts.join(' ')+' '+x1+','+T1+'"/>';
       g+='<polyline class="wx-temp" points="'+pts.join(' ')+'"/>';
     }
-    rd.forEach((r,i)=>{ if(r.temp!=null) g+='<circle class="wx-dot" cx="'+n2(x(i))+'" cy="'+n2(ty(r.temp))+'" r="1.9"/>'; });
+    rd.forEach((r,i)=>{ if(r.temp!=null) g+='<circle class="wx-dot" cx="'+n2(cx(cols[i]))+'" cy="'+n2(ty(r.temp))+'" r="1.7"/>'; });
     const iHi=rd.findIndex(r=>r.temp===tHi), iLo=rd.findIndex(r=>r.temp===tLo);
-    if(iHi>=0) g+='<text class="wx-tl" x="'+n2(x(iHi))+'" y="'+n2(ty(tHi)-5)+'" text-anchor="middle">'+tHi+'°</text>';
-    if(iLo>=0 && iLo!==iHi) g+='<text class="wx-tl" x="'+n2(x(iLo))+'" y="'+n2(ty(tLo)+11)+'" text-anchor="middle">'+tLo+'°</text>';
+    if(iHi>=0) g+='<text class="wx-tl" x="'+n2(cx(cols[iHi]))+'" y="'+n2(ty(tHi)-5)+'" text-anchor="middle">'+tHi+'°</text>';
+    if(iLo>=0 && iLo!==iHi) g+='<text class="wx-tl" x="'+n2(cx(cols[iLo]))+'" y="'+n2(ty(tLo)+11)+'" text-anchor="middle">'+tLo+'°</text>';
 
     /* ---- rain ---- */
-    g+='<line class="wx-gl wx-dash" x1="'+L+'" y1="'+(RB-RH/2)+'" x2="'+(W-R)+'" y2="'+(RB-RH/2)+'"/>';
-    g+='<line class="wx-ax" x1="'+L+'" y1="'+RB+'" x2="'+(W-R)+'" y2="'+RB+'"/>';
-    g+=tag(RB-RH/2+3, '50%');
-    let wet=0;
+    g+='<line class="wx-gl wx-dash" x1="0" y1="'+(RB-RH/2)+'" x2="'+PW+'" y2="'+(RB-RH/2)+'"/>'
+      +'<line class="wx-ax" x1="0" y1="'+RB+'" x2="'+PW+'" y2="'+RB+'"/>';
+    let wet=-1, wetV=0;
     rd.forEach((r,i)=>{
       if(!r.pop) return;
-      wet++;
+      if(r.pop>wetV){ wetV=r.pop; wet=i; }
       const hgt=Math.max(1.5,(r.pop/100)*RH);
-      g+='<rect class="wx-rain" x="'+n2(x(i)-bw/2)+'" y="'+n2(RB-hgt)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1.5"/>';
+      g+='<rect class="wx-rain" x="'+n2(cx(cols[i])-bw/2)+'" y="'+n2(RB-hgt)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1.5"/>';
     });
-    if(!wet) g+='<text class="wx-xl" x="'+(L+3)+'" y="'+(RB-4)+'">no rain in the forecast</text>';
+    if(wet<0) g+='<text class="wx-xl" x="4" y="'+(RB-4)+'">no rain in the forecast</text>';
+    else if(wetV>=20) g+='<text class="wx-tl" x="'+n2(cx(cols[wet]))+'" y="'+n2(RB-Math.max(1.5,(wetV/100)*RH)-3)+'" text-anchor="middle">'+wetV+'%</text>';
 
     /* ---- wind, as a rider meets it ---- */
-    const wv=rd.map(r=>{
-      if(!r.parts) return null;
-      const k=this.wxKind(r);
-      return {k, v: k==='cross' ? r.parts.cross : abs(r.parts.head)};
-    });
+    const wv=rd.map(r=>{ if(!r.parts) return null; const k=this.wxKind(r); return {k, v: k==='cross'?r.parts.cross:abs(r.parts.head)}; });
     const seen=wv.filter(Boolean);
-    const wMax=Math.max(10, Math.ceil(Math.max.apply(null, seen.length?seen.map(o=>o.v):[0])/5)*5);
-    g+='<line class="wx-ax" x1="'+L+'" y1="'+WZ+'" x2="'+(W-R)+'" y2="'+WZ+'"/>';
-    g+=tag(WZ-WH+7,'head','wx-g-head')+tag(WZ+WH-1,'tail','wx-g-tail');
-    wv.forEach((o,i)=>{
-      // A calm hour draws nothing. A floored minimum bar would put a grey nub on the
-      // line at every still hour, which reads as a light crosswind rather than as calm.
-      if(!o || o.v<1) return;
-      const hgt=Math.max(1.5,(o.v/wMax)*WH), lx=n2(x(i)-bw/2);
-      const y = o.k==='head' ? WZ-hgt : o.k==='tail' ? WZ : WZ-hgt/2;
-      g+='<rect class="wx-b-'+o.k+'" x="'+lx+'" y="'+n2(y)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1"/>';
+    const wMax=Math.max(10, Math.ceil(Math.max.apply(null, seen.length?seen.map(w=>w.v):[0])/5)*5);
+    g+='<line class="wx-ax" x1="0" y1="'+WZ+'" x2="'+PW+'" y2="'+WZ+'"/>';
+    wv.forEach((w,i)=>{
+      // A calm hour draws nothing; a floored bar would read as a light crosswind.
+      if(!w || w.v<1) return;
+      const hgt=Math.max(1.5,(w.v/wMax)*WH);
+      const y = w.k==='head' ? WZ-hgt : w.k==='tail' ? WZ : WZ-hgt/2;
+      g+='<rect class="wx-b-'+w.k+'" x="'+n2(cx(cols[i])-bw/2)+'" y="'+n2(y)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1"/>';
     });
-    // Print the strongest of them, so the panel's scale never has to be inferred.
-    let iw=-1, top=0;
-    wv.forEach((o,i)=>{ if(o && o.v>top){ top=o.v; iw=i; } });
-    if(iw>=0 && top>=3){
-      const o=wv[iw], hgt=(o.v/wMax)*WH;
-      const y = o.k==='head' ? WZ-hgt-3 : o.k==='tail' ? WZ+hgt+8 : WZ-hgt/2-3;
-      g+='<text class="wx-wl wx-'+o.k+'" x="'+n2(x(iw))+'" y="'+n2(y)+'" text-anchor="middle">'+Math.round(top)+' mph</text>';
+    let iw=-1, wtop=0;
+    wv.forEach((w,i)=>{ if(w && w.v>wtop){ wtop=w.v; iw=i; } });
+    if(iw>=0 && wtop>=3){
+      const w=wv[iw], hgt=(w.v/wMax)*WH;
+      const y = w.k==='head' ? WZ-hgt-3 : w.k==='tail' ? WZ+hgt+8 : WZ-hgt/2-3;
+      g+='<text class="wx-wl wx-'+w.k+'" x="'+n2(cx(cols[iw]))+'" y="'+n2(y)+'" text-anchor="middle">'+Math.round(wtop)+' mph</text>';
     }
 
-    /* ---- the clock, thinned so it never collides on a narrow screen ---- */
-    const every=Math.max(1, Math.ceil(S.length/5));
-    S.forEach((p,i)=>{
-      if(i%every && i!==S.length-1) return;
-      const t=new Date(p.when).toLocaleTimeString([], {hour:'numeric'}).replace(/\s?([AP])M/i,(m,a)=>a.toLowerCase());
-      const anch=i===0?'start':i===S.length-1?'end':'middle';
-      g+='<text class="wx-xl" x="'+n2(x(i))+'" y="190" text-anchor="'+anch+'">'+esc(t)+'</text>';
+    /* ---- the arrival, marked where you'd roll in ---- */
+    const ax=x(o.when);
+    if(ax>=-1 && ax<=PW+1){
+      g+='<line class="wx-arr" x1="'+n2(ax)+'" y1="'+TOP+'" x2="'+n2(ax)+'" y2="'+BOT+'"/>';
+      const anch = ax>PW-52 ? 'end' : 'start', lx = ax + (anch==='end'?-3:3);
+      g+='<text class="wx-arrl" x="'+n2(lx)+'" y="'+(TOP+8)+'" text-anchor="'+anch+'">arrive '+esc(this.wxClock(o.when))+'</text>';
+    }
+
+    /* ---- the clock, every three hours the way the NWS strip reads ---- */
+    cols.forEach((c,i)=>{
+      const dt=new Date(c.s);
+      if(dt.getHours()%3!==0 && i!==0 && i!==cols.length-1) return;
+      const t=dt.toLocaleTimeString([], {hour:'numeric'}).replace(/\s?([AP])M/i,(m,a)=>a.toLowerCase());
+      g+='<text class="wx-xl" x="'+n2(cx(c))+'" y="190" text-anchor="middle">'+esc(t)+'</text>';
     });
-    return g+'</svg>';
+
+    /* ---- the fixed gutter: the scales that would otherwise scroll off ---- */
+    const gut='<text class="wx-gt" x="'+(GUT-3)+'" y="'+(T0+3)+'" text-anchor="end">'+Math.round(tMax)+'°</text>'
+      +'<text class="wx-gt" x="'+(GUT-3)+'" y="'+(T1+3)+'" text-anchor="end">'+Math.round(tMin)+'°</text>'
+      +'<text class="wx-gt" x="'+(GUT-3)+'" y="'+(RB-RH/2+3)+'" text-anchor="end">50%</text>'
+      +'<text class="wx-gt wx-g-head" x="'+(GUT-3)+'" y="'+(WZ-WH+7)+'" text-anchor="end">head</text>'
+      +'<text class="wx-gt wx-g-tail" x="'+(GUT-3)+'" y="'+(WZ+WH-1)+'" text-anchor="end">tail</text>';
+
+    return '<div class="wx-town-chart">'
+      +'<svg class="wx-gut" width="'+GUT+'" height="'+H+'" viewBox="0 0 '+GUT+' '+H+'" aria-hidden="true">'+gut+'</svg>'
+      +'<div class="wx-scroll"><svg class="wx-plot" width="'+PW+'" height="'+H+'" viewBox="0 0 '+PW+' '+H+'" role="img" '
+        +'aria-label="Hour by hour at '+esc(this.shortTown(o.t.n))+': temperature, rain chance, and head or tail wind, running into the night">'
+        +g+'</svg></div></div>';
   }
   renderOutlook(){
     const el=this.$('wxOut'); if(!el) return;
     const pl=this.wxPlan;
     const echo=this.$('wxSpeedEcho'); if(echo) echo.textContent=this.avgSpeed;
-    if(!pl){ el.innerHTML='<div class="up-empty">Set a day\u2019s distance and press the button. The forecast comes from the US National Weather Service, so it only asks when you ask.</div>'; return; }
+    if(!pl){ el.innerHTML='<div class="up-empty">Set your miles a day and press the button. It reads the US National Weather Service where you’d be at each town along the way, so it only asks when you ask.</div>'; return; }
     if(pl.err){ el.innerHTML='<div class="up-empty">'+esc(pl.err)+'</div>'; return; }
-    if(pl.loading){ el.innerHTML='<div class="up-empty">Reading the forecast along your route\u2026</div>'; return; }
-    if(!pl.got){ el.innerHTML='<div class="up-empty">No answer from api.weather.gov. It covers the whole trail, but it does go down \u2014 worth another try in a minute.</div>'; return; }
-    const sp=this.avgSpeed>0?this.avgSpeed:12;
-    let h='';
-    pl.legs.forEach(leg=>{
-      const dt=new Date(this.wxDepart(leg.d));
-      const day=dt.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
-      const hrs=leg.miles/sp;
-      h+='<div class="wx-day"><div class="wx-day-h"><span class="wx-day-n">Day '+(leg.d+1)+'</span>'
-        +'<span class="wx-day-d">'+esc(day)+'</span>'
-        +'<span class="wx-day-m">'+fmtWin(leg.miles)+' mi \u00b7 ~'+(hrs<1?Math.round(hrs*60)+' min':fmtWin(Math.round(hrs*10)/10)+'h')+'</span>'
-        +'</div>';
-      const tA=this.townLabel(this.nearestTown(leg.from)), tB=this.townLabel(this.nearestTown(leg.to));
-      if(tA && tB) h+='<div class="wx-day-tw">'+esc(tA)+' \u2192 '+esc(tB)+'</div>';
-      h+='<div class="wx-day-tm">TM '+fmtMp(leg.from)+' \u2192 '+fmtMp(leg.to)+'</div>';
-      const s=leg.sum;
-      if(!s){ h+='<div class="wx-none">No forecast came back for this stretch.</div>'; }
-      else{
-        const bits=[];
-        if(s.short) bits.push(esc(s.short));
-        if(s.tLo!=null) bits.push(s.tLo===s.tHi ? s.tLo+'\u00b0'+s.unit : s.tLo+'\u2013'+s.tHi+'\u00b0'+s.unit);
-        if(s.pop) bits.push('rain '+s.pop+'%');
-        h+='<div class="wx-day-w">'+bits.join(' \u00b7 ')+'</div>';
-        const ww=this.windWord(s.head, s.cross);
-        h+='<div class="wx-wind wx-'+ww.cls+'">'+icon('wind',15)+'<span>'+esc(ww.txt)+'</span></div>';
-        h+=this.wxChart(leg);
-        h+='<div class="wx-key"><span class="wx-k-t">temp</span><span class="wx-k-r">rain %</span>'
-          +'<span class="wx-k-h">headwind</span><span class="wx-k-l">tailwind</span><span class="wx-k-c">crosswind</span></div>';
-        const ov=this.wxOvernight(leg);
-        if(ov){
-          const nb=[];
-          if(ov.lo!=null) nb.push('low '+ov.lo+'\u00b0'+ov.unit);
-          if(ov.pop) nb.push('rain '+ov.pop+'%');
-          if(ov.short) nb.push(esc(ov.short).toLowerCase());
-          const tn=this.nearestTown(leg.to);
-          h+='<div class="wx-night"><b>Overnight'+(tn?' at '+esc(this.shortTown(tn.t.n)):'')+'</b> \u00b7 '
-            +nb.join(' \u00b7 ')+'</div>';
-        }
-      }
-      h+='</div>';
-    });
-    const at=new Date(pl.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
-    const a0=(pl.legs&&pl.legs[0]&&pl.legs[0].anchors&&pl.legs[0].anchors[0])||null;
-    h+='<div class="wx-asof">Forecast read at '+esc(at)+' \u00b7 sampled at '+sp+' mph, starting 8am each day'
-      +(a0&&a0.lat!=null?' · <a href="'+nwsLink(a0.lat,a0.lng)+'" target="_blank" rel="noopener">weather.gov</a>':'')
+    if(pl.loading){ el.innerHTML='<div class="up-empty">Reading the forecast town by town…</div>'; return; }
+    if(!pl.got){ el.innerHTML='<div class="up-empty">No answer from api.weather.gov. It covers the whole trail, but it does go down — worth another try in a minute.</div>'; return; }
+    let h='<div class="wx-key"><span class="wx-k-t">temp</span><span class="wx-k-r">rain %</span>'
+      +'<span class="wx-k-h">headwind</span><span class="wx-k-l">tailwind</span><span class="wx-k-c">crosswind</span>'
+      +'<span class="wx-k-scroll">swipe a strip for the night →</span></div>';
+    pl.towns.forEach(o=>{
+      const nm=this.shortTown(o.t.n);
+      const day=new Date(o.when).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+      const dist=o.ahead<=0.3 ? 'you’re here' : fmtWin(o.ahead)+' mi ahead';
+      h+='<div class="wx-town">'
+        +'<div class="wx-town-h">'
+          +'<a class="wx-town-n" href="'+nwsLink(o.t.lat,o.t.lng)+'" target="_blank" rel="noopener">'
+            +esc(nm)+'<span class="wx-town-ext"> ↗</span></a>'
+          +'<span class="wx-town-d">'+esc(dist)+'</span>'
+        +'</div>'
+        +'<div class="wx-town-sub">TM '+fmtMp(o.mile)+' · arrive '+esc(day)+' '+esc(this.wxClock(o.when))+'</div>'
+        +this.townChart(o)
       +'</div>';
+    });
+    if(pl.truncated) h+='<div class="wx-none">Showing the nearest '+WX_MAX_TOWNS+' towns — the hourly forecast thins out past here anyway, and the rest come into range as you ride.</div>';
+    const at=new Date(pl.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    h+='<div class="wx-asof">Forecast read at '+esc(at)+' · arrivals figured at '+(this.avgSpeed>0?this.avgSpeed:12)+' mph, each day resuming at 8am. Tap a town for its full weather.gov page.</div>';
     el.innerHTML=h;
   }
 
@@ -3105,6 +3198,18 @@ class TrailApp {
     // Held onto so buildPOILayers can hang facility overlays off it once the
     // live data lands — this control is now the only place map pins get toggled.
     this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright',collapsed:true}).addTo(map);
+    /* Leaflet drops this in the top-right corner, under the notch and out of a thumb's
+       reach. Move it down into the FAB stack, where the rest of the map controls live —
+       it's just a div, its events ride with it, and anchored to the panel it now travels
+       up and down with the sheet like every other button. It sits at the foot of the
+       stack, nearest the thumb, and its list opens upward into the space above. */
+    const fabs=document.querySelector('.map-fabs'), lcEl=this.layersCtl.getContainer();
+    if(fabs && lcEl){
+      lcEl.classList.add('fab-layers');
+      const tog=lcEl.querySelector('.leaflet-control-layers-toggle');
+      if(tog){ tog.innerHTML=icon('layers',22); tog.title='Map layers'; }
+      fabs.appendChild(lcEl);
+    }
     const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
     const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
     const rtPane=this.lyrPane('route');
@@ -3172,7 +3277,13 @@ class TrailApp {
     this.regLayer('wx', this.wxLayer,'Wind &amp; weather');
     map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
     map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.wxAt0=null; this.renderMapSheet(); } });
-    map.on('click',e=>this.tapPopup(e.latlng));
+    /* A plain click used to open the "This spot" dialog on every tap, which fought you
+       for the map — pan, pinch, or just glance and it was in your face. The dialog is a
+       deliberate gesture now: right-click on the web, a long press on a phone. A normal
+       tap does nothing but let you read the map. Both paths run through tapPopup, which
+       de-dupes them so a long press that also fires a contextmenu only opens once. */
+    map.on('contextmenu',e=>{ if(e.originalEvent) L.DomEvent.preventDefault(e.originalEvent); this.tapPopup(e.latlng); });
+    this.wireMapLongPress(map);
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
     setTimeout(()=>{ map.invalidateSize(); this.renderMileposts(); },120);
@@ -3180,16 +3291,25 @@ class TrailApp {
       this.setMyLocation(this.myLL.lat,this.myLL.lng);
       this.status('Showing your last known position — tap Locate to update it.');
     }
+    // Pins you dropped from a "Find nearby" search, back where you left them.
+    this.restoreSearches();
     // live data
     const stat=this.$('poiStat'); if(stat) stat.textContent='Loading live data from the NY State service…';
     Promise.allSettled([
-      this.fetchAllPOIs().then(n=>{ this.buildPOILayers(); return n; }),
-      this.fetchRouteLine().then(feats=>{ this.drawLiveRoute(feats); return feats.length; })
-    ]).then(([poi,route])=>{
+      this.fetchAllPOIs(),
+      this.fetchRouteLine().then(feats=>{ this.drawLiveRoute(feats); return feats.length; }),
+      this.loadBundledPois()
+    ]).then(([poi,route,bundled])=>{
+      // State POIs are already in this.POIS from fetchAllPOIs; fold the bundled corridor
+      // in behind them and reindex once, then build every category's layer in one pass.
+      const nb = bundled.status==='fulfilled' ? bundled.value : [];
+      if(nb.length){ this.POIS.push(...nb); this.POIS.forEach((p,i)=>{ p.i=i; }); }
+      this.buildPOILayers();
       if(stat){
         const pmsg = poi.status==='fulfilled' ? poi.value+' live facilities loaded' : 'live facilities offline (lists still work)';
         const rmsg = route.status==='fulfilled' ? 'route line live from ArcGIS' : 'route from embedded GPX';
-        stat.textContent = pmsg+' · '+rmsg+'.';
+        const nmsg = nb.length ? ' · '+nb.length+' bundled within 5 mi' : '';
+        stat.textContent = pmsg+' · '+rmsg+nmsg+'.';
       }
       this.renderNext(); this.renderCategories(); this.renderNearby();
     });
@@ -3245,6 +3365,12 @@ class TrailApp {
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
     const lk=['<button type="button" class="pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
     const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
+    // The same two links a tapped spot gets — opening the place in Google Maps (searched
+    // by name so it lands on the business, not a bare pin) and Street View. Every pin on
+    // the map now answers "where is this, really" the same way a bare map tap does.
+    const gq=[p.name,p.addr].filter(Boolean).join(' ') || (p.lat.toFixed(6)+','+p.lng.toFixed(6));
+    lk.push('<a href="'+searchAt(gq,p.lat,p.lng)+'" target="_blank" rel="noopener">Google Maps</a>');
+    lk.push('<a href="'+panoLink(p.lat,p.lng)+'" target="_blank" rel="noopener">Street View</a>');
     // Campgrounds get reviews too — same question a rider is asking of a motel.
     const stay=(p.asset==='Lodging'||p.asset==='Campground');
     if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
@@ -3255,10 +3381,13 @@ class TrailApp {
     /* Said plainly, because a volunteer map and a state asset register are worth
        different amounts of trust when you are deciding to ride nine miles for a
        shower — and because whoever mapped it can be told if it has closed. */
-    if(p.src==='osm' && p.osmId)
+    if((p.src==='osm'||p.src==='bundled') && p.osmId)
       lk.push('<a href="https://www.openstreetmap.org/'+esc(p.osmId)+'" target="_blank" rel="noopener">OpenStreetMap</a>');
+    const osmNote = p.src==='bundled'
+      ? 'Bundled from OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
+      : p.src==='osm' ? 'Mapped by OpenStreetMap contributors \u2014 hours and whether it\u2019s still there are worth a call.' : '';
     return h+'<br>'+lk.join(' \u00b7 ')
-      +(p.src==='osm'?'<div class="poi-src">Mapped by OpenStreetMap contributors \u2014 hours and whether it\u2019s still there are worth a call.</div>':'');
+      +(osmNote?'<div class="poi-src">'+osmNote+'</div>':'');
   }
   async fetchAllPOIs(){
     const res=await Promise.allSettled(POI_SOURCES.map(async src=>{
@@ -3272,6 +3401,33 @@ class TrailApp {
     // Index doubles as the handle a list row hands back to open the right popup.
     this.POIS.forEach((p,i)=>{ p.i=i; });
     return this.POIS.length;
+  }
+  /* The bundled corridor: OpenStreetMap within 5 mi of the whole route, pulled once by
+     tools/fetch_nearby_pois.py and shipped as data/pois-nearby.json, so these are on the map
+     without ever asking Overpass. Trail mile and off-route distance are precomputed at
+     build time — thousands of route projections don't belong in a page load. Returns the
+     POI objects rather than pushing them, so initMap merges them after the State list is
+     in and reindexes once. A missing or unreadable file is simply no bundled layer. */
+  async loadBundledPois(){
+    let data;
+    try{
+      const r=await fetch('data/pois-nearby.json',{cache:'force-cache'});
+      if(!r.ok) return [];
+      data=await r.json();
+    }catch(e){ return []; }
+    if(!Array.isArray(data)) return [];
+    const out=[];
+    data.forEach(o=>{
+      const lat=+o.y, lng=+o.x;
+      if(!isFinite(lat) || !isFinite(lng) || !CATCFG[o.c]) return;
+      const off=isFinite(+o.o)?+o.o:null;
+      if(off!=null && off>5.2) return;                 // safety net; the file is pre-filtered
+      const p={asset:o.c, name:o.n||CATCFG[o.c].label, sub:'', addr:o.a||'', phone:o.p||'',
+        url:o.u||'', src:'bundled', lat, lng, mile:isFinite(+o.m)?+o.m:null, off:off==null?999:off};
+      if(o.id) p.osmId=String(o.id);
+      out.push(p);
+    });
+    return out;
   }
   /* Map pins, feeding Leaflet's own layers control. Visibility comes from the same
      catHidden set the Nearby chips read, so a pin and its row appear and disappear

@@ -68,7 +68,11 @@
   .dir-note{font-size:13px;font-family:var(--font-body);color:var(--color-neutral-600);font-weight:400}
 
   /* ---- map screen ---- */
-  #map{position:absolute;inset:0;background:var(--color-neutral-200)}
+  #map{position:absolute;inset:0;background:var(--color-neutral-200);-webkit-touch-callout:none}
+  /* Popups keep the iOS callout so addresses and phone numbers stay long-press-copyable —
+     only the bare map surface suppresses it, so a long press there opens our spot dialog
+     instead of the system magnifier. */
+  .leaflet-popup-content,.leaflet-popup-content *{-webkit-touch-callout:default}
   /* The FABs and the sheet share one bottom-anchored stack, so the buttons always
      clear the sheet no matter how tall it grows (empty state vs. a wrapped stop
      name). Anchoring them at a fixed offset instead only holds for one sheet
@@ -118,7 +122,11 @@
     background:var(--color-bg);border-top:1px solid var(--color-divider);
     border-radius:var(--radius-lg) var(--radius-lg) 0 0;
     box-shadow:0 -6px 24px color-mix(in srgb,var(--color-neutral-900) 14%,transparent);
-    transition:height .24s ease}
+    transition:height .24s ease, bottom .22s ease}
+  /* When the dock hides, the sheet reaches to the very bottom and reclaims its strip.
+     Its raised heights grow to match in JS, so its top stays put and the list you were
+     reading doesn't jump — it just gains the freed room at the foot. */
+  .phone-app.dock-hidden .map-panel{bottom:0}
   .map-panel.is-dragging{transition:none}
   /* Anchored to the panel's own top edge, so they ride up and down with it and never
      end up underneath it — which a fixed offset from the viewport could not manage. */
@@ -153,6 +161,24 @@
   .poi-chip .chip-p{padding-left:3px;border-left:1px solid var(--color-divider);
     color:var(--color-text);font-variant-numeric:tabular-nums}
   .poi-chip.has-price{border-width:2px}
+  /* A pin you dropped from a Find-nearby search: magenta, the app's rare second spot
+     colour, so it never reads as one of the trail's own facilities. Anchored at 0,0 and
+     lifted above its point with a little tail, like a dropped marker. */
+  .srch-ic{background:none;border:0;overflow:visible}
+  .srch-pin{position:absolute;left:0;top:0;transform:translate(-50%,calc(-100% - 5px));
+    display:inline-flex;align-items:center;gap:3px;padding:2px 7px;white-space:nowrap;
+    font-family:var(--font-body);font-size:11px;line-height:1.15;color:#fff;
+    background:var(--color-accent-2);border-radius:999px;box-shadow:var(--shadow-md)}
+  .srch-pin .ic{flex:none;color:#fff}
+  .srch-pin b{font-weight:700}
+  .srch-pin::after{content:"";position:absolute;left:50%;bottom:-4px;transform:translateX(-50%);
+    border:5px solid transparent;border-top-color:var(--color-accent-2);border-bottom:0}
+  .srch-pop .srch-cd{font-size:11px;color:var(--color-neutral-600);margin:3px 0 6px;
+    font-variant-numeric:tabular-nums}
+  .srch-rm{margin-top:8px;width:100%;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;
+    padding:6px 8px;background:transparent;color:var(--color-accent-2);
+    border:1px solid var(--color-accent-2);border-radius:var(--radius-md)}
+  .srch-rm:hover{background:color-mix(in srgb,var(--color-accent-2) 10%,transparent)}
   /* A rate you saved, in the row and in the popup. */
   .poi-pr{flex:0 0 auto;font-size:11px;font-weight:700;color:var(--color-text);
     font-variant-numeric:tabular-nums}
@@ -277,6 +303,35 @@
   .wx-wind{display:flex;align-items:center;gap:5px;margin-top:3px;font-size:12px;font-weight:400}
   .wx-wind .ic{flex:none}
   .wx-asof{font-size:11px;color:var(--color-neutral-500);border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
+  /* Outlook, a town at a time — each an NWS-style hourly strip, the town linked out to
+     its own weather.gov page. */
+  .wx-town{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
+  .wx-town-h{display:flex;align-items:baseline;gap:8px}
+  .wx-town-n{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:16px;
+    color:var(--color-accent-800);text-decoration:none}
+  .wx-town-n:hover{text-decoration:underline}
+  .wx-town-ext{font-size:12px;color:var(--color-accent);font-weight:400}
+  .wx-town-d{flex:none;margin-left:auto;font-size:12px;color:var(--color-neutral-600);
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  .wx-town-sub{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums;margin:1px 0 2px}
+  /* The chart in two parts: a fixed gutter that carries the scales, and a strip that
+     scrolls under it. The scrollbar is hidden by design — the night is reached by a
+     swipe, not by chrome that eats a row of height. */
+  .wx-town-chart{display:flex;align-items:flex-start;margin-top:3px}
+  .wx-gut{flex:none;overflow:visible}
+  .wx-scroll{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;
+    scrollbar-width:none;-ms-overflow-style:none}
+  .wx-scroll::-webkit-scrollbar{display:none}
+  .wx-plot{display:block}
+  .wx-nite{fill:var(--color-neutral-800);opacity:.07}
+  .wx-mid{stroke:var(--color-neutral-400);stroke-width:1;opacity:.55}
+  .wx-dl{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:8px;font-weight:600}
+  .wx-arr{stroke:var(--color-accent);stroke-width:1.5;stroke-dasharray:3 2}
+  .wx-arrl{fill:var(--color-accent-800);font-family:var(--font-body);font-size:8.5px;font-weight:700}
+  .wx-k-scroll{color:var(--color-neutral-500);font-style:italic}
+  .wx-k-scroll::before{display:none}
   /* Zoom is one control in two halves, so it sits tighter than the gap between the
      independent FABs above it. */
   .fab-pair{display:flex;flex-direction:column;gap:4px}
@@ -552,6 +607,20 @@
     max-height:calc(100vh - 200px);overflow-y:auto}
   .leaflet-control-layers-selector{accent-color:var(--color-accent)}
   .leaflet-control-layers label{line-height:1.9;white-space:nowrap}
+  /* The layers control, moved out of the notch and into the FAB stack: collapsed it's
+     a FAB like the rest; expanded it's a card that opens into the space above the sheet
+     (the stack is bottom-anchored, so growing taller pushes it up, not down over the
+     panel). Leaflet's own toggle sprite is swapped for our layers glyph. */
+  .leaflet-control-layers.fab-layers{margin:0;background:transparent;border:0;box-shadow:none}
+  .leaflet-control-layers.fab-layers .leaflet-control-layers-toggle{
+    width:46px;height:46px;background-image:none;display:grid;place-items:center;
+    background:var(--color-bg);color:var(--color-accent);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
+  .leaflet-control-layers.fab-layers .leaflet-control-layers-toggle:hover{background:var(--color-accent-100)}
+  .leaflet-control-layers.fab-layers.leaflet-control-layers-expanded{
+    background:var(--color-bg);border:1px solid var(--color-divider);
+    border-radius:var(--radius-md);box-shadow:var(--shadow-md);
+    padding:var(--space-2) var(--space-3);width:max-content;max-width:78vw}
   /* A draggable row: the grip sits outside the label, so a drag can't end in a toggle. */
   .lyr-row{display:flex;align-items:center;gap:6px}
   .lyr-row.dragging{opacity:.9;background:var(--color-accent-100);border-radius:var(--radius-md)}
@@ -760,7 +829,7 @@
         </div>
         <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
         <div id="wxOut" class="wx-out"></div>
-        <p class="poi-band-note">Forecast from the US National Weather Service (api.weather.gov), read where you’d be at <b id="wxSpeedEcho">12</b> mph rather than where you are now. NWS hourly runs about six days out, so you get all six.</p>
+        <p class="poi-band-note">One hourly strip per town coming up, from the US National Weather Service (api.weather.gov). <b>Miles a day</b> sets how far ahead it looks and where each night’s stop falls; your riding speed (in More, currently <b id="wxSpeedEcho">12</b> mph) sets the hour you’d roll into each town. Each strip runs into the night — swipe it left to read the overnight. Tap a town name for its full weather.gov page.</p>
       </div>
     </section>
 
@@ -768,7 +837,8 @@
       <div class="screen-pad">
         <h1 class="screen-title">More</h1>
         <label class="switch"><input type="checkbox" id="showPassed"> Show stops I’ve already passed</label>
-        <label class="switch"><input type="checkbox" id="tapToSet" checked> Tapping the map can move my location</label>
+        <label class="switch"><input type="checkbox" id="tapToSet" checked> Let the map spot dialog move my location</label>
+        <p class="poi-band-note" style="margin-top:2px">Long-press the map (or right-click on the web) to open a spot with its trail mile, Google Maps, Street View and a Find-nearby row. A plain tap just reads the map. This switch only controls whether that dialog can also move your location.</p>
         <label class="switch"><input type="checkbox" id="showTrip"> Show the Trip tab</label>
         <label class="switch"><input type="checkbox" id="showWx" checked> Show the Outlook tab</label>
         <div class="feat-list-lbl">Average riding speed</div>
