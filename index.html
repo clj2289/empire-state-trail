@@ -437,6 +437,9 @@
   .feat.dragging{opacity:.9;border-color:var(--color-accent);box-shadow:0 2px 8px rgba(0,0,0,.18)}
   .feat-hint{font-size:11px;color:var(--color-neutral-500);margin:var(--space-2) 0 var(--space-4);line-height:1.5}
   .lyr-ct{color:var(--color-neutral-500);font-variant-numeric:tabular-nums;font-size:11px}
+  /* "zoom in" / "loading…" in place of a count — a word, not a number, so it drops
+     the tabular figures and leans italic to read as a note about the row. */
+  .lyr-ct.is-note{font-variant-numeric:normal;font-style:italic;opacity:.85}
   /* A borrowed layer names its source: the link opens it, the chip beside it and the
      box still toggle the layer, because a link inside a label doesn't trip the label. */
   .lyr-src{color:var(--color-accent-700);text-decoration:underline;text-underline-offset:2px}

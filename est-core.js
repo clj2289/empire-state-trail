@@ -99,6 +99,24 @@ const ME_BLUE='#1a73e8', ME_PANE='mePane';
 const OFF_TRAIL_MI=60;
 // Zoom at which pins start showing their names beside them.
 const POI_LABEL_Z=13;
+/* Leaflet does not cull markers to the viewport: L.Marker.onAdd builds the icon
+   element there and then and keeps it, on screen or not. The bundled corridor is
+   nine thousand pins at roughly ten DOM nodes each, so switching it on used to hang
+   ninety thousand nodes off the map stretching from Buffalo to Manhattan — every one
+   of them repositioned by Leaflet on every zoom, and every one restyled when the
+   label class flips at POI_LABEL_Z. These two numbers are what keeps that down to
+   what a rider could actually be looking at.
+   Below CULL_MIN_Z the corridor is an unreadable smear of overlapping dots anyway,
+   and the viewport is most of the state — so nothing is drawn and the row in the
+   layers control says why. Eleven is about a day's riding across, which is the
+   widest view the corridor still answers a question at.
+   CULL_PAD keeps a margin live beyond the edge so a short pan reveals pins that are
+   already there rather than building them mid-drag. A quarter each way is half again
+   the viewport in each direction and 2.25x its area — the densest stretch of the
+   route is Albany, and past about this the margin costs more pins than the pan it
+   smooths is worth. */
+const CULL_MIN_Z=11;
+const CULL_PAD=0.25;
 /* Above every pane Leaflet ships (popups are the highest at 700) and every pane the
    layer registry makes at 600, so a hovered pin is never behind anything. */
 const HI_PANE_Z='1200';
@@ -602,6 +620,13 @@ class TrailApp {
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.mileLayer=null; this.mileSig='';
+    /* Categories whose pins are built and thrown away as the view moves, keyed by
+       category: the items to scan, what to build them with, and the ones standing
+       right now. See CULL_MIN_Z. */
+    this.cullCats={};
+    // What the standing pins were last built for: the padded box, and a signature of
+    // the zoom, the layers that were on and how much data they had. See cullRefresh.
+    this.cullBox=null; this.cullSig='';
     // Overlays by key, the order they were registered in, and the order the rider
     // has dragged them into — the last of these is the only one that is saved.
     this.lyrByKey={}; this.lyrKeyById={}; this.lyrSeq=[]; this.lyrOrder=[];
@@ -2127,6 +2152,9 @@ class TrailApp {
       this.wireDrag(row, row.parentElement, '.lyr-row', '.lyr-grip', 'y', commit);
     });
     this.applyLyrOrder();
+    // 5. Leaflet rebuilt these labels from its stored strings, so any count that
+    //    depends on the view has to be written back over the top of them.
+    this.cullNote();
   }
   /* The POI rows for one source, folded under a header carrying a group on/off box
      (indeterminate when only some children are lit) and a caret. The children keep
@@ -3062,7 +3090,7 @@ class TrailApp {
        looking at. Redrawn on moveend — which is also what a zoom ends in. */
     this.mileLayer=L.layerGroup().addTo(map);
     this.regLayer('miles', this.mileLayer,'Mileposts');
-    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
+    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); this.cullRefresh(); });
     map.on('zoomend',()=>this.syncPoiLabels());
     this.syncPoiLabels();
     /* The other half of the coupling: a facility layer switched from Leaflet's own
@@ -3076,7 +3104,7 @@ class TrailApp {
       if(e.type==='overlayadd') this.catHidden.delete(cat); else this.catHidden.add(cat);
       // A child toggled from the control's own box leaves its parent header's count
       // and half-lit state stale — refresh the grouping too, not just the chips.
-      this.savePrefs(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
+      this.savePrefs(); this.cullRefresh(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
     });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
     /* Both off until asked for, and both borrowed, so both name their source in the
@@ -3255,6 +3283,15 @@ class TrailApp {
     });
     return out;
   }
+  /* One pin, however it came to be built — the eager pass below and the culled one
+     have to produce the same marker or a pin would behave differently depending on
+     which side of CULL_MIN_Z it was born on. */
+  poiPin(p, cfg, pane){
+    const mk=L.marker([p.lat,p.lng],{pane, icon:this.poiIcon(p,cfg)});
+    mk.bindPopup('',{maxWidth:280,minWidth:200,autoPan:false});
+    mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
+    return mk;
+  }
   /* Map pins, feeding Leaflet's own layers control. Visibility comes from the same
      catHidden set the Nearby chips read, so a pin and its row appear and disappear
      together — see setCatVisible. */
@@ -3264,18 +3301,97 @@ class TrailApp {
     // as they rearrange the browse list.
     [...new Set([...CAT_ORDER, ...Object.keys(byCat)])].forEach(asset=>{
       const items=byCat[asset]; if(!items||!items.length) return;
+      const bundled=catGrp(asset)==='bundled';
       const cfg=catCfg(asset), g=L.layerGroup(), def=!this.catHidden.has(asset);
       const pane=this.lyrPane('poi:'+asset);
-      items.forEach(p=>{
-        const mk=L.marker([p.lat,p.lng],{pane, icon:this.poiIcon(p,cfg)});
-        mk.bindPopup('',{maxWidth:280,minWidth:200,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
-        this.poiMarker[p.i]=mk;
-        g.addLayer(mk);
-      });
+      /* The State's few hundred pins stay standing: they are small enough not to
+         matter, and leaving them alone keeps the list-hover-highlights-its-pin
+         coupling exactly as it was for the list that actually uses it. The corridor's
+         nine thousand are culled to the view — see CULL_MIN_Z. */
+      if(bundled) this.cullCats[asset]={items, cfg, pane, live:new Map()};
+      else items.forEach(p=>{ const mk=this.poiPin(p,cfg,pane); this.poiMarker[p.i]=mk; g.addLayer(mk); });
       // A rebuild must not switch a layer off under the rider, nor on.
       const show = was && Object.prototype.hasOwnProperty.call(was,asset) ? was[asset] : def;
       this.poiLayers[asset]=g; if(show) g.addTo(this.map);
-      this.regLayer('poi:'+asset, g, esc(cfg.label)+' <span class="lyr-ct">'+items.length+'</span>');
+      /* A trail count is fixed and belongs in the label. A culled one depends on the
+         zoom, so its span is left empty for cullNote to write — Leaflet restores this
+         string over the top of it on every rebuild, which is why that runs again at
+         the end of decorateLayers. */
+      this.regLayer('poi:'+asset, g, esc(cfg.label)
+        +' <span class="lyr-ct">'+(bundled?'':items.length)+'</span>');
+    });
+    this.cullRefresh();
+  }
+  /* ---- viewport culling ---- */
+  /* A linear scan of the category rather than a spatial index, deliberately: nine
+     thousand pairs of float comparisons is a fraction of a millisecond, it runs on
+     moveend rather than on every frame of a pan, and an index is one more structure
+     to keep true as layers load. The cost that mattered here was always the DOM. */
+  cullRefresh(){
+    const m=this.map, cats=Object.keys(this.cullCats);
+    if(!m || !cats.length) return;
+    const z=m.getZoom(), deep=z>=CULL_MIN_Z, view=m.getBounds();
+    /* The margin is only worth its pins if it also buys the pans inside it. A short
+       drag ends with the viewport still inside what was last built, showing the same
+       layers over the same data — and then there is nothing to do and no reason to
+       walk nine thousand rows to find that out.
+       A signature rather than a dirty flag set by each toggle: it derives what the
+       view should be showing from the state that decides it, so a path that changes
+       visibility cannot forget to declare it. */
+    const on=cats.filter(c=>deep && !this.catHidden.has(c) && this.poiLayers[c] && m.hasLayer(this.poiLayers[c]));
+    const sig=z+'|'+on.map(c=>c+':'+this.cullCats[c].items.length).join(',');
+    if(sig===this.cullSig && (!deep || (this.cullBox && this.cullBox.contains(view)))) return;
+    this.cullSig=sig;
+    this.cullBox=deep?view.pad(CULL_PAD):null;
+    let s=0,n=0,w=0,e=0;
+    if(deep){
+      const b=this.cullBox;
+      s=b.getSouth(); n=b.getNorth(); w=b.getWest(); e=b.getEast();
+    }
+    cats.forEach(cat=>{
+      const st=this.cullCats[cat], g=this.poiLayers[cat];
+      if(!g) return;
+      const live=st.live;
+      // A layer switched off keeps nothing alive. Its pins would have no DOM sitting
+      // in a group that is off the map, but they would still be nine thousand objects
+      // and nine thousand icon strings held for a view nobody asked for.
+      const want=deep && !this.catHidden.has(cat) && m.hasLayer(g);
+      if(!want){
+        if(live.size){ live.forEach((mk,p)=>{ g.removeLayer(mk); delete this.poiMarker[p.i]; }); live.clear(); }
+        return;
+      }
+      // Retire first, so the peak node count is the union of two viewports rather
+      // than the whole state briefly holding both.
+      live.forEach((mk,p)=>{
+        if(p.lat>=s && p.lat<=n && p.lng>=w && p.lng<=e) return;
+        g.removeLayer(mk); delete this.poiMarker[p.i]; live.delete(p);
+      });
+      st.items.forEach(p=>{
+        if(live.has(p) || p.lat<s || p.lat>n || p.lng<w || p.lng>e) return;
+        const mk=this.poiPin(p, st.cfg, st.pane);
+        live.set(p,mk); this.poiMarker[p.i]=mk; g.addLayer(mk);
+      });
+    });
+    this.cullNote();
+  }
+  /* What the count on a culled row means depends on the zoom, and a number for pins
+     that are deliberately not drawn is a lie the rider has no way to see through.
+     Written straight into the row because Leaflet rebuilds its labels from the stored
+     string on every layer change — so this reapplies after decorateLayers, and again
+     whenever the view moves it across the threshold. */
+  cullNote(){
+    const ctl=this.layersCtl;
+    const box=ctl&&ctl._container?ctl._container.querySelector('.leaflet-control-layers-overlays'):null;
+    if(!box || !this.map) return;
+    const far=this.map.getZoom()<CULL_MIN_Z;
+    Object.keys(this.cullCats).forEach(cat=>{
+      const row=box.querySelector('.lyr-row[data-lyr="poi:'+cat+'"]');
+      const el=row?row.querySelector('.lyr-ct'):null;
+      if(!el) return;
+      const st=this.cullCats[cat], on=!this.catHidden.has(cat);
+      const far2 = far && on;
+      el.textContent = far2 ? 'zoom in' : String(st.items.length);
+      el.classList.toggle('is-note', far2);
     });
   }
 
@@ -3300,7 +3416,8 @@ class TrailApp {
     this.applyCatVis(cat, on);
     // The parent's own box and counts are derived from its children, so a child
     // toggle has to redraw the header above it — the chip tree and the TOC group.
-    this.savePrefs(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
+    // One cull for the whole action, after the visibility has settled.
+    this.savePrefs(); this.cullRefresh(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
   }
   /* A whole source at once. Turning OpenStreetMap's fifteen hundred pins off is the
      common case, and doing it six chips at a time was the reason to group them. */
@@ -3308,7 +3425,7 @@ class TrailApp {
     const byCat=this.poisByCat();
     Object.keys(byCat).filter(c=>catGrp(c)===grp && byCat[c].length)
       .forEach(c=>this.applyCatVis(c, on));
-    this.savePrefs(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
+    this.savePrefs(); this.cullRefresh(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
   }
   // Folding only hides the chips. It deliberately does NOT hide the pins: a group
   // you collapsed is one whose controls you put away, not one you switched off.
