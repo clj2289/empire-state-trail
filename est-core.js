@@ -627,6 +627,11 @@ class TrailApp {
     // What the standing pins were last built for: the padded box, and a signature of
     // the zoom, the layers that were on and how much data they had. See cullRefresh.
     this.cullBox=null; this.cullSig='';
+    /* The bundled corridor is a third of a megabyte the map does not need until
+       somebody asks for it, so the fetch is the switch rather than the boot — the
+       same bargain the weather layer makes. 'idle' until asked, then 'loading',
+       then 'done' or 'failed'. */
+    this.nbState='idle';
     // Overlays by key, the order they were registered in, and the order the rider
     // has dragged them into — the last of these is the only one that is saved.
     this.lyrByKey={}; this.lyrKeyById={}; this.lyrSeq=[]; this.lyrOrder=[];
@@ -791,7 +796,11 @@ class TrailApp {
      forget you set, so the closed state has to say when something is narrowing. */
   renderFilterState(){
     const el=this.$('filtersState'); if(!el) return;
-    const byCat=this.poisByCat(), all=Object.keys(byCat).filter(c=>byCat[c].length);
+    // Counts what the list below it actually shows. The corridor is a map layer and
+    // was never in that list, so counting it here only ever made the summary wrong —
+    // and once the corridor loads on demand it would have made it wrong differently
+    // before and after the first switch-on.
+    const byCat=this.poisByCat(), all=Object.keys(byCat).filter(c=>byCat[c].length && catGrp(c)!=='bundled');
     const on=all.filter(c=>!this.catHidden.has(c)).length;
     const bits=[];
     bits.push(on===all.length ? 'all categories' : on+' of '+all.length+' categories');
@@ -3102,6 +3111,8 @@ class TrailApp {
       if(!key || key.indexOf('poi:')!==0) return;
       const cat=key.slice(4);
       if(e.type==='overlayadd') this.catHidden.delete(cat); else this.catHidden.add(cat);
+      // Switching a corridor layer on is what pays for the corridor — see loadNearbyIfNeeded.
+      if(e.type==='overlayadd' && catGrp(cat)==='bundled') this.loadNearbyIfNeeded();
       // A child toggled from the control's own box leaves its parent header's count
       // and half-lit state stale — refresh the grouping too, not just the chips.
       this.savePrefs(); this.cullRefresh(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
@@ -3151,20 +3162,19 @@ class TrailApp {
     const stat=this.$('poiStat'); if(stat) stat.textContent='Loading live data from the NY State service…';
     Promise.allSettled([
       this.fetchAllPOIs(),
-      this.fetchRouteLine().then(feats=>{ this.drawLiveRoute(feats); return feats.length; }),
-      this.loadBundledPois()
-    ]).then(([poi,route,bundled])=>{
-      // State POIs are already in this.POIS from fetchAllPOIs; fold the bundled corridor
-      // in behind them and reindex once, then build every category's layer in one pass.
-      const nb = bundled.status==='fulfilled' ? bundled.value : [];
-      if(nb.length){ this.POIS.push(...nb); this.POIS.forEach((p,i)=>{ p.i=i; }); }
+      this.fetchRouteLine().then(feats=>{ this.drawLiveRoute(feats); return feats.length; })
+    ]).then(([poi,route])=>{
+      // The corridor is deliberately not in here. Its rows are built empty and the
+      // file arrives when one of them is switched on — see loadNearbyIfNeeded.
       this.buildPOILayers();
       if(stat){
         const pmsg = poi.status==='fulfilled' ? poi.value+' live facilities loaded' : 'live facilities offline (lists still work)';
         const rmsg = route.status==='fulfilled' ? 'route line live from ArcGIS' : 'route from embedded GPX';
-        const nmsg = nb.length ? ' · '+nb.length+' bundled within 5 mi' : '';
-        stat.textContent = pmsg+' · '+rmsg+nmsg+'.';
+        stat.textContent = pmsg+' · '+rmsg+' · OpenStreetMap within 5 mi loads when you switch it on.';
       }
+      // A rider who left a corridor layer on last time gets it back, and that choice
+      // is what pays for the fetch — same trigger, just already made.
+      if(Object.keys(this.poiLayers).some(c=>catGrp(c)==='bundled' && !this.catHidden.has(c))) this.loadNearbyIfNeeded();
       this.renderNext(); this.renderCategories(); this.renderNearby();
     });
   }
@@ -3300,25 +3310,45 @@ class TrailApp {
     // Fixed order, NOT the rider's Nearby order — the map control stays put even
     // as they rearrange the browse list.
     [...new Set([...CAT_ORDER, ...Object.keys(byCat)])].forEach(asset=>{
-      const items=byCat[asset]; if(!items||!items.length) return;
+      const items=byCat[asset]||[];
       const bundled=catGrp(asset)==='bundled';
-      const cfg=catCfg(asset), g=L.layerGroup(), def=!this.catHidden.has(asset);
+      /* An empty trail category has nothing to say and gets no row. An empty bundled
+         one gets its row anyway: the corridor loads on demand, so before the first
+         switch-on every one of them is empty, and a switch that isn't there is one
+         nobody can throw. */
+      if(!items.length && !bundled) return;
+      const cfg=catCfg(asset), g=this.poiLayers[asset]||L.layerGroup(), def=!this.catHidden.has(asset);
       const pane=this.lyrPane('poi:'+asset);
+      g.clearLayers();
       /* The State's few hundred pins stay standing: they are small enough not to
          matter, and leaving them alone keeps the list-hover-highlights-its-pin
          coupling exactly as it was for the list that actually uses it. The corridor's
          nine thousand are culled to the view — see CULL_MIN_Z. */
-      if(bundled) this.cullCats[asset]={items, cfg, pane, live:new Map()};
+      if(bundled){
+        // clearLayers detached whatever was standing; drop the handles with it, or
+        // the registry keeps pointing at markers that are no longer on any map.
+        const old=this.cullCats[asset];
+        if(old) old.live.forEach((mk,p)=>{ delete this.poiMarker[p.i]; });
+        this.cullCats[asset]={items, cfg, pane, live:new Map()};
+      }
       else items.forEach(p=>{ const mk=this.poiPin(p,cfg,pane); this.poiMarker[p.i]=mk; g.addLayer(mk); });
       // A rebuild must not switch a layer off under the rider, nor on.
       const show = was && Object.prototype.hasOwnProperty.call(was,asset) ? was[asset] : def;
-      this.poiLayers[asset]=g; if(show) g.addTo(this.map);
-      /* A trail count is fixed and belongs in the label. A culled one depends on the
-         zoom, so its span is left empty for cullNote to write — Leaflet restores this
-         string over the top of it on every rebuild, which is why that runs again at
-         the end of decorateLayers. */
-      this.regLayer('poi:'+asset, g, esc(cfg.label)
-        +' <span class="lyr-ct">'+(bundled?'':items.length)+'</span>');
+      this.poiLayers[asset]=g;
+      /* Guarded like applyCatVis: on a rebuild the group is already registered, so an
+         add here would come back through overlayadd as if the rider had thrown the
+         switch — and take the fetch and a savePrefs with it. */
+      this._syncCats=true;
+      if(show && !this.map.hasLayer(g)) g.addTo(this.map);
+      this._syncCats=false;
+      /* Registered once; a rebuild reuses the same group, so the row and its drag
+         order survive. A trail count is fixed and belongs in the label. A culled one
+         depends on the zoom and on data that may not be here yet, so its span is left
+         empty for cullNote to write — Leaflet restores this string over the top of it
+         on every rebuild, which is why that runs again after decorateLayers. */
+      if(!this.lyrByKey['poi:'+asset])
+        this.regLayer('poi:'+asset, g, esc(cfg.label)
+          +' <span class="lyr-ct">'+(bundled?'':items.length)+'</span>');
     });
     this.cullRefresh();
   }
@@ -3389,9 +3419,31 @@ class TrailApp {
       const el=row?row.querySelector('.lyr-ct'):null;
       if(!el) return;
       const st=this.cullCats[cat], on=!this.catHidden.has(cat);
-      const far2 = far && on;
-      el.textContent = far2 ? 'zoom in' : String(st.items.length);
-      el.classList.toggle('is-note', far2);
+      const txt = !st.items.length ? (this.nbState==='loading' ? 'loading…' : this.nbState==='failed' ? 'unavailable' : '')
+        : (far && on) ? 'zoom in' : String(st.items.length);
+      el.textContent=txt;
+      el.classList.toggle('is-note', txt!=='' && !/^\d+$/.test(txt));
+    });
+  }
+  /* The corridor, fetched the first time somebody switches one of its layers on and
+     never again. Appended to POIS rather than spliced in, so every index already
+     handed out to a list row or a price key still points at what it did before. */
+  loadNearbyIfNeeded(){
+    if(this.nbState!=='idle') return;
+    this.nbState='loading'; this.cullNote();
+    this.loadBundledPois().then(nb=>{
+      this.nbState = nb.length ? 'done' : 'failed';
+      if(nb.length){
+        this.POIS.push(...nb);
+        this.POIS.forEach((p,i)=>{ p.i=i; });
+        // Rebuilds every category, but the trail ones rebuild from the same POIS
+        // they had and the corridor's are culled — so this is cheap and it keeps
+        // one path building layers instead of two that can drift.
+        const was={}; Object.keys(this.poiLayers).forEach(k=>{ was[k]=this.map.hasLayer(this.poiLayers[k]); });
+        this.buildPOILayers(was);
+        this.scheduleDecorate();
+      } else this.cullNote();
+      this.renderNearby();
     });
   }
 
@@ -3403,6 +3455,8 @@ class TrailApp {
   // in one pass and repaint once rather than six times over a 900-row list.
   applyCatVis(cat, on){
     if(on) this.catHidden.delete(cat); else this.catHidden.add(cat);
+    // Switching a corridor layer on is what pays for the corridor — see loadNearbyIfNeeded.
+    if(on && catGrp(cat)==='bundled') this.loadNearbyIfNeeded();
     const g=this.poiLayers[cat];
     if(!g || !this.map) return;
     // Guarded: adding or removing fires overlayadd/overlayremove, which routes
@@ -3422,8 +3476,10 @@ class TrailApp {
   /* A whole source at once. Turning OpenStreetMap's fifteen hundred pins off is the
      common case, and doing it six chips at a time was the reason to group them. */
   setGrpVisible(grp, on){
-    const byCat=this.poisByCat();
-    Object.keys(byCat).filter(c=>catGrp(c)===grp && byCat[c].length)
+    /* Keyed off the layers that have a row, not the categories that have data: the
+       corridor's rows exist before its data does, and reading the data here meant
+       the parent switch did nothing at all until something else had loaded it. */
+    Object.keys(this.poiLayers).filter(c=>catGrp(c)===grp)
       .forEach(c=>this.applyCatVis(c, on));
     this.savePrefs(); this.cullRefresh(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
   }
