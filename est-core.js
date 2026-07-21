@@ -120,6 +120,15 @@ const WX_HORIZON_MS=6.3*24*36e5;
 const AADT_URL='https://gis.dot.ny.gov/hostingny/rest/services/Roadways/Traffic_Monitoring/FeatureServer/1/query';
 const AADT_SRC='https://www.dot.ny.gov/tdv';
 const AADT_MINZ=10, AADT_CAP=400;
+/* Road-snapping for the measure tool. FOSSGIS's public OSRM (bike profile) both snaps a
+   dropped point to the nearest way (/nearest) and traces the roads between two points
+   (/route), so a traced leg reads real pedalled miles rather than straight-line. A point
+   further than MEASURE_SNAP_M metres from any way is treated as off-road and left where it
+   fell — the tolerance that stops a spot out in a field from yanking onto a road it has
+   nothing to do with. Every call degrades to a straight great-circle hop when it fails or
+   you're offline, so the tool still works with no network, just without the snap. */
+const OSRM_BASE='https://routing.openstreetmap.de/routed-bike';
+const MEASURE_SNAP_M=40;
 /* Bands as a bike feels them, not as a traffic engineer files them: five hundred
    vehicles a day is where a road stops being empty, and fifteen hundred is where
    most riders would rather be somewhere else. Everything above that is one colour,
@@ -243,7 +252,8 @@ const P = {
   chevL:'M15 6l-6 6 6 6',
   layers:'M12 2 22 7 12 12 2 7Z|M2 12l10 5 10-5|M2 17l10 5 10-5',
   bike:'c5.5 17.5 3.2|c18.5 17.5 3.2|M5.5 17.5l4-8.5h6.5l-3 8.5|M9.5 9l3.5 8.5|M13.5 9h3',
-  med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z'
+  med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z',
+  ruler:'M4 15 15 4l5 5-11 11z|M7.5 11.5l1.7 1.7|M10.5 8.5l1.7 1.7|M13.5 5.5l1.7 1.7'
 };
 function iconInner(spec){
   return spec.split('|').map(s=>{
@@ -609,6 +619,11 @@ class TrailApp {
     this.routeLayer=null; this.shoreLayer=null; this.shorePts=null; this.shoreMi=0;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     this.POIS=[]; this.embLines=[];
+    // Measure tool: tap to drop vertices, trace a road, read the running distance.
+    this.measuring=false; this.measurePts=[]; this.measureLayer=null; this.measureLine=null; this.measureVerts=[];
+    // Snap-and-route bookkeeping: which points landed on a road, the running total, a job
+    // token so a stale async pass bows out, and caches so redraws don't re-ask the router.
+    this.measureOnRoad=[]; this.measureMi=0; this._measureJob=0; this._nearCache=new Map(); this._routeCache=new Map();
     // Places you sent to Google Maps, kept as pins so you don't lose the spot. Saved.
     this.searches=[]; this.searchLayer=null; this.searchMarks={};
     /* One switch per category, driving the list AND the pins together. They were
@@ -1022,9 +1037,15 @@ class TrailApp {
     });
     document.addEventListener('click',e=>{ const x=e.target.closest('.ul-x'); if(x) this.removeUserLayer(x.dataset.ul); });
     document.addEventListener('click',e=>{ if(e.target.closest('.dir-toggle')) this.flipDir(); });
+    // Any pin's "Measure from here" / "Add to measure" button hands its exact spot in.
+    document.addEventListener('click',e=>{ const b=e.target.closest('.measure-add'); if(b) this.measureFromPopup(b); });
     const tr=this.$('showTrip'); if(tr) tr.addEventListener('change',e=>{ this.showTrip=e.target.checked; this.savePrefs(); this.applyTripTab(); });
     const locBtn=this.$('locBtn'); if(locBtn) locBtn.addEventListener('click',()=>this.locate());
     const rc=this.$('recenterBtn'); if(rc) rc.addEventListener('click',()=>this.recenter());
+    const meb=this.$('measureBtn'); if(meb) meb.addEventListener('click',()=>this.toggleMeasure());
+    const meu=this.$('measureUndo'); if(meu) meu.addEventListener('click',()=>this.measureUndo());
+    const mecl=this.$('measureClear'); if(mecl) mecl.addEventListener('click',()=>this.measureClear());
+    const medn=this.$('measureDone'); if(medn) medn.addEventListener('click',()=>this.toggleMeasure());
     this.wirePoiHover();
     const zi=this.$('zoomInBtn'); if(zi) zi.addEventListener('click',()=>{ if(this.map) this.map.zoomIn(); });
     const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ if(this.map) this.map.zoomOut(); });
@@ -1204,8 +1225,170 @@ class TrailApp {
     el.addEventListener('touchend',clear,{passive:true});
     el.addEventListener('touchcancel',clear,{passive:true});
   }
+  /* ---------- measure tool ---------- */
+  /* Arm it from the ruler FAB, then tap the map (or a pin) to drop vertices. Each point
+     snaps to the nearest road within the tolerance — a tap out in a field stays put — and
+     the legs between on-road points trace the actual roads via OSRM, so the running total
+     is real pedalled miles, not straight-line. Vertices drag to nudge; the spot dialog is
+     suppressed while armed (see tapPopup). */
+  toggleMeasure(){ if(this.measuring) this.measureExit(); else this.measureEnter(); }
+  measureEnter(){
+    if(!this.map || this.measuring) return;
+    this.measuring=true; this.measurePts=[]; this.measureVerts=[]; this.measureOnRoad=[]; this.measureMi=0;
+    this.measureLayer=L.layerGroup().addTo(this.map);
+    this.measureLine=L.polyline([], {color:'#12467a', weight:3.5, opacity:.95,
+      dashArray:'6,5', className:'measure-line'}).addTo(this.measureLayer);
+    this.map.getContainer().classList.add('measuring');
+    if(this.map.doubleClickZoom) this.map.doubleClickZoom.disable();  // so a quick double-tap drops two points instead of zooming
+    this._measureClick = e => this.measureAdd(e.latlng);
+    this.map.on('click', this._measureClick);
+    const b=this.$('measureBtn'); if(b) b.classList.add('on');
+    const bar=this.$('measureBar'); if(bar) bar.removeAttribute('hidden');
+    this.updateMeasureBar();
+    this.status('Measuring: tap the map or a pin to drop points; they snap to the roads.');
+  }
+  measureExit(){
+    if(!this.map) return;
+    this.measuring=false; this._measureJob++;   // strand any snap/route still in flight
+    if(this._measureClick){ this.map.off('click', this._measureClick); this._measureClick=null; }
+    if(this.measureLayer){ this.map.removeLayer(this.measureLayer); this.measureLayer=null; }
+    this.measureLine=null; this.measurePts=[]; this.measureVerts=[]; this.measureOnRoad=[]; this.measureMi=0;
+    this.map.getContainer().classList.remove('measuring');
+    if(this.map.doubleClickZoom) this.map.doubleClickZoom.enable();
+    const b=this.$('measureBtn'); if(b) b.classList.remove('on');
+    const bar=this.$('measureBar'); if(bar) bar.setAttribute('hidden','');
+  }
+  measureAdd(latlng){ if(!this.measuring) return; this.measurePts.push(L.latLng(latlng.lat,latlng.lng)); this.measureOnRoad.push(null); this.measureSync(); }
+  measureUndo(){ if(!this.measurePts.length) return; this.measurePts.pop(); this.measureOnRoad.pop(); this.measureSync(); }
+  measureClear(){ this.measurePts=[]; this.measureOnRoad=[]; this.measureSync(); }
+  /* A pin's "Measure from here" / "Add to measure" button lands here: arm the tool if it
+     is cold, then drop the pin's own exact coordinates as the next point. */
+  measureFromPopup(btn){
+    const lat=+btn.dataset.lat, lng=+btn.dataset.lng;
+    if(!isFinite(lat)||!isFinite(lng)||!this.map) return;
+    this.map.closePopup();
+    if(!this.measuring) this.measureEnter();
+    this.measureAdd(L.latLng(lat,lng));
+  }
+  /* Redraw straight from the raw points so a tap feels instant, then kick off the async
+     snap-and-route pass that replaces the line with road geometry and the real distance. */
+  measureSync(){
+    if(!this.measureLayer) return;
+    this.measureLine.setLatLngs(this.measurePts);
+    this.measureMi=this.measureMiles();
+    this.measureMarkers();
+    this.updateMeasureBar();
+    this.measureResolve();
+  }
+  /* Rebuild the draggable vertex markers from the point list — the one source of truth,
+     so undo, clear, drag and snapping all just edit the array and redraw. An off-road
+     point (beyond tolerance, so left unsnapped) is drawn hollow-dashed to say so. */
+  measureMarkers(){
+    this.measureVerts.forEach(m=>this.measureLayer.removeLayer(m));
+    this.measureVerts=this.measurePts.map((ll,i)=>{
+      const off=this.measureOnRoad[i]===false;
+      const m=L.marker(ll,{draggable:true, keyboard:false,
+        icon:L.divIcon({className:'measure-vert'+(off?' measure-vert-off':''), iconSize:[16,16], iconAnchor:[8,8]})});
+      // Live drag moves only this point and a straight line — rebuilding every marker
+      // mid-drag would tear out the one under the cursor. Re-snap and re-route on release.
+      m.on('drag',()=>{ this.measurePts[i]=m.getLatLng(); this.measureOnRoad[i]=null; this.measureLine.setLatLngs(this.measurePts); this.measureMi=this.measureMiles(); this.updateMeasureBar(); });
+      m.on('dragend',()=>this.measureSync());
+      this.measureLayer.addLayer(m);
+      return m;
+    });
+  }
+  /* The async half: snap every point to the nearest road (keeping it put when that road is
+     further off than the tolerance), then trace the roads between each on-road pair. A
+     stale job — another edit landed while we awaited — bows out so it can't stomp fresh
+     state, and a torn-down layer aborts the same way. */
+  async measureResolve(){
+    if(!this.measureLayer || !this.measurePts.length) return;
+    const job=++this._measureJob;
+    const snaps=await Promise.all(this.measurePts.map(p=>this.snapPoint(p)));
+    if(job!==this._measureJob || !this.measureLayer) return;
+    snaps.forEach((s,i)=>{ this.measureOnRoad[i]=s.onRoad; if(s.onRoad) this.measurePts[i]=L.latLng(s.lat,s.lng); });
+    const legs=await Promise.all(this.measurePts.slice(1).map((B,k)=>
+      (this.measureOnRoad[k] && this.measureOnRoad[k+1]) ? this.routeSeg(this.measurePts[k], B) : Promise.resolve(null)));
+    if(job!==this._measureJob || !this.measureLayer) return;
+    // Stitch the legs into one path: a routed leg contributes its road geometry, a bare or
+    // failed one a straight hop. Drop each leg's first point where it repeats the previous
+    // leg's last, so the polyline never doubles the shared vertex.
+    const path=[[this.measurePts[0].lat, this.measurePts[0].lng]]; let mi=0;
+    legs.forEach((r,k)=>{
+      const A=this.measurePts[k], B=this.measurePts[k+1];
+      if(r){ path.push(...r.coords.slice(1)); mi+=r.miles; }
+      else { path.push([B.lat,B.lng]); mi+=this.map.distance(A,B)/1609.344; }
+    });
+    this.measureLine.setLatLngs(path);
+    this.measureMi=mi;
+    this.measureMarkers();
+    this.updateMeasureBar();
+  }
+  // Snap one point to the nearest road; onRoad is false past the tolerance (or on failure),
+  // which leaves it raw and makes its legs fall back to straight lines. Cached per coord.
+  async snapPoint(p){
+    const key=p.lat.toFixed(6)+','+p.lng.toFixed(6);
+    if(this._nearCache.has(key)) return this._nearCache.get(key);
+    let res={lat:p.lat, lng:p.lng, onRoad:false};
+    try{
+      const j=await this.osrm(OSRM_BASE+'/nearest/v1/driving/'+p.lng+','+p.lat+'?number=1');
+      const w=j && j.waypoints && j.waypoints[0];
+      if(w && Array.isArray(w.location) && w.distance<=MEASURE_SNAP_M)
+        res={lat:w.location[1], lng:w.location[0], onRoad:true};
+      this._nearCache.set(key,res);   // only a real answer is cached, so a dropped call retries
+    }catch(e){/* offline / refused: leave it raw and off-road */}
+    return res;
+  }
+  // Trace the roads between two on-road points; null (no route / failure) means the caller
+  // draws a straight leg instead. Cached per ordered pair.
+  async routeSeg(A,B){
+    const key=A.lat.toFixed(6)+','+A.lng.toFixed(6)+';'+B.lat.toFixed(6)+','+B.lng.toFixed(6);
+    if(this._routeCache.has(key)) return this._routeCache.get(key);
+    try{
+      const j=await this.osrm(OSRM_BASE+'/route/v1/driving/'+A.lng+','+A.lat+';'+B.lng+','+B.lat+'?overview=full&geometries=geojson&steps=false');
+      const r=j && j.routes && j.routes[0];
+      if(r && r.geometry && r.geometry.coordinates && r.geometry.coordinates.length>1){
+        const res={coords:r.geometry.coordinates.map(c=>[c[1],c[0]]), miles:r.distance/1609.344};
+        this._routeCache.set(key,res);
+        return res;
+      }
+    }catch(e){/* fall through to a straight leg */}
+    return null;
+  }
+  // A short-fused GET that gives up rather than hang the redraw when the router is slow.
+  async osrm(url){
+    const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(), 6000);
+    try{ const r=await fetch(url,{signal:ctl.signal}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
+    finally{ clearTimeout(t); }
+  }
+  // Straight-line great-circle length of the raw points, in miles — the instant estimate
+  // shown before the roads come back, and the fallback for legs that never snap.
+  measureMiles(){
+    let m=0;
+    for(let i=1;i<this.measurePts.length;i++) m+=this.map.distance(this.measurePts[i-1], this.measurePts[i]);
+    return m/1609.344;
+  }
+  // Button a pin carries to feed itself into the measurement; its label follows the state.
+  measureBtnHtml(lat,lng){
+    return '<button type="button" class="measure-add" data-lat="'+lat+'" data-lng="'+lng+'">'
+      +(this.measuring?'Add to measure':'Measure from here')+'</button>';
+  }
+  updateMeasureBar(){
+    const val=this.$('measureVal'); if(!val) return;
+    const n=this.measurePts.length;
+    if(n<2){ val.textContent = n===0 ? 'Tap the map to add points' : 'Tap the next point…'; }
+    else {
+      const mi=this.measureMi;
+      // Feet under a tenth of a mile, where "0.0 mi" would read as nothing.
+      val.textContent = mi<0.095 ? Math.round(mi*5280)+' ft' : fmtMi(mi)+' mi';
+    }
+    const u=this.$('measureUndo'), c=this.$('measureClear');
+    if(u) u.disabled = n===0;
+    if(c) c.disabled = n===0;
+  }
   tapPopup(ll){
     if(!this.map) return;
+    if(this.measuring) return;   // in measure mode a tap drops a vertex, not a spot dialog
     // De-dupe the long-press/contextmenu pair, and swallow a stray double-tap.
     const now=Date.now();
     if(this._lastTapPopup && now-this._lastTapPopup<600) return;
@@ -3036,6 +3219,12 @@ class TrailApp {
       if(tog){ tog.innerHTML=icon('layers',22); tog.title='Map layers'; }
       fabs.appendChild(lcEl);
     }
+    /* A scale bar, imperial to match the mile units everywhere else. Moved onto the
+       panel's own top-left the way the layers control rides the FAB stack, so the
+       bottom sheet never covers it — Leaflet keeps updating it wherever it lives. */
+    const scale=L.control.scale({imperial:true, metric:false, maxWidth:120, position:'bottomleft'}).addTo(map);
+    const scEl=scale.getContainer(), panel=this.$('mapPanel');
+    if(scEl && panel){ scEl.classList.add('map-scale'); panel.appendChild(scEl); }
     const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
     const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
     const rtPane=this.lyrPane('route');
@@ -3152,6 +3341,7 @@ class TrailApp {
       +b('restaurant cafe','Food')+b('hotel motel lodging','Lodging')
       +'<a href="'+ratesLink(t.n+' NY', this.townDate(t))+'" target="_blank" rel="noopener" class="pa">Rates</a>'
       +b('campground','Camping')+b('bicycle shop','Bike shop')+'</div>'
+      +'<div class="mv-measure">'+this.measureBtnHtml(t.lat,t.lng)+'</div>'
       // Same offer a bare map tap gets, gated on the same setting — a known town is
       // the likeliest place to want it, and it beats hunting the simulate dropdown.
       +(this.tapToSet?'<button type="button" class="mv-go mv-go-town" data-mvlat="'+t.lat+'" data-mvlng="'+t.lng+'">Move me to '+esc(t.n)+'</button>':'');
@@ -3189,7 +3379,8 @@ class TrailApp {
     }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
-    const lk=['<button type="button" class="pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
+    const lk=[this.measureBtnHtml(p.lat,p.lng),
+      '<button type="button" class="pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
     const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
     // The same two links a tapped spot gets — opening the place in Google Maps (searched
     // by name so it lands on the business, not a bare pin) and Street View. Every pin on

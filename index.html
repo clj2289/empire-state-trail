@@ -639,6 +639,43 @@
   .lyr-gtog input{accent-color:var(--color-accent)}
   .lyr-gnm{font-weight:600}
   .lyr-gkids{margin-left:14px;border-left:1px solid var(--color-divider);padding-left:6px}
+  /* ---- measure tool + scale bar ---- */
+  /* Armed FAB lights up like a pressed toggle so it's clear the ruler is live. */
+  .fab.on{background:var(--color-accent);color:var(--color-bg);border-color:var(--color-accent)}
+  .fab.on:hover{background:var(--color-accent-700)}
+  .leaflet-container.measuring{cursor:crosshair}
+  .measure-vert{background:var(--color-bg);border:2.5px solid #12467a;border-radius:50%;
+    box-shadow:0 1px 3px rgba(0,0,0,.35);cursor:move;box-sizing:border-box}
+  /* Beyond the snap tolerance: left where it was tapped, drawn hollow-dashed to say so. */
+  .measure-vert.measure-vert-off{border-style:dashed;border-color:#b23b2e}
+  /* The pin-popup button that feeds a place into the measurement — filled accent so it
+     reads as the pin's one action, sitting above its row of external links. */
+  .measure-add{font:inherit;font-size:11px;font-weight:600;cursor:pointer;
+    background:var(--color-accent);color:var(--color-bg);border:0;border-radius:999px;
+    padding:4px 11px;display:inline-flex;align-items:center;gap:5px}
+  .measure-add:hover{background:var(--color-accent-700)}
+  .mv-measure{margin-top:var(--space-2)}
+  /* Readout rides the top-center, above the map and clear of the sheet and FABs. */
+  .measure-bar{position:absolute;z-index:650;top:calc(env(safe-area-inset-top) + var(--space-2));
+    left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;
+    max-width:calc(100vw - 20px);padding:6px 8px 6px 10px;background:var(--color-bg);
+    border:1px solid var(--color-divider);border-radius:999px;box-shadow:var(--shadow-md);font-size:12px}
+  .measure-bar .measure-ic{display:inline-flex;color:var(--color-accent)}
+  .measure-val{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;min-width:92px;text-align:center}
+  .measure-btn{font:inherit;font-size:11px;padding:3px 9px;border-radius:999px;cursor:pointer;
+    background:var(--color-bg);color:var(--color-text);border:1px solid var(--color-divider)}
+  .measure-btn:hover:not(:disabled){background:var(--color-accent-100)}
+  .measure-btn:disabled{opacity:.4;cursor:default}
+  .measure-btn.measure-done{background:var(--color-accent);color:var(--color-bg);border-color:var(--color-accent)}
+  .measure-btn.measure-done:hover{background:var(--color-accent-700)}
+  /* Scale bar, moved onto the panel's top-left (mirroring the FABs on the right) so the
+     bottom sheet can never cover it; Leaflet keeps updating it wherever it lives. */
+  .map-scale{position:absolute;bottom:100%;left:calc(var(--space-3) + env(safe-area-inset-left));
+    margin-bottom:var(--space-3);z-index:600;pointer-events:none}
+  .map-scale .leaflet-control-scale-line{background:color-mix(in srgb,var(--color-bg) 86%,transparent);
+    border:1.5px solid var(--color-neutral-500);border-top:none;color:var(--color-text);
+    font-size:10px;font-weight:600;line-height:1.35;padding:1px 5px;box-shadow:none;
+    font-variant-numeric:tabular-nums}
   /* Layers the rider brought: the form, the list of them, and their popups. */
   .ul-lbl{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;
     font-size:12px;color:var(--color-neutral-700)}
@@ -721,6 +758,15 @@
   <main class="screens">
     <section data-screen="map" class="screen active">
       <div id="map"></div>
+      <!-- Measure-tool readout: appears while the ruler is armed, at the top clear of
+           the bottom sheet and FABs. Its ruler glyph is hydrated by the [data-ic] pass. -->
+      <div id="measureBar" class="measure-bar" hidden>
+        <span class="measure-ic" data-ic="ruler"></span>
+        <span id="measureVal" class="measure-val">Tap the map to add points</span>
+        <button id="measureUndo" type="button" class="measure-btn">Undo</button>
+        <button id="measureClear" type="button" class="measure-btn">Clear</button>
+        <button id="measureDone" type="button" class="measure-btn measure-done">Done</button>
+      </div>
       <form id="mapFind" class="map-find" hidden autocomplete="off">
         <input id="findQ" type="search" inputmode="search" enterkeyhint="search" autocomplete="off"
           placeholder="Town, place, or 43.05, -76.15" aria-label="Find a place or a coordinate">
@@ -734,6 +780,7 @@
           <button id="findBtn" type="button" class="fab" title="Find a place" aria-label="Find a place"><span data-ic="search"></span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
+          <button id="measureBtn" type="button" class="fab" title="Measure distance" aria-label="Measure distance"><span data-ic="ruler"></span></button>
           <div class="fab-pair">
             <button id="zoomInBtn" type="button" class="fab" title="Zoom in" aria-label="Zoom in"><span data-ic="plus"></span></button>
             <button id="zoomOutBtn" type="button" class="fab" title="Zoom out" aria-label="Zoom out"><span data-ic="minus"></span></button>
