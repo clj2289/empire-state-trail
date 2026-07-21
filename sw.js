@@ -1,5 +1,5 @@
 // Empire State Trail Companion — service worker (offline support)
-const CACHE='est-shell-v5';
+const CACHE='est-shell-v6';
 const RUNTIME='est-runtime-v2';
 const SHELL=['./','./index.html','./est-core.js','./broadsheet/styles.css','./manifest.json','./icon-192.png','./icon-512.png',
   './gpx/Total_Shoreline_Trail_via_West_River.gpx'];
