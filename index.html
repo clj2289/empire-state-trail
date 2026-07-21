@@ -115,7 +115,8 @@
   .map-back:active{background:var(--color-accent-200)}
   /* The map panel. Sits above the floating tab bar; the map runs edge to edge behind
      both. Three snap heights so the map and the list can share the screen instead of
-     trading places: peek (stats only), half (both), full (list, map as a strip).
+     trading places: shut (a bare grab bar, and all the map there is), half (both),
+     full (list, map as a strip).
      Height is set in px/% from JS so every transition animates — `auto` would not. */
   .map-panel{position:absolute;left:0;right:0;bottom:var(--tabbar-h);z-index:600;
     display:flex;flex-direction:column;min-height:0;
@@ -132,17 +133,30 @@
      end up underneath it — which a fixed offset from the viewport could not manage. */
   .map-fabs{position:absolute;bottom:100%;right:calc(var(--space-3) + env(safe-area-inset-right));
     display:flex;flex-direction:column;align-items:flex-end;gap:var(--space-2);margin-bottom:var(--space-3)}
-  .panel-grab{flex:none;width:100%;display:flex;flex-direction:column;align-items:center;gap:3px;
+  /* column-reverse, so the hint sits above the grip rather than below it: Leaflet keeps
+     its attribution pinned to the bottom-right of the map and paints it over everything,
+     and the one line this bar ever shows is not the line to let it sit on. */
+  .panel-grab{flex:none;width:100%;display:flex;flex-direction:column-reverse;align-items:center;gap:3px;
     cursor:grab;touch-action:none;background:transparent;border:0;padding:9px 0 3px}
   .panel-grab:active{cursor:grabbing}
+  /* At rest the panel IS this bar, so it has to be a thumb-sized target while still
+     reading as a hairline over the map — the padding does the work, not the bar. */
+  .map-panel[data-snap="shut"] .panel-grab{padding:10px 0}
+  /* The dock is gone from under it, so the bar pads itself clear of the home indicator
+     rather than sitting on it. Measured by shutH, so the panel height follows. */
+  .phone-app.dock-hidden .map-panel[data-snap="shut"] .panel-grab{
+    padding-bottom:calc(10px + env(safe-area-inset-bottom))}
   .panel-bar{width:38px;height:4px;border-radius:999px;background:var(--color-neutral-400)}
+  /* Empty almost always — see setBarHint. Collapsed when it is, so the gap above it
+     doesn't quietly pay rent for a line that isn't there. */
   .panel-hint{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-500)}
+  .panel-hint:empty{display:none}
   /* Only the list scrolls; the stats above it stay put as the panel grows. */
   .panel-list{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
     padding:0 calc(var(--space-4) + env(safe-area-inset-right)) calc(var(--space-3) + env(safe-area-inset-bottom)) calc(var(--space-4) + env(safe-area-inset-left))}
-  .map-panel[data-snap="peek"] .panel-list,
-  .map-panel[data-snap="shut"] .panel-list{display:none}
-  /* Shut hands the whole screen back to the map: grab bar only, no stats. */
+  /* Shut hands the whole screen back to the map: grab bar only, no list, no stats.
+     The trail mile and the weather come back the moment you pull the sheet up. */
+  .map-panel[data-snap="shut"] .panel-list,
   .map-panel[data-snap="shut"] .map-sheet{display:none}
   .map-pick{animation:pickPulse 1.6s ease-out infinite}
   @keyframes pickPulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -729,7 +743,7 @@
         <div id="findOut" class="find-out"></div>
       </form>
       <button id="mapBack" type="button" class="map-back" hidden></button>
-      <aside id="mapPanel" class="map-panel" data-snap="peek">
+      <aside id="mapPanel" class="map-panel" data-snap="shut">
         <div class="map-fabs">
           <button id="findBtn" type="button" class="fab" title="Find a place" aria-label="Find a place"><span data-ic="search"></span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>

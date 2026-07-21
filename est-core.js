@@ -582,6 +582,9 @@ class TrailApp {
     // On by default so nothing changes for anyone who hasn't gone looking for it.
     this.tapToSet=true;
     this.showTrip=false; this.screen='map'; this.panelSnap='shut';
+    // Set once the rider has tapped the map to bring the dock back, which retires the
+    // hint that says they can — see wireMapChrome.
+    this.dockTapped=false; this.hintTimer=null;
     this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
     this.showWx=true; this.wxPerDay=60; this.wxPlan=null; this.wxBusy=false;
     this.prices={}; this.poiMarker={};
@@ -656,7 +659,7 @@ class TrailApp {
     this.wirePanelDrag();
     this.initMap();
     this.renderAll();
-    // Peek is measured off the rendered stats, so it can only be set once they exist.
+    // Shut is measured off the laid-out grab bar, so it can only be set once it exists.
     requestAnimationFrame(()=>this.setPanelSnap(this.panelSnap));
   }
 
@@ -671,7 +674,11 @@ class TrailApp {
     this.showPassed=!!p.showPassed;
     if('tapToSet' in p) this.tapToSet=!!p.tapToSet;
     this.showTrip=!!p.showTrip;
-    if(['shut','peek','half','full'].indexOf(p.panelSnap)>=0) this.panelSnap=p.panelSnap;
+    // 'peek' — the stats-only resting height — is gone; anything stored from that
+    // era comes back as the bare bar rather than as an unknown state.
+    if(p.panelSnap==='peek') this.panelSnap='shut';
+    else if(['shut','half','full'].indexOf(p.panelSnap)>=0) this.panelSnap=p.panelSnap;
+    this.dockTapped=!!p.dockTapped;
     if(p.myLL && isFinite(p.myLL.lat) && isFinite(p.myLL.lng)){
       this.myLL={lat:p.myLL.lat,lng:p.myLL.lng};
       const pr=projectRoute(this.myLL.lat,this.myLL.lng);
@@ -718,7 +725,7 @@ class TrailApp {
     this.syncFollowUi();
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,dockTapped:this.dockTapped,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
       grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches})); }catch(e){}
@@ -793,11 +800,10 @@ class TrailApp {
     // Pressing a tab yourself is its own way back, and it invalidates the remembered
     // one — only the programmatic showTab in zoomTo should leave the offer standing.
     // Tapping the Map tab while already on the map is how you work the sheet now —
-    // dragging that little grip is fiddly on a moving bike, so each tap steps it up:
-    // normal, half, all the way, and back to normal.
+    // see cyclePanel.
     this.tabs.forEach(btn=>btn.addEventListener('click',()=>{
       const name=btn.dataset.tab;
-      if(name==='map' && this.screen==='map'){ this.cyclePanelTap(); return; }
+      if(name==='map' && this.screen==='map'){ this.cyclePanel(); return; }
       this.clearReturn(); this.showTab(name);
     }));
   }
@@ -813,10 +819,11 @@ class TrailApp {
     const was=app.classList.contains('dock-hidden');
     app.classList.toggle('dock-hidden', !!h);
     // The raised map sheet grows down into the freed strip instead of just sliding —
-    // its top stays put so whatever you were reading doesn't jump. Recompute only when
-    // the state actually flipped, and don't pan the map: the visible strip didn't move.
-    if(was!==!!h && this.map && (this.panelSnap==='half'||this.panelSnap==='full'))
-      this.setPanelSnap(this.panelSnap, null, true);
+    // its top stays put so whatever you were reading doesn't jump. The bar re-measures
+    // too: with the dock gone it sits on the home indicator and pads itself clear of it.
+    // Recompute only when the state actually flipped, and don't pan the map: the visible
+    // strip didn't move.
+    if(was!==!!h && this.map) this.setPanelSnap(this.panelSnap, null, true);
   }
   wireTabAutohide(){
     this.screens.forEach(sc=>{
@@ -843,14 +850,11 @@ class TrailApp {
       },{passive:true});
     }
   }
-  /* Three heights rather than a drawer that is either open or shut: peek is the
-     stats alone, half puts map and list on screen together — the point of the thing —
-     and full hands the list most of the screen with the map still visible above it.
-     Peek is measured rather than guessed: the stats block changes height depending on
-     whether there's a next stop and whether its name wrapped. */
-  /* The stats block is display:none while shut, so it measures zero — flip the
-     state off just long enough to read its real height rather than collapsing peek
-     down onto shut. Cheap: it only runs on a snap change, and sets no height. */
+  /* Three heights: shut is a bare bar and nothing else — the map gets the screen, which
+     is what a map screen is for — half puts map and list on together, and full hands the
+     list most of it with the map still a strip above. There used to be a fourth, 'peek',
+     which parked the trail-mile line permanently over the map; the mile is on the Next
+     screen and in the sheet the moment you pull it up, and it wasn't worth the band. */
   /* The panel and the tab bar sit ON the map — #map is inset:0 underneath both — so
      the map's own centre is not the centre of anything you can see. Everything that
      aims the map has to work from the strip that's actually left. */
@@ -889,37 +893,22 @@ class TrailApp {
     if(left-dx < 8) dx = left-8;
     if(abs(dy)>1 || abs(dx)>1) m.panBy([dx,dy],{animate:true,duration:.2});
   }
-  measureSheet(){
-    const st=this.$('mapSheet'), p=this.$('mapPanel');
-    if(!st || st.hidden || !p) return 0;
-    if(st.offsetHeight) return st.offsetHeight;
-    const prev=p.dataset.snap;
-    p.dataset.snap='peek';
-    const h=st.offsetHeight;
-    p.dataset.snap=prev;
-    return h;
-  }
-  panelH(snap){
-    const g=this.$('panelGrab'), gh=g?g.offsetHeight:0;
-    return snap==='shut' ? gh : gh+this.measureSheet();
-  }
+  // Shut is exactly the grab bar, measured rather than guessed — its padding grows by
+  // the home-indicator inset once the dock slides out from under it.
+  shutH(){ const g=this.$('panelGrab'); return g?g.offsetHeight:0; }
   setPanelSnap(snap, fromH, noPan){
     const p=this.$('mapPanel'); if(!p) return;
     const h0 = fromH!=null ? fromH : p.getBoundingClientRect().height;
     this.panelSnap=snap;
     p.dataset.snap=snap;
-    // At rest — peek or shut — the dock always comes back, so a sheet dragged down while
-    // the dock was hidden can never strand you with no tabs to navigate by. Runs after
-    // panelSnap is set, so setTabsHidden reads the new state and doesn't recurse.
-    if(snap==='peek'||snap==='shut') this.setTabsHidden(false);
     const avail=p.parentElement?p.parentElement.clientHeight:0;
     // When the dock is hidden the sheet reaches to the very bottom, so a raised sheet
     // is that much taller — expressed as a calc so the % base still tracks the screen.
     const dockHidden=document.querySelector('.phone-app')&&document.querySelector('.phone-app').classList.contains('dock-hidden');
     const bonus=(snap==='half'||snap==='full')&&dockHidden ? this.tabbarPx() : 0;
     const frac=snap==='full'?86:52;
-    const h1 = (snap==='shut'||snap==='peek') ? this.panelH(snap) : avail*frac/100 + bonus;
-    p.style.height = (snap==='shut'||snap==='peek') ? h1+'px'
+    const h1 = snap==='shut' ? this.shutH() : avail*frac/100 + bonus;
+    p.style.height = snap==='shut' ? h1+'px'
       : bonus ? 'calc('+frac+'% + '+bonus+'px)'
       : frac+'%';
     /* The panel covers the map instead of resizing it, so sliding it up used to push
@@ -927,22 +916,46 @@ class TrailApp {
        height change keeps it in the middle of what's left. */
     if(this.map && this.panelReady && !noPan && abs(h1-h0)>2) this.map.panBy([0,(h1-h0)/2],{animate:true,duration:.24});
     this.panelReady=true;
-    const hint=this.$('panelHint');
-    if(hint) hint.textContent = snap==='shut' ? 'Pull up'
-      : snap==='peek' ? (this.POIS.length?'Pull up for the list':'') : '';
+    // The bar carries no text of its own at any height — it's a handle, and a caption
+    // over the map costs more than it says. The dock hint is the one exception, and it
+    // runs on its own timer, so don't wipe it out from under itself.
+    if(!this.hintTimer) this.setBarHint('');
     this.savePrefs();
     // Leaflet has to be told the viewport changed, and only once the height settles.
     if(this.map) setTimeout(()=>this.map.invalidateSize(),260);
   }
+  /* The bar, half, all the way, back to the bar. Tapping the grab bar and tapping the
+     Map tab while you're already on the map both land here — dragging a 4px grip is
+     fiddly on a moving bike, so either tap steps through the same three heights. */
   cyclePanel(){
-    const order=['shut','peek','half','full'], i=order.indexOf(this.panelSnap);
-    this.setPanelSnap(order[(i+1)%order.length]);
+    const order=['shut','half','full'], i=order.indexOf(this.panelSnap);
+    this.snapByGesture(order[(i+1)%order.length]);
   }
-  /* The Map-tab tap skips 'shut' — you're on the map already, so hiding the sheet
-     isn't what that tap is for. Normal, half, all the way, back to normal. */
-  cyclePanelTap(){
-    const order=['peek','half','full'], i=order.indexOf(this.panelSnap);
-    this.setPanelSnap(order[i<0?0:(i+1)%order.length]);
+  /* A deliberate gesture on the grab bar that ends back at the bar brings the dock with
+     it: putting the sheet away is also how you say you're done with the full-screen map,
+     and it means a rider who never finds the map tap is never stuck without tabs. The
+     map's own pan/pinch goes straight to setPanelSnap instead, so ducking the dock for a
+     gesture doesn't immediately undo itself. */
+  snapByGesture(snap, fromH){
+    // The hint offers a way to get the dock back; it has nothing to say once it's back.
+    if(snap==='shut'){ this.setBarHint(''); this.setTabsHidden(false); }
+    this.setPanelSnap(snap, fromH);
+  }
+  /* The bar carries no text of its own. This is the exception: the first time the dock
+     ducks out of the way for a map gesture, nothing left on screen says how to get it
+     back — so the bar says it, until you've used the gesture once and know. */
+  setBarHint(t, ms){
+    const h=this.$('panelHint'); if(!h) return;
+    if(this.hintTimer){ clearTimeout(this.hintTimer); this.hintTimer=null; }
+    // Shut is a measured pixel height, so a line appearing inside the bar would be
+    // clipped by a height set before the line existed. Re-measure and re-fit both ways.
+    const put=s=>{
+      h.textContent=s;
+      const p=this.$('mapPanel');
+      if(p && this.panelSnap==='shut') p.style.height=this.shutH()+'px';
+    };
+    put(t||'');
+    if(t && ms) this.hintTimer=setTimeout(()=>{ this.hintTimer=null; put(''); }, ms);
   }
   /* Drag beats a three-way tap for reaching a height directly, but the tap has to keep
      working — so anything under 6px of travel is treated as a tap, not a stalled drag. */
@@ -959,7 +972,7 @@ class TrailApp {
       const dy=y0-e.clientY;
       if(abs(dy)>6) moved=true;
       const max=p.parentElement.clientHeight*0.86;
-      p.style.height=Math.max(this.panelH('shut'), Math.min(max, h0+dy))+'px';
+      p.style.height=Math.max(this.shutH(), Math.min(max, h0+dy))+'px';
     });
     const end=()=>{
       if(id==null) return;
@@ -968,9 +981,9 @@ class TrailApp {
       if(!moved){ this.cyclePanel(); return; }
       // Snap to whichever height the release landed nearest.
       const avail=p.parentElement.clientHeight, frac=p.getBoundingClientRect().height/avail;
-      const d=[['shut',this.panelH('shut')/avail],['peek',this.panelH('peek')/avail],['half',.52],['full',.86]]
+      const d=[['shut',this.shutH()/avail],['half',.52],['full',.86]]
         .sort((a,b)=>abs(frac-a[1])-abs(frac-b[1]));
-      this.setPanelSnap(d[0][0], h0);
+      this.snapByGesture(d[0][0], h0);
     };
     grab.addEventListener('pointerup',end);
     grab.addEventListener('pointercancel',end);
@@ -1204,6 +1217,35 @@ class TrailApp {
     el.addEventListener('touchend',clear,{passive:true});
     el.addEventListener('touchcancel',clear,{passive:true});
   }
+  /* The map is what the map screen is for, so the chrome gets out of its way the moment
+     you work it: pan, pinch or wheel and the dock slides off the bottom and hands its
+     strip to the map, leaving nothing but the grab bar. A plain tap on the map brings it
+     back, and taps it away again — the deliberate version of the same thing, for when you
+     want the screen clear without panning off what you're looking at. Markers, popups and
+     the FABs swallow their own clicks, so reading a pin never moves the dock; only the
+     map itself does. Pulling the sheet up and back down is the other way home. */
+  wireMapChrome(map){
+    const el=map.getContainer(); if(!el) return;
+    const app=document.querySelector('.phone-app');
+    const hidden=()=>!!(app && app.classList.contains('dock-hidden'));
+    const duck=()=>{
+      if(this.screen!=='map' || hidden()) return;
+      this.setTabsHidden(true);
+      // Until you've used the tap once there is nothing left on screen that says the
+      // dock can come back at all, let alone how — so the bar says it, briefly.
+      if(!this.dockTapped) this.setBarHint('Tap the map for the tabs', 4200);
+    };
+    map.on('dragstart', duck);
+    el.addEventListener('wheel', duck, {passive:true});
+    el.addEventListener('touchstart', ev=>{ if(ev.touches && ev.touches.length>1) duck(); }, {passive:true});
+    map.on('click', ()=>{
+      const was=hidden();
+      this.setBarHint('');
+      this.setTabsHidden(!was);
+      // Learned it. Stop offering.
+      if(was && !this.dockTapped){ this.dockTapped=true; this.savePrefs(); }
+    });
+  }
   tapPopup(ll){
     if(!this.map) return;
     // De-dupe the long-press/contextmenu pair, and swallow a stray double-tap.
@@ -1404,7 +1446,7 @@ class TrailApp {
     // With no location the sheet had nothing to report and said so in three lines of
     // prose, over the map, permanently. It now collapses entirely — the Locate FAB is
     // right there and states the same thing by being the only lit control.
-    if(this.myMile==null){ el.innerHTML=''; el.hidden=true; if(this.panelSnap==='peek') requestAnimationFrame(()=>this.setPanelSnap('peek')); return; }
+    if(this.myMile==null){ el.innerHTML=''; el.hidden=true; return; }
     el.hidden=false;
     const ahead=this.travelOrder().filter(t=>this.isAhead(t));
     const nx=ahead[0];
@@ -3110,6 +3152,7 @@ class TrailApp {
        de-dupes them so a long press that also fires a contextmenu only opens once. */
     map.on('contextmenu',e=>{ if(e.originalEvent) L.DomEvent.preventDefault(e.originalEvent); this.tapPopup(e.latlng); });
     this.wireMapLongPress(map);
+    this.wireMapChrome(map);
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
     setTimeout(()=>{ map.invalidateSize(); this.renderMileposts(); },120);
