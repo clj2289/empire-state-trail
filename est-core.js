@@ -477,11 +477,6 @@ function ratesLink(q, date){
   if(date && out) p.push('checkin='+date,'checkout='+out);
   return 'https://www.booking.com/searchresults.html?'+p.join('&');
 }
-// Same reasoning for star ratings and reviews: reading them out of the Places API
-// needs a key and a proxy, and the ArcGIS layer carries none of its own. The map
-// search lands on the place card, where the rating and the reviews already sit.
-// Anchored to the facility's own coordinates so a chain name that repeats up the
-// trail — three Comfort Inns — resolves to the one the rider actually tapped.
 /* The town popups' "find nearby" chips, but anchored to a coordinate instead of a
    town name — so a bare tap on the map gets them too, where there is no name to
    hand the query. Tighter than a name search even where there is one. */
@@ -504,10 +499,6 @@ function atLink(lat,lng){
 }
 function panoLink(lat,lng){
   return 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+lat.toFixed(6)+','+lng.toFixed(6);
-}
-function reviewsLink(q,lat,lng){
-  const u='https://www.google.com/maps/search/'+encodeURIComponent(q);
-  return (lat!=null&&lng!=null&&isFinite(lat)&&isFinite(lng)) ? u+'/@'+lat+','+lng+',17z' : u;
 }
 /* ---- live POI service (NY State ArcGIS) ---- */
 const ARC="https://services.arcgis.com/1xFZPtKn1wKC6POA/arcgis/rest/services/";
@@ -1580,7 +1571,7 @@ class TrailApp {
      "what" to a pin hunt. The popup opens with it. Built fresh at the coordinate
      rather than reaching for the marker's own, so it still works when that category's
      pins are switched off in the layers control — you can read a lodging row with
-     lodging pins hidden and still get its rates, reviews and directions. */
+     lodging pins hidden and still get its rates and its ride figures. */
   zoomTo(lat,lng,z,townName,poi){
     if(!this.map||isNaN(lat)||isNaN(lng)) return;
     this.showTab('map');
@@ -3719,10 +3710,7 @@ class TrailApp {
     // Searched by name, so it lands on the business rather than a bare pin.
     const gq=[p.name,p.addr].filter(Boolean).join(' ') || (p.lat.toFixed(6)+','+p.lng.toFixed(6));
     lk.push('<a class="pa" href="'+searchAt(gq,p.lat,p.lng)+'" target="_blank" rel="noopener">Google Maps</a>');
-    // Campgrounds get reviews too — same question a rider is asking of a motel.
-    const stay=(p.asset==='Lodging'||p.asset==='Campground');
     if(p.asset==='Lodging') lk.push('<a class="pa" href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
-    if(stay) lk.push('<a class="pa" href="'+reviewsLink([p.name,p.addr].filter(Boolean).join(' '),p.lat,p.lng)+'" target="_blank" rel="noopener">Reviews</a>');
     /* Said plainly, because a volunteer map and a state asset register are worth
        different amounts of trust when you are deciding to ride nine miles for a
        shower. */
