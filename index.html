@@ -157,34 +157,19 @@
     background:var(--color-bg);border-top:1px solid var(--color-divider);
     border-radius:var(--radius-lg) var(--radius-lg) 0 0;
     box-shadow:0 -6px 24px color-mix(in srgb,var(--color-neutral-900) 14%,transparent);
-    transition:height .24s ease, bottom .22s ease}
-  /* When the dock hides, the sheet reaches to the very bottom and reclaims its strip.
-     Its raised heights grow to match in JS, so its top stays put and the list you were
-     reading doesn't jump — it just gains the freed room at the foot. */
-  .phone-app.dock-hidden .map-panel{bottom:0}
+    transition:height .24s ease}
   .map-panel.is-dragging{transition:none}
   /* Anchored to the panel's own top edge, so they ride up and down with it and never
      end up underneath it — which a fixed offset from the viewport could not manage. */
   .map-fabs{position:absolute;bottom:100%;right:calc(var(--space-3) + env(safe-area-inset-right));
     display:flex;flex-direction:column;align-items:flex-end;gap:var(--space-2);margin-bottom:var(--space-3)}
-  /* column-reverse, so the hint sits above the grip rather than below it: Leaflet keeps
-     its attribution pinned to the bottom-right of the map and paints it over everything,
-     and the one line this bar ever shows is not the line to let it sit on. */
-  .panel-grab{flex:none;width:100%;display:flex;flex-direction:column-reverse;align-items:center;gap:3px;
+  .panel-grab{flex:none;width:100%;display:flex;flex-direction:column;align-items:center;
     cursor:grab;touch-action:none;background:transparent;border:0;padding:9px 0 3px}
   .panel-grab:active{cursor:grabbing}
   /* At rest the panel IS this bar, so it has to be a thumb-sized target while still
      reading as a hairline over the map — the padding does the work, not the bar. */
   .map-panel[data-snap="shut"] .panel-grab{padding:10px 0}
-  /* The dock is gone from under it, so the bar pads itself clear of the home indicator
-     rather than sitting on it. Measured by shutH, so the panel height follows. */
-  .phone-app.dock-hidden .map-panel[data-snap="shut"] .panel-grab{
-    padding-bottom:calc(10px + env(safe-area-inset-bottom))}
   .panel-bar{width:38px;height:4px;border-radius:999px;background:var(--color-neutral-400)}
-  /* Empty almost always — see setBarHint. Collapsed when it is, so the gap above it
-     doesn't quietly pay rent for a line that isn't there. */
-  .panel-hint{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-500)}
-  .panel-hint:empty{display:none}
   /* Only the list scrolls; the stats above it stay put as the panel grows. */
   .panel-list{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
     padding:0 calc(var(--space-4) + env(safe-area-inset-right)) calc(var(--space-3) + env(safe-area-inset-bottom)) calc(var(--space-4) + env(safe-area-inset-left))}
@@ -621,17 +606,14 @@
   .about a{color:var(--color-accent)}
 
   /* ---- tab bar ---- */
-  /* Floats over the screens instead of sitting in the flex column, so sliding it
-     away genuinely hands its height back to the list rather than just moving it.
-     Icon-only: five labels bought nothing that five distinct glyphs don't, and cost
-     ~19px on every screen. Translucent so the map reads continuously underneath. */
+  /* Always on screen. Icon-only: five labels bought nothing that five distinct glyphs
+     don't, and cost ~19px on every screen. Translucent so the map reads continuously
+     underneath. */
   .tabbar{position:absolute;left:0;right:0;bottom:0;z-index:900;display:flex;
     background:color-mix(in srgb,var(--color-bg) 92%,transparent);
     -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
     border-top:1px solid var(--color-divider);
-    transition:transform .22s ease;
     padding:6px calc(4px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left))}
-  .tabbar.is-hidden{transform:translateY(100%)}
   .tab{flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer;
     background:transparent;border:0;color:var(--color-neutral-600);padding:4px 2px}
   /* `hidden` alone loses to display:flex, and the Trip tab is hidden by default. */
@@ -639,7 +621,6 @@
   .tab .tab-ic{width:34px;height:26px;display:grid;place-items:center;border-radius:999px;background:transparent}
   .tab.active{color:var(--color-accent)}
   .tab.active .tab-ic{color:var(--color-accent)}
-  @media (prefers-reduced-motion:reduce){ .tabbar{transition:none} }
 
   /* ---- leaflet, themed to the system rather than left at its defaults ---- */
   .leaflet-popup-content-wrapper{background:var(--color-bg);color:var(--color-text);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);font-family:var(--font-body)}
@@ -883,7 +864,7 @@
             <button id="zoomOutBtn" type="button" class="fab" title="Zoom out" aria-label="Zoom out"><span data-ic="minus"></span></button>
           </div>
         </div>
-        <button id="panelGrab" type="button" class="panel-grab" aria-label="Resize the list panel"><span class="panel-bar"></span><span id="panelHint" class="panel-hint"></span></button>
+        <button id="panelGrab" type="button" class="panel-grab" aria-label="Resize the list panel"><span class="panel-bar"></span></button>
         <div id="mapSheet" class="map-sheet"></div>
         <div id="panelList" class="poi-list panel-list"></div>
       </aside>
