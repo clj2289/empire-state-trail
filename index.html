@@ -838,6 +838,20 @@
   .poi-item:hover{background:var(--color-accent-100)}
   /* circleMarker dots: lift them off the map tiles */
   .map-dot{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
+  /* ---- trail town names ----
+     Sat on top of the dot, in that leg's own colour, so a name reads as belonging to
+     the stop under it rather than floating near it. Solid plate rather than the POI
+     labels' translucent one: these have to hold over satellite imagery too, and they
+     outrank every other name on the map. The two ends and Albany run a size up — the
+     stops you plan a trip around should be readable at a glance across the state.
+     Geometry here is mirrored by TOWN_LB_* in est-core.js, which does the decluttering
+     in pixels before any of this is drawn. Change one, change the other. */
+  .leaflet-marker-icon.town-ic{background:none;border:0;overflow:visible;pointer-events:none}
+  .town-lb{position:absolute;left:0;bottom:14px;transform:translateX(-50%);
+    white-space:nowrap;font-family:var(--font-body);font-size:11.5px;font-weight:700;
+    line-height:1.35;padding:1px 7px;border-radius:var(--radius-md);
+    background:var(--color-bg);box-shadow:var(--shadow-sm);pointer-events:none}
+  .town-maj{font-size:13px;letter-spacing:.005em}
   /* You: the blue dot, with the soft halo every phone map gives it. */
   .me-dot{filter:drop-shadow(0 0 4px rgba(26,115,232,.55)) drop-shadow(0 1px 3px rgba(0,0,0,.35))}
 </style>

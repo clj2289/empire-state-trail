@@ -204,6 +204,12 @@ const fmtMp = m => (m==null || !isFinite(m)) ? '' : m.toFixed(1);
 // trail never puts more than a few dozen on screen.
 const MILE_LADDER=[1,2,5,10,25,50,100], MILE_CAP=300;
 const mpTxt = m => { const s=fmtMp(m); return s ? 'TM '+s : ''; };
+/* Where a town's name sits relative to its dot, and how big a bite it takes out of the
+   map — the declutter works in pixels, so it needs the box the name will occupy before
+   the browser has drawn it. Must track .town-lb in the stylesheet: DY clears the dot's
+   ring, and the width is a per-character estimate for the label's own weight and size,
+   run generous so a wide name errs towards dropping a neighbour rather than colliding. */
+const TOWN_LB_DY=14, TOWN_LB_H=17, TOWN_LB_CH=6.6, TOWN_LB_PAD=16, TOWN_LB_GAP=4;
 
 /* Facility names/addresses come from a third-party service and land in innerHTML
    and in data-* attributes, so everything interpolated goes through esc() first.
@@ -695,6 +701,7 @@ class TrailApp {
     this.q=''; this.qAll=false; this.hitLayer=null; this.hitMarks={}; this._fitPend=null;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.mileLayer=null; this.mileSig='';
+    this.townLbLayer=null; this.townSig=''; this.townBoxes=[];
     // Overlays by key, the order they were registered in, and the order the rider
     // has dragged them into — the last of these is the only one that is saved.
     this.lyrByKey={}; this.lyrKeyById={}; this.lyrSeq=[]; this.lyrOrder=[];
@@ -2894,6 +2901,84 @@ class TrailApp {
     return h;
   }
 
+  /* ---------- trail town names ---------- */
+  /* A dot says a town is here and makes you tap it to find out which one, which is a
+     question the map should have answered before you asked. So every stop carries its
+     name, sitting on top of its own dot where the eye already is.
+     Thinned by pixels rather than by a zoom cutoff, the way the mileposts are: at state
+     scale thirty-eight names is a wall of text, so the stops that anchor a trip are
+     placed first and anything that would land on a name already down is dropped. Zoom
+     in, the room appears, and the rest come back — nothing is hidden by a rule, only
+     by something more useful already being there. */
+  // The tags column already ranks these, so this reads it rather than keep a second
+  // list that would drift: the two ends and the leg transition, then the resupply
+  // towns, then everything else in trail order.
+  townRank(t){
+    const g=t.tags||'';
+    if(/START|FINISH|HUB/.test(g)) return 0;
+    if(/MAJOR/.test(g)) return 1;
+    return 2;
+  }
+  // First name only — "Chittenango", not "Chittenango / Old Erie Canal SP", which is a
+  // paragraph on a map. The popup underneath still carries the full name.
+  townLbText(t){ return this.shortTown(t.n); }
+  renderTownLabels(){
+    const m=this.map, g=this.townLbLayer;
+    if(!m||!g) return;
+    // Stops switched off takes the names with it, and hands the mileposts back the
+    // room they were giving up — so the boxes have to go, not just the labels.
+    if(!this.stopLayer||!m.hasLayer(this.stopLayer)){
+      if(this.townBoxes.length){ this.townBoxes=[]; this.mileSig=''; }
+      this.townSig='';
+      return;
+    }
+    const b=m.getBounds();
+    const sig=m.getZoom()+':'+[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()]
+      .map(v=>v.toFixed(3)).join(',');
+    if(sig===this.townSig) return;      // same stretch at the same scale — leave it be
+    this.townSig=sig;
+    g.clearLayers();
+    const placed=[];
+    TOWNS.map((t,i)=>({t,i}))
+      .filter(o=>b.contains([o.t.lat,o.t.lng]))
+      .sort((a,c)=>(this.townRank(a.t)-this.townRank(c.t))||(a.i-c.i))
+      .forEach(o=>{
+        const nm=this.townLbText(o.t), p=m.latLngToContainerPoint([o.t.lat,o.t.lng]);
+        const rank=this.townRank(o.t);
+        const w=nm.length*TOWN_LB_CH*(rank===0?1.12:1)+TOWN_LB_PAD;
+        const box={l:p.x-w/2, r:p.x+w/2, t:p.y-TOWN_LB_DY-TOWN_LB_H, b:p.y-TOWN_LB_DY};
+        const hits=placed.some(k=> k.l<box.r+TOWN_LB_GAP && box.l<k.r+TOWN_LB_GAP
+                                && k.t<box.b+TOWN_LB_GAP && box.t<k.b+TOWN_LB_GAP);
+        if(hits) return;
+        placed.push(box);
+        g.addLayer(this.townLbMarker(o.t, nm, rank));
+      });
+    /* Handed to the mileposts, which give way to them. Same rule the route line already
+       follows by being drawn underneath: a number with a name printed through it is
+       neither, and of the two the name is the one a rider is navigating by. Clearing
+       the milepost signature is what makes them re-run against the new boxes. */
+    this.townBoxes=placed;
+    this.mileSig='';
+  }
+  // Does a box land on a name already placed? Boxes are container points, so this is
+  // only meaningful within one render pass — which is the only place it is asked.
+  hitsTownLb(box){
+    return this.townBoxes.some(k=> k.l<box.r+TOWN_LB_GAP && box.l<k.r+TOWN_LB_GAP
+                                && k.t<box.b+TOWN_LB_GAP && box.t<k.b+TOWN_LB_GAP);
+  }
+  /* Its own marker rather than the dot's icon, because the dot is a circleMarker — an
+     SVG circle, with nowhere to hang text. Never interactive: the dot underneath is the
+     tap target, and a name that swallowed the tap would put the popup out of reach of
+     the very thing it names. */
+  townLbMarker(t, nm, rank){
+    const c=t.s==='hv' ? (this.accent||'#0088b0') : (this.accent2||'#d6006c');
+    const html='<span class="town-lb'+(rank===0?' town-maj':'')+'" style="color:'+c+'">'
+      +esc(nm)+'</span>';
+    return L.marker([t.lat,t.lng],{pane:this.lyrPane('stops'), interactive:false,
+      keyboard:false, zIndexOffset:-200,
+      icon:L.divIcon({className:'town-ic', html, iconSize:[0,0], iconAnchor:[0,0]})});
+  }
+
   /* ---------- mileposts ---------- */
   /* A number every mile is right over a town and unreadable over the state, so the
      interval is picked from how many pixels a mile is actually worth at the zoom you
@@ -2946,9 +3031,18 @@ class TrailApp {
       const p=this.milePoint(mi);
       if(!b.contains(p)) continue;      // off screen, so it costs nothing to skip
       n++;
-      g.addLayer(mi%step===0 ? this.mileLabel(mi,p) : this.mileTick(mi,p));
+      // A number landing under a town's name gives way and rides as a tick instead —
+      // the mark stays, so the scale never breaks, but the covered digits go.
+      g.addLayer(mi%step===0 && !this.hitsTownLb(this.mileBox(p)) ?
+        this.mileLabel(mi,p) : this.mileTick(mi,p));
     }
     this.applyLyrOrder();
+  }
+  // The chip a number would draw into, in container pixels — matching the divIcon's own
+  // 46x26 box anchored at its foot, so the test is against what actually gets drawn.
+  mileBox(p){
+    const c=this.map.latLngToContainerPoint(p);
+    return {l:c.x-23, r:c.x+23, t:c.y-26, b:c.y};
   }
   mileLabel(mile,p){
     const c=this.mileColor(mile);
@@ -3562,6 +3656,11 @@ class TrailApp {
       mk.bindPopup('',{maxWidth:300,minWidth:230,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
+    /* The names ride inside the stops group rather than beside it: a layer of town
+       names with the dots switched off is a set of labels pointing at nothing, and it
+       would need a second row in the control to say so. One row, one decision. */
+    this.townLbLayer=L.layerGroup();
+    this.stopLayer.addLayer(this.townLbLayer);
     this.stopLayer.addTo(map);
     this.regLayer('stops', this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
     /* On from the start, unlike the weather: it costs a few divs and no requests, and
@@ -3582,7 +3681,9 @@ class TrailApp {
     this.regLayer('route', this.routeLayer,
       this.lyrSrc('Empire State Trail', EST_SRC, 'The official route, and the GPX for your GPS')
       +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
-    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
+    // Names first, always: the mileposts are the ones that give way, and they can only
+    // do that against boxes that have already been worked out for this view.
+    map.on('moveend',()=>{ this.renderTownLabels(); this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
     map.on('zoomend',()=>this.syncPoiLabels());
     this.syncPoiLabels();
     /* The other half of the coupling: a facility layer switched from Leaflet's own
@@ -3599,6 +3700,11 @@ class TrailApp {
       this.savePrefs(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
     });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
+    // Both ways round: switching the stops off gives the mileposts their numbers back.
+    map.on('overlayadd overlayremove', e=>{
+      if(e.layer!==this.stopLayer) return;
+      this.townSig=''; this.renderTownLabels(); this.renderMileposts();
+    });
     /* Both off until asked for, and both borrowed, so both name their source in the
        control. The Shoreline is free to draw; the counts cost a request per view. */
     this.shoreLayer=L.polyline([],{pane:this.lyrPane('shore'),color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
@@ -3632,7 +3738,7 @@ class TrailApp {
     this.wireMapLongPress(map);
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
-    setTimeout(()=>{ map.invalidateSize(); this.renderMileposts(); },120);
+    setTimeout(()=>{ map.invalidateSize(); this.renderTownLabels(); this.renderMileposts(); },120);
     if(this.myLL){ // restored from a previous session — place the marker and zoom in
       this.setMyLocation(this.myLL.lat,this.myLL.lng);
       this.status('Showing your last known position — tap Locate to update it.');
