@@ -1187,10 +1187,15 @@ class TrailApp {
        row handler above does the flying and the popup, so this only has to get the bar
        out of the way — and keep the query, because the pins under it are the answer. */
     document.addEventListener('click',e=>{ if(e.target.closest('.find-p')) this.closeFind(true); });
+    /* The whole table without leaving the map: the sheet renders the same list the
+       Nearby tab does, so raising it answers "see all" without throwing the rider onto
+       another screen and losing the pins they just fitted. Full rather than half — they
+       asked for the list — and tapping a row from there drops it back to half on its own,
+       so the map comes back the moment it's the map they want. */
     document.addEventListener('click',e=>{
       if(!e.target.closest('.find-all')) return;
-      this.closeFind(true); this.showTab('nearby');
-      const el=this.$('poiQ'); if(el) el.value=this.q;
+      this.closeFind(true);
+      this.setPanelSnap('full');
     });
     // Both live in the rendered list, so both are delegated: the header's Clear, and
     // the button that lifts the row cap off a long answer.
@@ -2781,9 +2786,10 @@ class TrailApp {
   }
   /* The route's own places, above whatever the geocoder has to say about the wider
      world — because on this app "walmart" is nearly always a question about the trail.
-     A peek at the top few; the full table lives in the list, which is where five
-     columns fit. Its own class, not .find-r: those carry data-flat and a handler that
-     zooms to a coordinate, while these are POIs and go through the shared row path. */
+     A peek at the top few; the full table lives in the sheet under the map, which is
+     where five columns fit. Its own class, not .find-r: those carry data-flat and a
+     handler that zooms to a coordinate, while these are POIs and go through the shared
+     row path. */
   findHitsHTML(){
     const hits=this.searchHits();
     if(!hits.length) return '';
@@ -2797,7 +2803,7 @@ class TrailApp {
           .filter(Boolean).join(' · '))+'</span></button>';
     }).join('');
     if(hits.length>top.length)
-      h+='<button type="button" class="find-all">See all '+hits.length+' in the list ›</button>';
+      h+='<button type="button" class="find-all">See all '+hits.length+' on the sheet ↑</button>';
     return h;
   }
   renderFind(rows, note){
