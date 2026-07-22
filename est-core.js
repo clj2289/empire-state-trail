@@ -800,6 +800,12 @@ class TrailApp {
     // retired key is inert rather than needing pruning here.
     if(Array.isArray(p.catOrder)) this.catOrder=p.catOrder.filter(c=>typeof c==='string');
     if(Array.isArray(p.lyrOrder)) this.lyrOrder=p.lyrOrder.filter(c=>typeof c==='string');
+    // A drag saves the whole list, not the one row that moved, so an order stored
+    // before the trail line went under the mileposts still carries the old default —
+    // the route drawing across the numbers, which nobody chose. Lift the mileposts
+    // back over it and leave every other row where it was dragged to.
+    const ri=this.lyrOrder.indexOf('route'), mi=this.lyrOrder.indexOf('miles');
+    if(ri>=0 && mi>ri){ this.lyrOrder.splice(mi,1); this.lyrOrder.splice(ri,0,'miles'); }
     // Only trust a stored hidden-set from after the switches were coupled. The older
     // one recorded list visibility alone, and replaying it now would switch every map
     // layer on at once — 700-odd pins on the first load after upgrading.
@@ -3061,8 +3067,10 @@ class TrailApp {
     const html='<div class="mp-lb" style="color:'+c+'">'
       +'<span class="mp-n'+(mile%50===0?' mp-maj':'')+'" style="border-color:'+c+'">'+mile+'</span>'
       +'<i class="mp-dot"></i></div>';
-    // Under everything else in the z-order: a milepost is a reference, not a
-    // destination, and it should never be the thing your thumb lands on.
+    // The pane is what places these now — above the line, below the stops. The offset
+    // only bites in the fallback case where no pane could be made and every marker
+    // shares Leaflet's own: there a milepost is still a reference, not a destination,
+    // and it should never be the thing your thumb lands on.
     const mk=L.marker(p,{pane:this.lyrPane('miles'), keyboard:false, zIndexOffset:-500,
       icon:L.divIcon({className:'mp-ic',html,iconSize:[46,26],iconAnchor:[23,26]})});
     mk.bindPopup('',{maxWidth:250,autoPan:false});
@@ -3652,19 +3660,14 @@ class TrailApp {
     const scale=L.control.scale({imperial:true, metric:false, maxWidth:120, position:'bottomleft'}).addTo(map);
     const scEl=scale.getContainer(), panel=this.$('mapPanel');
     if(scEl && panel){ scEl.classList.add('map-scale'); panel.appendChild(scEl); }
-    const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
-    const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
-    const rtPane=this.lyrPane('route');
-    this.embLines=[ L.polyline(rHV,{pane:rtPane,color:accent,weight:4,opacity:.85}),
-                    L.polyline(rER,{pane:rtPane,color:accent2,weight:4,opacity:.85}) ];
-    /* The trail itself gets a row in the control like everything else, and like the
-       borrowed layers it names where it comes from — the state's own page, which is
-       also where the official GPX for a GPS unit lives. One group, so the swap from
-       the embedded line to the live ArcGIS one below doesn't lose the row. */
-    this.routeLayer=L.layerGroup(this.embLines).addTo(map);
-    this.regLayer('route', this.routeLayer,
-      this.lyrSrc('Empire State Trail', EST_SRC, 'The official route, and the GPX for your GPS')
-      +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
+    /* These three are registered in the order they should draw, because the order of
+       registration IS the default draw order: the first row registered gets the top
+       pane (applyLyrOrder). Reading down — the stops you're riding to, the mileposts
+       that say where you are, and the line itself under both. The trail used to be
+       registered first and so drew over the mileposts, which put a 4px stroke through
+       the number wherever the route doubled back past one; a label the map draws over
+       isn't a label. The line loses nothing by going under: it's continuous, and the
+       marks that cover it are a dot and a chip wide. */
     this.stopLayer=L.layerGroup();
     TOWNS.forEach(t=>{
       const mk=L.circleMarker([t.lat,t.lng],{pane:this.lyrPane('stops'),radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
@@ -3678,6 +3681,19 @@ class TrailApp {
        looking at. Redrawn on moveend — which is also what a zoom ends in. */
     this.mileLayer=L.layerGroup().addTo(map);
     this.regLayer('miles', this.mileLayer,'Mileposts');
+    const rHV=ROUTE.filter(p=>p[2]<=201.1).map(p=>[p[0],p[1]]);
+    const rER=ROUTE.filter(p=>p[2]>=201.1).map(p=>[p[0],p[1]]);
+    const rtPane=this.lyrPane('route');
+    this.embLines=[ L.polyline(rHV,{pane:rtPane,color:accent,weight:4,opacity:.85}),
+                    L.polyline(rER,{pane:rtPane,color:accent2,weight:4,opacity:.85}) ];
+    /* The trail itself gets a row in the control like everything else, and like the
+       borrowed layers it names where it comes from — the state's own page, which is
+       also where the official GPX for a GPS unit lives. One group, so the swap from
+       the embedded line to the live ArcGIS one below doesn't lose the row. */
+    this.routeLayer=L.layerGroup(this.embLines).addTo(map);
+    this.regLayer('route', this.routeLayer,
+      this.lyrSrc('Empire State Trail', EST_SRC, 'The official route, and the GPX for your GPS')
+      +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
     map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
     map.on('zoomend',()=>this.syncPoiLabels());
     this.syncPoiLabels();
