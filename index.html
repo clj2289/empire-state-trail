@@ -13,18 +13,23 @@
 <meta name="apple-mobile-web-app-title" content="EST Trail">
 <link rel="apple-touch-icon" href="icon-192.png">
 
-<!-- Google basemap key, and deliberately empty until there is one worth shipping.
-     A browser key can't be a secret — the page has to send it, so anyone who loads the
-     app can read it, and that is how Google intends it. What stops it being worth
-     stealing lives in the Cloud console, not in this file:
+<!-- Google basemap key. A browser key can't be a secret — the page has to send it, so
+     anyone who loads the app can read it, and that is how Google intends it. What stops
+     it being worth stealing lives in the Cloud console, not in this file:
        · Application restriction  → HTTP referrers, this site's origins only
        · API restriction          → Maps JavaScript API, nothing else
        · Quota cap + budget alert → on Dynamic Maps, so a scraper can't run up a bill
-     Only a key from your own Cloud project can be given those. Google's prototyping
-     "demo key" cannot — it sits outside any project you own — so it goes in localStorage
-     on the one machine that needs it (see gmapsKey in est-core.js), never here.
-     Empty means the Google rows simply don't appear in the layers control. -->
-<meta name="google-maps-key" content="">
+
+     ⚠ TEMPORARY. The key below is Google's prototyping demo key. It sits outside any
+     Cloud project, so it can be given NONE of the three restrictions above. It is here
+     only because nothing is billable behind it: with no billing account attached, abuse
+     costs a throttled or revoked key and a map that stops drawing — not money.
+
+     That stops being true the moment that Google project has a card attached. REPLACE
+     THIS before upgrading the account, with a key from your own project carrying all
+     three restrictions. Blank it out and the Google rows simply vanish from the layers
+     control — the app is built to run without them. -->
+<meta name="google-maps-key" content="AIzaSyABw6QyQd82_PbnnDJdp2gsfDsUoF6uFSg">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
