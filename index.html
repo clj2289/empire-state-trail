@@ -692,6 +692,9 @@
     background:var(--color-bg);color:var(--color-accent);
     border:1px solid var(--color-divider);border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
   .leaflet-control-layers.fab-layers .leaflet-control-layers-toggle:hover{background:var(--color-accent-100)}
+  /* Leaflet hides the toggle once the card is open; our FAB rule out-specifies that,
+     so put the hiding back — the glyph has no business inside the list. */
+  .leaflet-control-layers.fab-layers.leaflet-control-layers-expanded .leaflet-control-layers-toggle{display:none}
   .leaflet-control-layers.fab-layers.leaflet-control-layers-expanded{
     background:var(--color-bg);border:1px solid var(--color-divider);
     border-radius:var(--radius-md);box-shadow:var(--shadow-md);
