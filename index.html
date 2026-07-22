@@ -206,38 +206,39 @@
   .srch-pin b{font-weight:700}
   .srch-pin::after{content:"";position:absolute;left:50%;bottom:-4px;transform:translateX(-50%);
     border:5px solid transparent;border-top-color:var(--color-accent-2);border-bottom:0}
-  .srch-pop .srch-cd{font-size:11px;color:var(--color-neutral-600);margin:3px 0 6px;
+  .srch-pop .srch-cd{font-size:12px;color:var(--color-neutral-600);margin:4px 0 7px;
     font-variant-numeric:tabular-nums}
-  .srch-rm{margin-top:8px;width:100%;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;
-    padding:6px 8px;background:transparent;color:var(--color-accent-2);
+  .srch-rm{margin-top:9px;width:100%;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer;
+    padding:10px 8px;background:transparent;color:var(--color-accent-2);
     border:1px solid var(--color-accent-2);border-radius:var(--radius-md)}
   .srch-rm:hover{background:color-mix(in srgb,var(--color-accent-2) 10%,transparent)}
   /* A rate you saved, in the row and in the popup. */
   .poi-pr{flex:0 0 auto;font-size:11px;font-weight:700;color:var(--color-text);
     font-variant-numeric:tabular-nums}
-  .pr-row{display:flex;align-items:center;gap:4px;margin-top:6px;padding-top:6px;
+  .pr-row{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:8px;padding-top:8px;
     border-top:1px solid var(--color-divider)}
-  .pr-c{font-size:12px;color:var(--color-neutral-600)}
-  .pr-amt{width:52px}
-  .pr-date{width:112px}
-  .pr-row input{min-width:0;font-family:inherit;font-size:12px;padding:4px 6px;
+  .pr-c{font-size:13px;color:var(--color-neutral-600)}
+  .pr-amt{width:74px}
+  .pr-date{width:132px}
+  /* 16px on the inputs: anything smaller and iOS Safari zooms the whole map on focus. */
+  .pr-row input{min-width:0;font-family:inherit;font-size:16px;padding:7px 8px;
     background:var(--color-surface);color:var(--color-text);
     border:1px solid var(--color-divider);border-radius:var(--radius-md)}
-  .pr-row button{font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;
-    padding:4px 7px;background:transparent;border:1px solid var(--color-divider);
+  .pr-row button{font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;
+    min-height:34px;padding:7px 12px;background:transparent;border:1px solid var(--color-divider);
     border-radius:var(--radius-md);color:var(--color-accent-700)}
   .pr-row button:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
   /* What a pin costs you to reach, as figures rather than a sentence. */
   .rd-row{display:flex;gap:5px;margin:8px 0 2px;text-align:center;
     font-variant-numeric:tabular-nums}
-  .rd-c{flex:1;min-width:0;padding:4px 2px;background:var(--color-neutral-100);
+  .rd-c{flex:1;min-width:0;padding:6px 3px;background:var(--color-neutral-100);
     border:1px solid var(--color-divider);border-radius:var(--radius-md)}
-  .rd-c b{display:block;font-size:15px;line-height:1.15;color:var(--color-text)}
-  .rd-c>span{display:block;margin-top:1px;font-size:9px;letter-spacing:.04em;
+  .rd-c b{display:block;font-size:17px;line-height:1.15;color:var(--color-text)}
+  .rd-c>span{display:block;margin-top:2px;font-size:10px;letter-spacing:.04em;
     text-transform:uppercase;color:var(--color-neutral-600)}
   .rd-off{border-color:var(--color-accent);background:var(--color-accent-100)}
   .rd-off b{color:var(--color-accent-800)}
-  .rd-note{font-size:11px;color:var(--color-neutral-600)}
+  .rd-note{font-size:12px;color:var(--color-neutral-600)}
   /* Mileposts: a number on the line, a dot where it actually falls. */
   .leaflet-marker-icon.mp-ic{background:none;border:0;overflow:visible;pointer-events:none}
   .mp-lb{display:flex;flex-direction:column;align-items:center;gap:1px}
@@ -568,11 +569,10 @@
     color:var(--color-neutral-500);background:transparent}
   .poi-page.is-off:hover{border-color:var(--color-divider);background:transparent}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
+  /* Zoom-in rides the popup's chip row now, so .pa carries its whole look. */
+  .pop-zoom{font-family:inherit;cursor:pointer}
   /* Collapsible filter block. Closed by default so the list starts near the top;
      the summary carries a live state line so a filter can't be silently on. */
-  .pop-zoom{font-family:inherit;font-size:inherit;font-weight:600;cursor:pointer;
-    background:transparent;border:0;padding:0;color:var(--color-accent-700);
-    text-decoration:underline;text-underline-offset:2px}
   .filters{margin-bottom:var(--space-3);border-bottom:1px solid var(--color-divider)}
   .filters-sum{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none;padding:var(--space-2) 0;
     font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);font-weight:600}
@@ -624,21 +624,23 @@
 
   /* ---- leaflet, themed to the system rather than left at its defaults ---- */
   .leaflet-popup-content-wrapper{background:var(--color-bg);color:var(--color-text);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);font-family:var(--font-body)}
-  .leaflet-popup-content{margin:12px 14px;font-size:12.5px;line-height:1.5}
+  .leaflet-popup-content{margin:13px 15px;font-size:14px;line-height:1.5}
+  /* The pin's action chips, held off the text above them. */
+  .poi-lk{margin-top:10px}
   .leaflet-popup-tip{background:var(--color-bg)}
   /* Move-here confirm. The mile is the headline — it's the thing you're being asked
      to judge, and the reason the tap is worth confirming at all. */
   .mv{min-width:170px;text-align:center}
-  .mv-k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600)}
-  .mv-v{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:17px;
+  .mv-k{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600)}
+  .mv-v{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:19px;
     margin-top:2px;font-variant-numeric:tabular-nums}
-  .mv-s{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
-  .mv-go{margin-top:var(--space-3);width:100%;cursor:pointer;padding:9px var(--space-3);
-    font-family:var(--font-body);font-size:13px;font-weight:600;line-height:1;color:#fff;
+  .mv-s{font-size:12px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
+  .mv-go{margin-top:var(--space-3);width:100%;cursor:pointer;padding:12px var(--space-3);
+    font-family:var(--font-body);font-size:14px;font-weight:600;line-height:1;color:#fff;
     background:var(--color-accent);border:0;border-radius:var(--radius-md)}
   .mv-go:hover{background:var(--color-accent-700)}
   .mv-go:active{background:var(--color-accent-900)}
-  .mv-ll{margin-top:2px;font-size:10.5px;color:var(--color-neutral-500);
+  .mv-ll{margin-top:3px;font-size:11.5px;color:var(--color-neutral-500);
     font-variant-numeric:tabular-nums}
   .mv-lk{justify-content:center;margin-top:var(--space-2)}
   /* Chips are a left-reading list, so they opt out of the dialog's centred column. */
@@ -714,23 +716,23 @@
   /* Beyond the snap tolerance: left where it was tapped, drawn hollow-dashed to say so. */
   .measure-vert.measure-vert-off{border-style:dashed;border-color:#b23b2e}
   /* The pin-popup button that feeds a place into the measurement — filled accent so it
-     reads as the pin's one action, sitting above its row of external links. */
-  .measure-add{font:inherit;font-size:11px;font-weight:600;cursor:pointer;
+     leads the popup's chip row, the one action among a row of external links. */
+  .measure-add{font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;line-height:1.15;
     background:var(--color-accent);color:var(--color-bg);border:0;border-radius:999px;
-    padding:4px 11px;display:inline-flex;align-items:center;gap:5px}
+    min-height:34px;padding:7px 13px;display:inline-flex;align-items:center;gap:5px}
   .measure-add:hover{background:var(--color-accent-700)}
   .mv-measure{margin-top:var(--space-2)}
   /* Readout rides the top-center, above the map and clear of the sheet and FABs. */
   .measure-bar{position:absolute;z-index:650;top:calc(env(safe-area-inset-top) + var(--space-2));
     left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;
-    max-width:calc(100vw - 20px);padding:6px 8px 6px 10px;background:var(--color-bg);
-    border:1px solid var(--color-divider);border-radius:999px;box-shadow:var(--shadow-md);font-size:12px}
+    max-width:calc(100vw - 20px);padding:7px 9px 7px 12px;background:var(--color-bg);
+    border:1px solid var(--color-divider);border-radius:999px;box-shadow:var(--shadow-md);font-size:13.5px}
   /* display:flex above outranks the UA [hidden] rule, so say it here: no band over the
-     map, and no "tap to add points" invitation, until the ruler is actually armed. */
+     map, and no "tap to start" invitation, until the ruler is actually armed. */
   .measure-bar[hidden]{display:none}
   .measure-bar .measure-ic{display:inline-flex;color:var(--color-accent)}
-  .measure-val{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;min-width:92px;text-align:center}
-  .measure-btn{font:inherit;font-size:11px;padding:3px 9px;border-radius:999px;cursor:pointer;
+  .measure-val{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;min-width:88px;text-align:center}
+  .measure-btn{font:inherit;font-size:13px;min-height:32px;padding:6px 12px;border-radius:999px;cursor:pointer;
     background:var(--color-bg);color:var(--color-text);border:1px solid var(--color-divider)}
   .measure-btn:hover:not(:disabled){background:var(--color-accent-100)}
   .measure-btn:disabled{opacity:.4;cursor:default}
@@ -762,12 +764,18 @@
   .ul-tbl th{text-align:left;padding:1px 8px 1px 0;font-weight:600;
     color:var(--color-neutral-600);white-space:nowrap;vertical-align:top}
   .ul-tbl td{padding:1px 0;vertical-align:top}
-  .poi-src{margin-top:5px;font-size:10.5px;line-height:1.45;color:var(--color-neutral-600)}
+  .poi-src{margin-top:7px;font-size:12px;line-height:1.5;color:var(--color-neutral-600)}
   .leaflet-control-attribution{background:color-mix(in srgb,var(--color-bg) 82%,transparent);font-size:10px;color:var(--color-neutral-600)}
-  .pa-lbl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:9px 0 5px}
-  .pa-row{display:flex;flex-wrap:wrap;gap:4px}
-  a.pa{display:inline-block;background:var(--color-accent-100);color:var(--color-accent-800);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:600;text-decoration:none}
-  a.pa:hover{background:var(--color-accent-200)}
+  .pa-lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:11px 0 6px}
+  .pa-row{display:flex;flex-wrap:wrap;gap:6px}
+  /* Chips are the popup's whole tap surface, so they're sized for a thumb rather than a
+     mouse: 34px tall clears the usual touch-target floor even on the shortest label, and
+     the same rule covers <button> chips so a link and an action feel identical. */
+  .pa{display:inline-flex;align-items:center;min-height:34px;background:var(--color-accent-100);
+    color:var(--color-accent-800);border:0;border-radius:999px;padding:7px 13px;
+    font-family:inherit;font-size:13.5px;font-weight:600;line-height:1.15;
+    text-decoration:none;cursor:pointer}
+  .pa:hover{background:var(--color-accent-200)}
   .poi-pin{display:grid;place-items:center;width:28px;height:28px;color:#fff;background:var(--color-accent);
     border:2px solid #fff;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.45)}
   .poi-pin .ic{color:#fff;stroke-width:2.2}
@@ -843,7 +851,7 @@
            the bottom sheet and FABs. Its ruler glyph is hydrated by the [data-ic] pass. -->
       <div id="measureBar" class="measure-bar" hidden>
         <span class="measure-ic" data-ic="ruler"></span>
-        <span id="measureVal" class="measure-val">Tap the map to add points</span>
+        <span id="measureVal" class="measure-val">Tap to start</span>
         <button id="measureUndo" type="button" class="measure-btn">Undo</button>
         <button id="measureClear" type="button" class="measure-btn">Clear</button>
         <button id="measureDone" type="button" class="measure-btn measure-done">Done</button>

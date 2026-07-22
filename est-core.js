@@ -1431,7 +1431,8 @@ class TrailApp {
   updateMeasureBar(){
     const val=this.$('measureVal'); if(!val) return;
     const n=this.measurePts.length;
-    if(n<2){ val.textContent = n===0 ? 'Tap the map to add points' : 'Tap the next point…'; }
+    // Short enough to read at a glance and to leave the bar room to be legible.
+    if(n<2){ val.textContent = n===0 ? 'Tap to start' : 'Tap next point'; }
     else {
       const mi=this.measureMi;
       // Feet under a tenth of a mile, where "0.0 mi" would read as nothing.
@@ -3709,31 +3710,26 @@ class TrailApp {
     }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
+    /* Every action is a chip on its own wrapping row rather than a middot-separated
+       sentence — a thumb on a moving handlebar needs a target it can hit, not a word it
+       has to aim at. */
     const lk=[this.measureBtnHtml(p.lat,p.lng),
-      '<button type="button" class="pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
-    const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
-    // The same two links a tapped spot gets — opening the place in Google Maps (searched
-    // by name so it lands on the business, not a bare pin) and Street View. Every pin on
-    // the map now answers "where is this, really" the same way a bare map tap does.
+      '<button type="button" class="pa pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
+    const purl=safeUrl(p.url); if(purl) lk.push('<a class="pa" href="'+purl+'" target="_blank" rel="noopener">Website</a>');
+    // Searched by name, so it lands on the business rather than a bare pin.
     const gq=[p.name,p.addr].filter(Boolean).join(' ') || (p.lat.toFixed(6)+','+p.lng.toFixed(6));
-    lk.push('<a href="'+searchAt(gq,p.lat,p.lng)+'" target="_blank" rel="noopener">Google Maps</a>');
-    lk.push('<a href="'+panoLink(p.lat,p.lng)+'" target="_blank" rel="noopener">Street View</a>');
+    lk.push('<a class="pa" href="'+searchAt(gq,p.lat,p.lng)+'" target="_blank" rel="noopener">Google Maps</a>');
     // Campgrounds get reviews too — same question a rider is asking of a motel.
     const stay=(p.asset==='Lodging'||p.asset==='Campground');
-    if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
-    if(stay) lk.push('<a href="'+reviewsLink([p.name,p.addr].filter(Boolean).join(' '),p.lat,p.lng)+'" target="_blank" rel="noopener">Reviews</a>');
-    // Exact coords here, so this routes precisely — no geocoding guess involved.
-    lk.push('<a href="https://www.google.com/maps/dir/?api=1'+(this.myLL?'&origin='+this.myLL.lat+','+this.myLL.lng:'')
-      +'&destination='+p.lat+','+p.lng+'&travelmode=bicycling" target="_blank" rel="noopener">Directions</a>');
+    if(p.asset==='Lodging') lk.push('<a class="pa" href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
+    if(stay) lk.push('<a class="pa" href="'+reviewsLink([p.name,p.addr].filter(Boolean).join(' '),p.lat,p.lng)+'" target="_blank" rel="noopener">Reviews</a>');
     /* Said plainly, because a volunteer map and a state asset register are worth
        different amounts of trust when you are deciding to ride nine miles for a
-       shower — and because whoever mapped it can be told if it has closed. */
-    if(p.src==='bundled' && p.osmId)
-      lk.push('<a href="https://www.openstreetmap.org/'+esc(p.osmId)+'" target="_blank" rel="noopener">OpenStreetMap</a>');
+       shower. */
     const osmNote = p.src==='bundled'
       ? 'From OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
       : '';
-    return h+'<br>'+lk.join(' \u00b7 ')
+    return h+'<div class="pa-row poi-lk">'+lk.join('')+'</div>'
       +(osmNote?'<div class="poi-src">'+osmNote+'</div>':'');
   }
   async fetchAllPOIs(){
@@ -3771,7 +3767,6 @@ class TrailApp {
       if(off!=null && off>5.2) return;                 // safety net; the file is pre-filtered
       const p={asset:o.c, name:o.n||CATCFG[o.c].label, sub:'', addr:o.a||'', phone:o.p||'',
         url:o.u||'', src:'bundled', lat, lng, mile:isFinite(+o.m)?+o.m:null, off:off==null?999:off};
-      if(o.id) p.osmId=String(o.id);
       out.push(p);
     });
     return out;
