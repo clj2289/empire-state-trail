@@ -209,7 +209,7 @@ const mpTxt = m => { const s=fmtMp(m); return s ? 'TM '+s : ''; };
    the browser has drawn it. Must track .town-lb in the stylesheet: DY clears the dot's
    ring, and the width is a per-character estimate for the label's own weight and size,
    run generous so a wide name errs towards dropping a neighbour rather than colliding. */
-const TOWN_LB_DY=14, TOWN_LB_H=17, TOWN_LB_CH=6.6, TOWN_LB_PAD=16, TOWN_LB_GAP=4;
+const TOWN_LB_DY=14, TOWN_LB_H=19, TOWN_LB_CH=7.5, TOWN_LB_PAD=16, TOWN_LB_GAP=4;
 
 /* Facility names/addresses come from a third-party service and land in innerHTML
    and in data-* attributes, so everything interpolated goes through esc() first.
