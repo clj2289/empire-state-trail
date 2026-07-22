@@ -612,6 +612,49 @@ const CAT_ORDER=['Lock camping','Campground','Lodging','Attraction','Train Stati
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
 
+/* ---- which town is this in ----
+   Two answers, because neither alone is enough. The postal city is the precise one
+   and about two thirds of the corridor carries it in an address; the nearest trail
+   town is always there and is the one a rider actually navigates by — "the Walmart
+   at Albany" means the detour you take off Albany, wherever the town line runs.
+   So the table prints the city with the trail town beneath it, and collapses to one
+   line when they agree or when only one of them is known.
+
+   An address arrives as "street, city, ST, zip" and is trusted only that far: strip
+   a trailing state and zip and the field before them is the city. Strip nothing and
+   there was no city field to begin with — what's left is a street line, and a road
+   name in a Town column is worse than an empty cell. */
+const ADDR_ZIP=/^\d{5}(-\d{4})?(;.*)?$/, ADDR_ST=/^[A-Z]{2}$/;
+const ADDR_STREET=/\b(st|street|rd|road|ave|avenue|blvd|boulevard|ln|lane|dr|drive|way|hwy|highway|route|rt|pkwy|parkway|tpke|turnpike|pike|ct|court|cir|circle|ter|terrace|plaza|pl|place|sq|square|trail|row|walk|commons)\.?$/i;
+function poiCity(p){
+  const a=p&&p.addr; if(!a) return '';
+  const parts=String(a).split(',').map(s=>s.trim()).filter(Boolean), had=parts.length;
+  while(parts.length && (ADDR_ZIP.test(parts[parts.length-1]) || ADDR_ST.test(parts[parts.length-1]))) parts.pop();
+  if(!parts.length || parts.length===had) return '';
+  // A handful of OSM records carry two towns in one field ("West Seneca;Buffalo").
+  const c=parts[parts.length-1].split(';')[0].trim();
+  if(!c || /^\d/.test(c) || /\d{3}/.test(c) || ADDR_STREET.test(c) || c.length>30) return '';
+  return c;
+}
+/* The trail town a milepost falls nearest to. Every POI has a mile, so unlike the
+   city this never comes back empty — which is the whole reason it's the fallback. */
+function nearestTown(mile){
+  if(mile==null || !isFinite(mile)) return null;
+  let best=null, bd=Infinity;
+  TOWNS.forEach(t=>{ const d=abs(t.mi-mile); if(d<bd){ bd=d; best=t; } });
+  return best;
+}
+/* Flattened for matching, so "Dunkin'" is found by "dunkin" and "St. John's" by
+   "st johns". Punctuation and accents both go: what a rider types is the plain form. */
+const normQ = s => String(s==null?'':s).toLowerCase().normalize('NFD')
+  .replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+// Enough rows to see the shape of the answer without building 400 of them per
+// keystroke; the rest are one button away.
+const HIT_CAP=60;
+// Above every overlay pane (those top out at 640) but below the hover highlight,
+// so a hit is never buried under a layer somebody dragged on top.
+const HIT_PANE_Z='1150';
+
 const LEG_URL=ARC+"EST_Public/FeatureServer/3/query";
 
 /* ============================================================
@@ -647,6 +690,12 @@ class TrailApp {
     // Nearby list: optional day-planning band (trail miles ahead) + per-category
     // expansion. Filters start collapsed — the list is the reason you opened the tab.
     this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
+    /* One name search across every POI the app holds, driven from two boxes — the
+       map's Find bar and the Nearby list's own field — because the answer belongs on
+       both screens and there is no sense in two of them disagreeing. Deliberately not
+       persisted, for the same reason the filter block isn't: a query left over from
+       three days ago is a filter you've forgotten you set. */
+    this.q=''; this.qAll=false; this.hitLayer=null; this.hitMarks={}; this._fitPend=null;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.mileLayer=null; this.mileSig='';
     // Overlays by key, the order they were registered in, and the order the rider
@@ -809,7 +858,10 @@ class TrailApp {
       const b=this.$('mpTo'); if(b) b.value=hi;
       this.savePrefs();
     }
-    this.renderNearby();
+    // A search answers across the whole route, so the viewport isn't filtering it and
+    // rebuilding its table on every pan is work with nothing to show for it. The boxes
+    // above still track the view, ready for when the search is cleared.
+    if(!this.qActive()) this.renderNearby();
   }
   /* Any manual edit to the range takes the wheel back from the map. */
   stopFollowing(){
@@ -1071,7 +1123,7 @@ class TrailApp {
     this.screens.forEach(s=>{ s.classList.toggle('active', s.dataset.screen===name); });
     // Only resize. Recentring here threw away wherever you had panned to the moment
     // you glanced at another tab and came back.
-    if(name==='map' && this.map){ setTimeout(()=>this.map.invalidateSize(),60); }
+    if(name==='map' && this.map){ setTimeout(()=>{ this.map.invalidateSize(); this.flushFit(); },60); }
   }
 
   /* ---------- controls ---------- */
@@ -1121,10 +1173,35 @@ class TrailApp {
     const fx=this.$('findX'); if(fx) fx.addEventListener('click',()=>this.closeFind());
     // A form, so the phone keyboard's Go key runs the search like the button does.
     const ff=this.$('mapFind'); if(ff) ff.addEventListener('submit',e=>{ e.preventDefault(); this.runFind(); });
+    /* The route's own places are held in memory, so they answer on the keystroke —
+       no debounce and no Go, which is what makes the pins feel like they're tracking
+       what you type. Only the wider geocoder waits for the button, because that one
+       is a network call and typing "walmart" would fire seven of them. */
+    const fq=this.$('findQ');
+    if(fq) fq.addEventListener('input',()=>{ this.setQuery(fq.value,'findQ'); this.renderFind([], ''); });
     document.addEventListener('click',e=>{
       const r=e.target.closest('.find-r'); if(!r) return;
       this.gotoFound(+r.dataset.flat, +r.dataset.flng, +r.dataset.fz, r.dataset.ftown||'');
     });
+    /* A route place in the Find bar is a POI, not a coordinate: the shared [data-lat]
+       row handler above does the flying and the popup, so this only has to get the bar
+       out of the way — and keep the query, because the pins under it are the answer. */
+    document.addEventListener('click',e=>{ if(e.target.closest('.find-p')) this.closeFind(true); });
+    document.addEventListener('click',e=>{
+      if(!e.target.closest('.find-all')) return;
+      this.closeFind(true); this.showTab('nearby');
+      const el=this.$('poiQ'); if(el) el.value=this.q;
+    });
+    // Both live in the rendered list, so both are delegated: the header's Clear, and
+    // the button that lifts the row cap off a long answer.
+    document.addEventListener('click',e=>{
+      if(e.target.closest('.hit-clear')){ this.setQuery('',''); return; }
+      if(e.target.closest('.hit-more')){ this.qAll=true; this.renderNearby(); }
+    });
+    const pq=this.$('poiQ');
+    if(pq) pq.addEventListener('input',()=>this.setQuery(pq.value,'poiQ'));
+    const pqx=this.$('poiQX');
+    if(pqx) pqx.addEventListener('click',()=>{ this.setQuery('',''); const el=this.$('poiQ'); if(el) el.focus(); });
     // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
     document.addEventListener('click',e=>{ const r=e.target.closest('.srch-rm'); if(r){ this.removeSearch(r.dataset.sk); if(this.map) this.map.closePopup(); } });
@@ -1901,6 +1978,158 @@ class TrailApp {
     const b=this.$(ids[1]); if(b) b.value=hi;
     this.savePrefs(); this.renderNearby();
   }
+
+  /* ---------- searching every POI by name ---------- */
+  /* The single entry point both boxes call. `from` is the id of the box being typed
+     in, so the other one is brought into line without fighting the caret. */
+  setQuery(q, from){
+    const v=String(q||'');
+    if(v===this.q) return;
+    this.q=v; this.qAll=false;
+    ['poiQ','findQ'].forEach(id=>{ if(id!==from){ const el=this.$(id); if(el && el.value!==v) el.value=v; } });
+    const x=this.$('poiQX'); if(x) x.hidden=!v;
+    this.renderNearby();
+    this.syncHits();
+  }
+  /* Two characters is the floor: a single letter matches a third of the corridor and
+     the table it builds answers nothing. A pair of coordinates is already an answer
+     and belongs to the Find bar, so it never turns into a name search here. */
+  qActive(){ const s=this.q.trim(); return s.length>=2 && !parseLL(s); }
+  /* City and trail town, and the flattened pair the matcher reads. */
+  poiTown(p){
+    if(p._tw) return p._tw;
+    const city=poiCity(p), t=nearestTown(p.mile), near=t?this.shortTown(t.n):'';
+    return (p._tw={city, near, q:normQ(city+' '+near)});
+  }
+  /* Every POI the app holds: the State's few hundred *and* the ~9,000 bundled
+     OpenStreetMap corridor, which the browse list below deliberately leaves out. A
+     name search is the one place they all belong together — "walmart" is a question
+     about the whole route, not about one category or one map view, so this ignores
+     the category chips, the mileage band and the follow-the-map viewport alike. The
+     header says so, because a filter silently set aside is as bad as one silently on.
+     Matches the town as well as the name: "kingston" is a thing you'd type into it.
+     Normalised forms are cached on the POI — 9,000 of them per keystroke otherwise. */
+  searchHits(){
+    if(!this.qActive()) return [];
+    const q=normQ(this.q); if(!q) return [];
+    const out=[];
+    this.POIS.forEach(p=>{
+      const nm=p._qn || (p._qn=normQ(p.name));
+      if(nm.indexOf(q)<0 && this.poiTown(p).q.indexOf(q)<0) return;
+      out.push(p);
+    });
+    // Same order the browse list uses: nearest first when there's a rider to measure
+    // from, otherwise trail order in the direction of travel.
+    if(this.myMile!=null) out.sort((a,b)=>{
+      const da=this.rideMi(a), db=this.rideMi(b);
+      if(da==null||db==null) return da==null?1:-1;
+      if((da>=0)!==(db>=0)) return da>=0?-1:1;
+      return da>=0 ? da-db : db-da;
+    });
+    else out.sort((a,b)=>{
+      const ma=a.mile, mb=b.mile;
+      if(ma==null||mb==null) return ma==null?1:-1;
+      return this.dir==='B2NYC' ? mb-ma : ma-mb;
+    });
+    return out;
+  }
+  // 999 is the "couldn't be projected onto the route" sentinel, not a distance.
+  offTxt(p){ const s=this.spurMi(p); return (s>=99) ? '—' : (s ? fmtMi(s)+' mi' : 'on trail'); }
+  /* A table, because five numbers per row is a table and a flex row was already
+     eliding names at four. Reuses table.itin, which the itinerary has been scrolling
+     sideways on a phone since it shipped. The From-you column only exists when there
+     is a you — a column of dashes is not a distance. */
+  searchHTML(){
+    const hits=this.searchHits(), q=this.q.trim();
+    const head='<div class="hit-head"><span>'+esc(q)+'</span>'
+      +'<span class="hit-ct">'+(hits.length||'no')+' place'+(hits.length===1?'':'s')+'</span>'
+      +'<button type="button" class="hit-clear">Clear</button></div>';
+    if(!hits.length) return head+'<div class="up-empty">Nothing on or near the route matches “'+esc(q)
+      +'”. This searches every place name the app holds — the State’s trail facilities and the '
+      +'OpenStreetMap corridor within 5 mi — so a miss here means it isn’t in either.</div>';
+    const me=this.myMile!=null;
+    const shown=this.qAll?hits:hits.slice(0,HIT_CAP);
+    const span=hits.map(p=>p.mile).filter(m=>m!=null&&isFinite(m));
+    const range=span.length ? 'TM '+fmtMp(Math.min(...span))+'–'+fmtMp(Math.max(...span)) : '';
+    // Not "the filters below": this same list renders into the map's sheet, where
+    // there are none below it.
+    let h=head+'<div class="hit-note">'+esc(range)+' · every category, whole trail — category, '
+      +'mileage and map-view filters are all set aside while you’re searching.</div>';
+    h+='<div class="table-wrap"><table class="itin poi-tbl"><thead><tr>'
+      +'<th>Place</th><th>Town</th><th>TM</th><th>Off</th>'+(me?'<th class="frcell">From you</th>':'')
+      +'</tr></thead><tbody>';
+    shown.forEach(p=>{
+      const tw=this.poiTown(p);
+      // One line when the address agrees with the trail town, or when only one of the
+      // two is known — "Hudson / near Hudson" says nothing twice.
+      const same=tw.city && tw.near && normQ(tw.city)===normQ(tw.near);
+      const town = tw.city
+        ? esc(tw.city)+((tw.near && !same) ? '<span class="tw-n">near '+esc(tw.near)+'</span>' : '')
+        : (tw.near ? '<span class="tw-n">near '+esc(tw.near)+'</span>' : '—');
+      const tot=this.rideMi(p), back=(tot!=null && tot<-0.3);
+      const from = tot==null ? '—' : (back ? fmtMi(abs(tot))+' back' : '~'+fmtMi(tot)+' mi');
+      h+='<tr class="irow poi-row" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="15">'
+        +'<td class="nm">'+esc(p.name)+'</td>'
+        +'<td class="tw">'+town+'</td>'
+        +'<td class="mi">'+esc(fmtMp(p.mile)||'—')+'</td>'
+        +'<td class="mi off">'+esc(this.offTxt(p))+'</td>'
+        +(me?'<td class="mi'+(back?' poi-back':'')+'">'+esc(from)+'</td>':'')
+        +'</tr>';
+    });
+    h+='</tbody></table></div>';
+    if(hits.length>shown.length)
+      h+='<button type="button" class="poi-more hit-more">Show all '+hits.length+'</button>';
+    // Straight-line, and said so once here rather than implied five columns wide.
+    h+='<p class="hit-fine">“Off” is the straight-line distance from the place to the nearest point on '
+      +'the route — the ride out is that far at best. Tap a row to see it on the map; the ruler FAB traces '
+      +'the real roads if the detour is worth pricing.</p>';
+    return h;
+  }
+  /* The hits get their own map layer rather than lighting the pins already there,
+     because most of what a search finds is switched off: the OpenStreetMap corridor
+     is 9,000 pins and off by default, so a "walmart" that only lit visible markers
+     would light nothing. Own pane above the overlays, so category toggles and the
+     dragged layer order can't bury an answer. */
+  syncHits(){
+    const m=this.map; if(!m) return;
+    if(this.hitLayer){ m.removeLayer(this.hitLayer); this.hitLayer=null; }
+    this.hitMarks={};
+    const hits=this.searchHits();
+    if(!hits.length) return;
+    const pane=this.lyrPane('hits');
+    const pn=m.getPane(this.lyrPaneName('hits')); if(pn) pn.style.zIndex=HIT_PANE_Z;
+    const g=L.layerGroup();
+    hits.forEach(p=>{
+      const cfg=catCfg(poiCat(p));
+      const mk=L.marker([p.lat,p.lng],{pane, icon:L.divIcon({className:'poi-ic hit-ic',
+        html:'<span class="poi-pin is-hit">'+icon(cfg.icon,16)+'</span><span class="poi-lbl">'+esc(p.name)+'</span>',
+        iconSize:[26,26], iconAnchor:[13,13]})});
+      mk.bindPopup('',{maxWidth:280,minWidth:200,autoPan:false});
+      mk.on('popupopen',()=>mk.setPopupContent(this.poiPopup(p)));
+      this.hitMarks[p.i]=mk;
+      g.addLayer(mk);
+    });
+    g.addTo(m);
+    this.hitLayer=g;
+    /* A hidden map has no size, so fitBounds against it lands on a nonsense zoom.
+       Searching from the Nearby tab is the normal case — you type there and then go
+       and look — so the fit is held and flushed when the map is next on screen. */
+    if(this.screen==='map') this.fitHits(hits);
+    else this._fitPend=hits;
+  }
+  flushFit(){
+    const hits=this._fitPend; this._fitPend=null;
+    if(hits && hits.length) this.fitHits(hits);
+  }
+  /* Fit to every hit, not to the ones near you — 35 Walmarts span 400 miles and the
+     whole point of the list is that no single view holds them. Padded past the sheet,
+     which covers the bottom of the map and would otherwise swallow the southern half. */
+  fitHits(hits){
+    const m=this.map; if(!m || !hits.length) return;
+    const b=L.latLngBounds(hits.map(p=>[p.lat,p.lng]));
+    m.fitBounds(b,{paddingTopLeft:[26,26], paddingBottomRight:[26, 26+this.obstructedH()],
+      maxZoom:15, animate:true});
+  }
   renderNearby(){
     // Two mounts, one list: the Nearby tab and the map panel show the same thing, so
     // a filter or a category toggle lands in both without either owning the state.
@@ -1909,6 +2138,13 @@ class TrailApp {
     this.clearPoiHi();
     const list={ set innerHTML(v){ mounts.forEach(m=>{ m.innerHTML=v; }); } };
     if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
+    // A search replaces the browse list outright rather than filtering inside it: the
+    // groups, the pager and the band are all answers to "what's around me", and this
+    // is a different question. Clearing the box puts every one of them back untouched.
+    // The filter summary still gets written: the block is collapsed and set aside, but
+    // a stale line inside it is how a rider comes back later to a filter they can't
+    // account for.
+    if(this.qActive()){ this.renderFilterState(); list.innerHTML=this.searchHTML(); return; }
     // The two controls are orthogonal: the chips decide which groups appear and in
     // what order, the band filters the items inside each one.
     // "X of Y" whenever anything is narrowing, so a filtered count never reads as the
@@ -2087,7 +2323,9 @@ class TrailApp {
   wirePoiHover(){
     const mark=(el,on)=>{
       const id=el&&el.dataset?el.dataset.poi:null; if(id==null) return;
-      const mk=this.poiMarker[id]; if(!mk||!mk.getElement) return;
+      // A search result's own pin first: while a search is up that is the mark the
+      // rider can see, and the category pin under it may not even be switched on.
+      const mk=this.hitMarks[id] || this.poiMarker[id]; if(!mk||!mk.getElement) return;
       if(!on){ if(this._hiMk===mk) this.clearPoiHi(); return; }
       this.clearPoiHi();
       const node=mk.getElement(); if(!node) return;
@@ -2104,11 +2342,13 @@ class TrailApp {
     };
     // pointerover/out rather than mouseenter/leave: those don't bubble, and the rows
     // are replaced wholesale on every filter change.
+    // .poi-row is the search table's tr — same contract, same lit pin.
+    const ROW='.poi-item,.poi-row';
     document.addEventListener('pointerover',e=>{
-      const el=e.target.closest?e.target.closest('.poi-item'):null; if(el) mark(el,true);
+      const el=e.target.closest?e.target.closest(ROW):null; if(el) mark(el,true);
     });
     document.addEventListener('pointerout',e=>{
-      const el=e.target.closest?e.target.closest('.poi-item'):null; if(el) mark(el,false);
+      const el=e.target.closest?e.target.closest(ROW):null; if(el) mark(el,false);
     });
   }
   /* Labels are a zoom-level decision, not a per-pin one: at state scale they would be
@@ -2467,14 +2707,22 @@ class TrailApp {
     f.toggleAttribute('hidden', !on);
     const sc=document.querySelector('[data-screen="map"]');
     if(sc) sc.classList.toggle('is-finding', on);
-    if(on && q){ q.focus(); q.select(); }
-    if(!on) this.clearFind();
+    // Opening onto a search that is already running — set from the Nearby tab, or left
+    // over from before the bar was closed on a result — has to show it. An empty box
+    // over a map covered in magenta pins is the bar failing to admit what it did.
+    if(on && q){ q.focus(); q.select(); if(this.qActive()) this.renderFind([], ''); }
+    if(!on){ this.clearFind(); this.setQuery('','findQ'); }
   }
-  closeFind(){
+  /* Closing the bar from the × or the FAB drops the search with it: thirty magenta
+     pins on a map with no query in sight is a state there is no way out of without
+     going to look for the bar again. Tapping a *result* also closes the bar but keeps
+     the query — the pins and the table are the thing you just asked for. */
+  closeFind(keepQ){
     const f=this.$('mapFind'); if(f) f.setAttribute('hidden','');
     const sc=document.querySelector('[data-screen="map"]');
     if(sc) sc.classList.remove('is-finding');
     this.clearFind();
+    if(!keepQ) this.setQuery('','findQ');
   }
   clearFind(){ const o=this.$('findOut'); if(o) o.innerHTML=''; }
   /* A pair of numbers never touches the network — it is already an answer. A name
@@ -2486,7 +2734,10 @@ class TrailApp {
     const raw=el.value.trim();
     const ll=parseLL(raw);
     if(ll){ this.gotoFound(ll.lat, ll.lng, 15); return; }
-    if(raw.length<2){ out.innerHTML='<div class="find-n">A town, a place, or a pair of coordinates.</div>'; return; }
+    if(raw.length<2){ out.innerHTML='<div class="find-n">A place on the route, a town, or a pair of coordinates.</div>'; return; }
+    // The route's own places are already on screen from the keystroke that got here,
+    // so an empty wider search is only worth reporting when they came up empty too.
+    const onRoute=this.searchHits().length;
     const near=raw.toLowerCase();
     const local=TOWNS.filter(t=>t.n.toLowerCase().indexOf(near)>=0)
       .map(t=>({lat:t.lat, lng:t.lng, z:14, town:t.n, name:this.shortTown(t.n), note:'trail stop \u00b7 '+mpTxt(t.mi)}));
@@ -2496,9 +2747,9 @@ class TrailApp {
     catch(e){
       // Saying nothing here would let a list of trail stops pass for the whole
       // answer, which is the one way this can quietly mislead.
-      this.renderFind(local, local.length
-        ? 'Trail stops only \u2014 the wider place search didn\u2019t answer.'
-        : 'No answer from the place search. Coordinates and trail stops still work.');
+      this.renderFind(local, (local.length||onRoute)
+        ? 'The wider place search didn\u2019t answer \u2014 what\u2019s above is from the app\u2019s own data.'
+        : 'No answer from the place search. Coordinates, trail stops and route places still work.');
       return;
     }
     /* Photon knows the trail towns too, so the same place would otherwise be listed
@@ -2507,7 +2758,7 @@ class TrailApp {
        slightly different spots, which is exactly what a coordinate test misses. */
     const rows=local.concat(far.filter(r=>!local.some(t=>
       t.name.toLowerCase()===r.name.toLowerCase() && miBetween([t.lat,t.lng],[r.lat,r.lng])<8)));
-    this.renderFind(rows, rows.length?'':'Nothing found for \u201c'+raw+'\u201d.');
+    this.renderFind(rows, (rows.length||onRoute)?'':'Nothing found for \u201c'+raw+'\u201d.');
   }
   async geocode(q){
     const c=this.map?this.map.getCenter():{lat:42.9,lng:-76.0};
@@ -2528,9 +2779,32 @@ class TrailApp {
       return name ? {lat:g[1], lng:g[0], z, name, note:where||p.countrycode||''} : null;
     }).filter(Boolean);
   }
+  /* The route's own places, above whatever the geocoder has to say about the wider
+     world — because on this app "walmart" is nearly always a question about the trail.
+     A peek at the top few; the full table lives in the list, which is where five
+     columns fit. Its own class, not .find-r: those carry data-flat and a handler that
+     zooms to a coordinate, while these are POIs and go through the shared row path. */
+  findHitsHTML(){
+    const hits=this.searchHits();
+    if(!hits.length) return '';
+    const top=hits.slice(0,4);
+    let h='<div class="find-h">On the route<span>'+hits.length+' place'+(hits.length===1?'':'s')+'</span></div>';
+    h+=top.map(p=>{
+      const tw=this.poiTown(p), s=this.spurMi(p);
+      const off = s>=99 ? '' : (s ? fmtMi(s)+' mi off' : 'on the trail');
+      return '<button type="button" class="find-p" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'" data-z="15">'
+        +'<b>'+esc(p.name)+'</b><span>'+esc([tw.city||(tw.near?'near '+tw.near:''), mpTxt(p.mile), off]
+          .filter(Boolean).join(' · '))+'</span></button>';
+    }).join('');
+    if(hits.length>top.length)
+      h+='<button type="button" class="find-all">See all '+hits.length+' in the list ›</button>';
+    return h;
+  }
   renderFind(rows, note){
     const out=this.$('findOut'); if(!out) return;
-    let h=rows.map(r=>'<button type="button" class="find-r" data-flat="'+r.lat+'" data-flng="'+r.lng+'"'
+    let h=this.findHitsHTML();
+    if(h && rows.length) h+='<div class="find-h">Elsewhere</div>';
+    h+=rows.map(r=>'<button type="button" class="find-r" data-flat="'+r.lat+'" data-flng="'+r.lng+'"'
       +' data-fz="'+r.z+'"'+(r.town?' data-ftown="'+esc(r.town)+'"':'')+'>'
       +'<b>'+esc(r.name)+'</b>'+(r.note?'<span>'+esc(r.note)+'</span>':'')+'</button>').join('');
     if(note) h+='<div class="find-n">'+esc(note)+'</div>';
@@ -2541,7 +2815,7 @@ class TrailApp {
      questions the moment you can see it. A trail stop opens its own, which is richer. */
   gotoFound(lat,lng,z,town){
     if(!this.map || !isFinite(lat) || !isFinite(lng)) return;
-    this.closeFind();
+    this.closeFind(true);
     this.showTab('map');
     setTimeout(()=>{
       this.centerVisible(lat,lng,z||14);
