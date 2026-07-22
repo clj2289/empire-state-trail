@@ -99,11 +99,17 @@ const ME_BLUE='#1a73e8', ME_PANE='mePane';
 const OFF_TRAIL_MI=60;
 // Zoom at which pins start showing their names beside them.
 const POI_LABEL_Z=13;
-/* Above every pane Leaflet ships (popups are the highest at 700) and every pane the
-   layer registry makes at 600, so a hovered pin is never behind anything. */
+/* Above every pane inside the map — Leaflet's own top out at 700, the layer registry's at
+   600 — so a hovered pin is never behind another layer. The popup pane is the one thing it
+   does not beat, and only because that one is lifted clean out of the map (POP_PANE_Z). */
 const HI_PANE_Z='1200';
 // Beats any z-index Leaflet derives from a marker's y position within the same pane.
 const HI_Z_OFFSET=100000;
+/* The popup pane is lifted out of the map pane at init (see liftPopupPane), so this one
+   is measured against the app's own chrome — the finder at 1101, the back pill at 1100,
+   the dock at 900 — and not against the in-map panes above it. A popup is the only dialog
+   this app has, so nothing on the map screen is allowed to sit over one. */
+const POP_PANE_Z='1200';
 // How far the NWS hourly grid actually runs, and therefore how many days we show.
 const WX_MAX_DAYS=6;
 // The town outlook fetches a forecast per town, so it caps how many one tap will pull
@@ -931,6 +937,20 @@ class TrailApp {
     if(t){ const r=t.getBoundingClientRect(); if(r.height && r.top<top) top=r.top; }
     return Math.max(0, mr.bottom-top);
   }
+  /* And the same going up. Popups outrank the top chrome now, so the only thing keeping a
+     popup off the back pill is where it is put — and the pill is raised by the very tap
+     that opens the popup, so left alone it would arrive already buried. Hidden bars
+     measure 0x0, so this is just the tallest one currently up. */
+  obstructedTop(){
+    const m=this.map; if(!m) return 0;
+    const mr=m.getContainer().getBoundingClientRect();
+    let bot=mr.top;
+    ['mapFind','mapBack','measureBar'].forEach(id=>{
+      const e=this.$(id); if(!e) return;
+      const r=e.getBoundingClientRect(); if(r.height && r.bottom>bot) bot=r.bottom;
+    });
+    return Math.max(0, bot-mr.top);
+  }
   // Put a point in the middle of the visible strip rather than the middle of the map.
   centerVisible(lat,lng,zoom){
     const m=this.map; if(!m) return;
@@ -949,12 +969,38 @@ class TrailApp {
     const top=r.top-mr.top, bottom=r.bottom-mr.top;
     let dy=0;
     if(bottom > bottomLimit-8) dy = bottom-(bottomLimit-8);
-    dy=Math.min(dy, top-8);          // never push its head off the top to save its feet
+    const topLimit=this.obstructedTop();
+    dy=Math.min(dy, top-topLimit-8);  // never push its head under the top bars to save its feet
     let dx=0;
     const left=r.left-mr.left, right=r.right-mr.left;
     if(right > mr.width-8) dx = right-(mr.width-8);
     if(left-dx < 8) dx = left-8;
     if(abs(dy)>1 || abs(dx)>1) m.panBy([dx,dy],{animate:true,duration:.2});
+  }
+  /* Leaflet nests every pane inside .leaflet-map-pane, which is a stacking context in its
+     own right at z-index 400 — so the popup pane's 700 only ever wins against the rest of
+     the map, and the whole map loses as one box to the finder at 1101, the back pill, the
+     dock and the sheet. No z-index on the popup pane can escape that; the pane has to come
+     out. Reparented to the map container it lands in the same stacking context as the
+     chrome, where POP_PANE_Z beats it, and the search-hit pins at 1150 stay behind the
+     popup you opened by tapping one — they are inside the box the popup just left.
+     The catch is that Leaflet positions popups in layer coordinates, which are relative to
+     the map pane's own translate; out here that translate no longer applies, so the pane
+     has to wear a copy of it or popups slide off their pins the moment the map moves. */
+  liftPopupPane(){
+    const m=this.map; if(!m||!m.getPane) return;
+    const mp=m.getPane('mapPane'), pp=m.getPane('popupPane');
+    if(!mp||!pp||!m.getContainer) return;
+    m.getContainer().appendChild(pp);
+    pp.style.zIndex=POP_PANE_Z;
+    /* The class goes along with the transform. Leaflet tweens a zoom with the descendant
+       rule `.leaflet-zoom-anim .leaflet-zoom-animated`, and it only ever puts the outer
+       class on the map pane — which the popup pane is no longer inside. Without this the
+       popup takes its post-zoom position on the animation's first frame and hangs there,
+       detached from its pin, for the 250ms the tiles spend catching up. */
+    const sync=()=>{ pp.style.transform=mp.style.transform;
+      pp.classList.toggle('leaflet-zoom-anim', mp.classList.contains('leaflet-zoom-anim')); };
+    m.on('move zoom zoomanim viewreset zoomend',sync); sync();
   }
   // Shut is exactly the grab bar, measured rather than guessed.
   shutH(){ const g=this.$('panelGrab'); return g?g.offsetHeight:0; }
@@ -2604,6 +2650,9 @@ class TrailApp {
     f.toggleAttribute('hidden', !on);
     const sc=document.querySelector('[data-screen="map"]');
     if(sc) sc.classList.toggle('is-finding', on);
+    // Popups outrank the bar now, so one left open from an earlier tap would sit over the
+    // field you just asked for, keyboard and all. Starting a search retires it.
+    if(on && this.map) this.map.closePopup();
     // Opening onto a search that is already running — set from the Nearby tab, or left
     // over from before the bar was closed on a result — has to show it. An empty box
     // over a map covered in magenta pins is the bar failing to admit what it did.
@@ -3589,6 +3638,7 @@ class TrailApp {
     /* Above the marker pane (600) and below the popup pane (700), so where you are
        is never underneath anything you have switched on. */
     if(map.createPane){ map.createPane(ME_PANE); const pn=map.getPane(ME_PANE); if(pn) pn.style.zIndex=655; }
+    this.liftPopupPane();
     // One place decides where a popup sits, whoever opened it, using the panel height
     // as it is right now — a bind-time padding would be stale the moment it moved.
     map.on('popupopen', e=>setTimeout(()=>this.fitPopup(e.popup),0));
