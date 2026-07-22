@@ -120,6 +120,40 @@ const WX_HORIZON_MS=6.3*24*36e5;
 const AADT_URL='https://gis.dot.ny.gov/hostingny/rest/services/Roadways/Traffic_Monitoring/FeatureServer/1/query';
 const AADT_SRC='https://www.dot.ny.gov/tdv';
 const AADT_MINZ=10, AADT_CAP=400;
+/* Google as a basemap, through the Maps JS API rather than tile URLs.
+   Pulling mt*.google.com into an L.tileLayer is the answer every search result gives
+   and it is the wrong one twice over: the Maps Platform terms forbid Google content
+   under a non-Google map, and those tiles never carry the key, so none of the console
+   restrictions below apply to them. GoogleMutant runs a real Google map underneath
+   Leaflet's panes instead, which keeps Google's logo, attribution and terms link on
+   screen where the licence expects them.
+
+   The key rides in a meta tag in index.html. A browser key cannot be secret — it is
+   fetched by the page, so anyone can read it — and Google's answer is restriction,
+   not concealment: an HTTP-referrer allowlist plus Maps JavaScript API only plus a
+   quota cap makes a copied key useless elsewhere and uncapped billing impossible.
+   Rotating it is a one-line edit in the shell, not a hunt through this file.
+
+   Nothing here loads until someone actually picks a Google layer. Dynamic Maps bills
+   per map load, so a rider who never leaves OSM should never cost anything, and the
+   app should not be waiting on Google's bootstrap to finish on a trailside bar of
+   signal before it can draw a map at all. */
+const GMAPS_SRC='https://maps.googleapis.com/maps/api/js?v=weekly&loading=async';
+const GMUTANT_SRC='https://unpkg.com/leaflet.gridlayer.googlemutant@0.16.0/dist/Leaflet.GoogleMutant.js';
+const GMAPS_CB='__estGmapsReady';
+const GMAPS_LS='est-gmaps-key';
+/* Two places, in this order, and the order is the whole point. A restricted production
+   key belongs in the shell where every visitor gets it. A demo key — the throwaway one
+   Google hands out for prototyping — belongs in localStorage on one machine, because it
+   lives outside any Cloud project and so cannot be given a referrer allowlist, an API
+   restriction or a quota cap. An unrestrictable key in a public repo is a live credential
+   with nothing standing behind it, so it stays out of the commit:
+     localStorage.setItem('est-gmaps-key','AIza…')   // this browser only, never shipped */
+function gmapsKey(){
+  try{ const k=(localStorage.getItem(GMAPS_LS)||'').trim(); if(k) return k; }catch(e){}
+  const m=document.querySelector('meta[name="google-maps-key"]');
+  return m ? (m.content||'').trim() : '';
+}
 /* Road-snapping for the measure tool. FOSSGIS's public OSRM (bike profile) both snaps a
    dropped point to the nearest way (/nearest) and traces the roads between two points
    (/route), so a traced leg reads real pedalled miles rather than straight-line. A point
@@ -3224,6 +3258,60 @@ class TrailApp {
   }
 
   /* ---------- map + live data ---------- */
+  /* Both scripts, once, on demand. Google's bootstrap resolves through a global
+     callback rather than the script's own onload — onload fires when the loader
+     lands, which is several fetches before google.maps.Map exists. GoogleMutant
+     goes second because it registers itself against an L that has to be there
+     already, and against a google.maps it reads at construction time. */
+  loadGmaps(){
+    if(this._gmaps) return this._gmaps;
+    const key=gmapsKey();
+    if(!key) return Promise.reject(new Error('no Google Maps key configured'));
+    this._gmaps=new Promise((res,rej)=>{
+      window[GMAPS_CB]=res;
+      const s=document.createElement('script');
+      s.async=true; s.src=GMAPS_SRC+'&key='+encodeURIComponent(key)+'&callback='+GMAPS_CB;
+      s.onerror=()=>rej(new Error('Google Maps blocked'));
+      document.head.appendChild(s);
+    }).then(()=>new Promise((res,rej)=>{
+      const s=document.createElement('script');
+      s.async=true; s.src=GMUTANT_SRC;
+      s.onload=res; s.onerror=()=>rej(new Error('GoogleMutant blocked'));
+      document.head.appendChild(s);
+    })).catch(err=>{
+      /* Forget the failure, or the cache above hands this same rejection back forever
+         and one dead moment of signal costs the Google layers for the rest of the
+         session — on a trail app, exactly the conditions where a retry is the point. */
+      this._gmaps=null;
+      throw err;
+    });
+    return this._gmaps;
+  }
+  /* A placeholder that draws nothing, so the basemap list is complete on the first
+     paint and picking the row is what pays for the load. Leaflet only asks a layer
+     to add and remove itself, which is exactly the pair of moments this needs.
+     The mutant is built once and kept across switches: every new google.maps.Map is
+     another billed map load, so toggling back and forth must not keep buying them. */
+  gmapsBase(type){
+    const app=this;
+    const Lazy=L.Layer.extend({
+      onAdd(map){
+        this._on=true;
+        app.loadGmaps().then(()=>{
+          if(!this._on) return;   // switched away again while Google was still booting
+          if(!this._mut) this._mut=L.gridLayer.googleMutant({type:type, maxZoom:21});
+          map.addLayer(this._mut);
+        }).catch(()=>{
+          app.status('Google’s map couldn’t load. Check the key’s referrer restrictions, or pick another basemap.');
+        });
+      },
+      onRemove(map){
+        this._on=false;
+        if(this._mut) map.removeLayer(this._mut);
+      }
+    });
+    return new Lazy();
+  }
   initMap(){
     const el=this.$('map');
     if(!el) return;
@@ -3253,6 +3341,19 @@ class TrailApp {
     // Held onto so buildPOILayers can hang facility overlays off it once the
     // live data lands — this control is now the only place map pins get toggled.
     this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright',collapsed:true}).addTo(map);
+    /* Offered only when a key is actually set. Without one Google serves a grey
+       "for development purposes only" wash over everything, which is a worse map
+       than no Google row at all — better the option isn't there. Added before any
+       overlay is registered, because addBaseLayer makes Leaflet rebuild the whole
+       list and decorateLayers would lose the drag grips it had already hung on it. */
+    if(gmapsKey()){
+      this.layersCtl.addBaseLayer(this.gmapsBase('roadmap'),'Google');
+      this.layersCtl.addBaseLayer(this.gmapsBase('hybrid'),'Google Satellite');
+      /* The one failure Google reports out-of-band: a referrer the key's allowlist
+         doesn't cover fails here, not on the script load, and otherwise shows up
+         only as a watermarked map and a console line nobody on a phone will read. */
+      window.gm_authFailure=()=>this.status('Google rejected the key — this address isn’t in its referrer allowlist.');
+    }
     /* Leaflet drops this in the top-right corner, under the notch and out of a thumb's
        reach. Move it down into the FAB stack, where the rest of the map controls live —
        it's just a div, its events ride with it, and anchored to the panel it now travels

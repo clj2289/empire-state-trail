@@ -13,6 +13,19 @@
 <meta name="apple-mobile-web-app-title" content="EST Trail">
 <link rel="apple-touch-icon" href="icon-192.png">
 
+<!-- Google basemap key, and deliberately empty until there is one worth shipping.
+     A browser key can't be a secret — the page has to send it, so anyone who loads the
+     app can read it, and that is how Google intends it. What stops it being worth
+     stealing lives in the Cloud console, not in this file:
+       · Application restriction  → HTTP referrers, this site's origins only
+       · API restriction          → Maps JavaScript API, nothing else
+       · Quota cap + budget alert → on Dynamic Maps, so a scraper can't run up a bill
+     Only a key from your own Cloud project can be given those. Google's prototyping
+     "demo key" cannot — it sits outside any project you own — so it goes in localStorage
+     on the one machine that needs it (see gmapsKey in est-core.js), never here.
+     Empty means the Google rows simply don't appear in the layers control. -->
+<meta name="google-maps-key" content="">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap">
