@@ -124,6 +124,22 @@
   .find-r span{display:block;font-size:11px;color:var(--color-neutral-600)}
   .find-n{padding:7px 8px;font-size:11.5px;color:var(--color-neutral-600);
     border-top:1px solid var(--color-divider)}
+  /* Places on the route come first and are marked as such — on this app "walmart" is
+     nearly always a question about the trail, not about the wider world. */
+  .find-h{display:flex;align-items:baseline;gap:6px;padding:6px 8px 3px;
+    border-top:1px solid var(--color-divider);
+    font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600)}
+  .find-h span{margin-left:auto;color:var(--color-accent-2);font-weight:700}
+  .find-p{display:block;width:100%;text-align:left;cursor:pointer;font-family:inherit;
+    padding:7px 8px;background:transparent;border:0;border-left:3px solid var(--color-accent-2)}
+  .find-p:hover{background:var(--color-accent-100)}
+  .find-p b{display:block;font-size:13px;color:var(--color-text)}
+  .find-p span{display:block;font-size:11px;color:var(--color-neutral-600);
+    font-variant-numeric:tabular-nums}
+  .find-all{display:block;width:100%;text-align:left;cursor:pointer;font-family:inherit;
+    padding:7px 8px;background:transparent;border:0;font-size:11.5px;font-weight:600;
+    color:var(--color-accent-700)}
+  .find-all:hover{color:var(--color-accent-800);background:var(--color-accent-100)}
   .map-back:hover{background:var(--color-accent-100)}
   .map-back:active{background:var(--color-accent-200)}
   /* The map panel. Sits above the floating tab bar; the map runs edge to edge behind
@@ -511,6 +527,39 @@
     background:transparent;border:1px solid var(--color-divider);border-radius:var(--radius-md);
     color:var(--color-accent-700);padding:6px var(--space-2)}
   .poi-band-view:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  /* ---- searching every place by name ----
+     One field, above the filters rather than inside them: this asks a different
+     question from the ones below it ("where is a Walmart" rather than "what is around
+     me"), and it answers across the whole route regardless of how they are set. */
+  .poi-search{display:flex;align-items:center;gap:6px;margin-bottom:var(--space-3);
+    padding:0 var(--space-2);background:var(--color-surface);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .poi-search:focus-within{border-color:var(--color-accent)}
+  .poi-search-ic{display:flex;flex:none;color:var(--color-neutral-500)}
+  .poi-search input{flex:1;min-width:0;font-family:inherit;font-size:13px;padding:9px 0;
+    background:transparent;color:var(--color-text);border:0}
+  .poi-search input:focus{outline:none}
+  .poi-search input::-webkit-search-cancel-button{display:none}
+  .poi-search-x{flex:none;width:26px;font-family:inherit;font-size:18px;line-height:1;cursor:pointer;
+    padding:4px 0;background:transparent;color:var(--color-neutral-600);border:0}
+  .poi-search-x:hover{color:var(--color-text)}
+  /* The result header restates the query, because on the map screen the box that set
+     it is a bar that has since closed — and carries the only Clear there is over there. */
+  .hit-head{display:flex;align-items:baseline;gap:8px;margin-bottom:4px;padding-bottom:4px;
+    border-bottom:1px solid var(--color-divider);
+    font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:14px}
+  .hit-ct{font-family:var(--font-body);font-weight:400;font-size:10px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--color-neutral-500);white-space:nowrap}
+  .hit-clear{margin-left:auto;flex:none;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;
+    background:transparent;border:0;color:var(--color-accent-700);padding:2px}
+  .hit-clear:hover{color:var(--color-accent-800)}
+  .hit-note{font-size:11px;color:var(--color-neutral-500);margin-bottom:var(--space-2)}
+  .hit-fine{font-size:10.5px;line-height:1.5;color:var(--color-neutral-500);margin-top:var(--space-2)}
+  /* Town is the one column allowed to wrap — the city and the trail town under it are
+     two lines by design, and everything else is a number that must stay on one. */
+  table.itin td.tw{white-space:normal;min-width:78px;font-size:12px;line-height:1.3}
+  .tw-n{display:block;font-size:10px;color:var(--color-neutral-500)}
+  table.itin td.off{color:var(--color-neutral-600)}
   /* Stepping the window, at the top of the list where the window is set. Each side
      names the stretch it would move to and how much is waiting there, so a step is
      never a guess — and a direction with nothing in it says so instead of moving. */
@@ -768,6 +817,19 @@
   .is-hi .poi-lbl{display:block;color:var(--color-bg);background:var(--color-accent-2)}
   .is-hi .poi-pin{background:var(--color-accent-2);transform:scale(1.35);
     box-shadow:0 0 0 5px color-mix(in srgb,var(--color-accent-2) 30%,transparent),0 2px 6px rgba(0,0,0,.5)}
+  /* ---- search hits ----
+     Their own layer in the app's magenta, above every overlay, because most of what a
+     search finds is switched off — the OpenStreetMap corridor is 9,000 pins and off by
+     default, so lighting only the visible markers would light nothing.
+     Labels keep the app's own zoom rule rather than forcing themselves on: a search
+     fits the map to every hit, and at 400 miles across, 35 names is a wall of text
+     over the one thing you asked to see. The ring says where, the table beneath says
+     which, and pointing at a row names its pin at any zoom — see .is-hi below. */
+  .poi-pin.is-hit{width:26px;height:26px;background:var(--color-accent-2);border-color:#fff;
+    box-shadow:0 0 0 4px color-mix(in srgb,var(--color-accent-2) 26%,transparent),0 1px 5px rgba(0,0,0,.45)}
+  .hit-ic .poi-lbl{left:32px;color:var(--color-accent-2);font-weight:700;
+    background:color-mix(in srgb,var(--color-bg) 92%,transparent)}
+  .hit-ic.is-hi .poi-lbl{color:var(--color-bg);background:var(--color-accent-2)}
   /* Lit, a borrowed pin fills like any other — the hollow mark says "which layer",
      the magenta says "this one", and the second has to win while you're pointing. */
   .is-hi .poi-pin.is-osm{border-color:var(--color-accent-2)}
@@ -851,6 +913,16 @@
       <div class="screen-pad">
         <h1 class="screen-title">Nearby</h1>
         <div id="poiStat" class="poi-stat"></div>
+        <!-- Searches every place the app holds, the State's and the OpenStreetMap
+             corridor both — which is the only way the 9,000 bundled ones are reachable
+             as a list at all. Shares its query with the map's Find bar. -->
+        <div class="poi-search">
+          <span class="poi-search-ic" data-ic="search"></span>
+          <input id="poiQ" type="search" inputmode="search" enterkeyhint="search" autocomplete="off"
+            placeholder="Search every place — walmart, dunkin, bike…"
+            aria-label="Search every place on or near the trail by name or town">
+          <button id="poiQX" type="button" class="poi-search-x" aria-label="Clear the search" hidden>&times;</button>
+        </div>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
         <details id="poiFilters" class="filters">
