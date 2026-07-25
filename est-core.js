@@ -99,11 +99,17 @@ const ME_BLUE='#1a73e8', ME_PANE='mePane';
 const OFF_TRAIL_MI=60;
 // Zoom at which pins start showing their names beside them.
 const POI_LABEL_Z=13;
-/* Above every pane Leaflet ships (popups are the highest at 700) and every pane the
-   layer registry makes at 600, so a hovered pin is never behind anything. */
+/* Above every pane inside the map — Leaflet's own top out at 700, the layer registry's at
+   600 — so a hovered pin is never behind another layer. The popup pane is the one thing it
+   does not beat, and only because that one is lifted clean out of the map (POP_PANE_Z). */
 const HI_PANE_Z='1200';
 // Beats any z-index Leaflet derives from a marker's y position within the same pane.
 const HI_Z_OFFSET=100000;
+/* The popup pane is lifted out of the map pane at init (see liftPopupPane), so this one
+   is measured against the app's own chrome — the finder at 1101, the back pill at 1100,
+   the dock at 900 — and not against the in-map panes above it. A popup is the only dialog
+   this app has, so nothing on the map screen is allowed to sit over one. */
+const POP_PANE_Z='1200';
 // The meteogram outlook: a rolling window of this many days (the NWS hourly grid runs
 // ~6.5 days, so four is comfortably inside it), and the mile spacing at which the route
 // is sampled for forecasts — one grid fetch per distinct sample cell.
@@ -203,6 +209,12 @@ const fmtMp = m => (m==null || !isFinite(m)) ? '' : m.toFixed(1);
 // trail never puts more than a few dozen on screen.
 const MILE_LADDER=[1,2,5,10,25,50,100], MILE_CAP=300;
 const mpTxt = m => { const s=fmtMp(m); return s ? 'TM '+s : ''; };
+/* Where a town's name sits relative to its dot, and how big a bite it takes out of the
+   map — the declutter works in pixels, so it needs the box the name will occupy before
+   the browser has drawn it. Must track .town-lb in the stylesheet: DY clears the dot's
+   ring, and the width is a per-character estimate for the label's own weight and size,
+   run generous so a wide name errs towards dropping a neighbour rather than colliding. */
+const TOWN_LB_DY=14, TOWN_LB_H=19, TOWN_LB_CH=7.5, TOWN_LB_PAD=16, TOWN_LB_GAP=4;
 
 /* Facility names/addresses come from a third-party service and land in innerHTML
    and in data-* attributes, so everything interpolated goes through esc() first.
@@ -476,11 +488,6 @@ function ratesLink(q, date){
   if(date && out) p.push('checkin='+date,'checkout='+out);
   return 'https://www.booking.com/searchresults.html?'+p.join('&');
 }
-// Same reasoning for star ratings and reviews: reading them out of the Places API
-// needs a key and a proxy, and the ArcGIS layer carries none of its own. The map
-// search lands on the place card, where the rating and the reviews already sit.
-// Anchored to the facility's own coordinates so a chain name that repeats up the
-// trail — three Comfort Inns — resolves to the one the rider actually tapped.
 /* The town popups' "find nearby" chips, but anchored to a coordinate instead of a
    town name — so a bare tap on the map gets them too, where there is no name to
    hand the query. Tighter than a name search even where there is one. */
@@ -503,10 +510,6 @@ function atLink(lat,lng){
 }
 function panoLink(lat,lng){
   return 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+lat.toFixed(6)+','+lng.toFixed(6);
-}
-function reviewsLink(q,lat,lng){
-  const u='https://www.google.com/maps/search/'+encodeURIComponent(q);
-  return (lat!=null&&lng!=null&&isFinite(lat)&&isFinite(lng)) ? u+'/@'+lat+','+lng+',17z' : u;
 }
 /* ---- live POI service (NY State ArcGIS) ---- */
 const ARC="https://services.arcgis.com/1xFZPtKn1wKC6POA/arcgis/rest/services/";
@@ -877,6 +880,7 @@ class TrailApp {
     this.q=''; this.qAll=false; this.hitLayer=null; this.hitMarks={}; this._fitPend=null;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.mileLayer=null; this.mileSig='';
+    this.townLbLayer=null; this.townSig=''; this.townBoxes=[];
     // Overlays by key, the order they were registered in, and the order the rider
     // has dragged them into — the last of these is the only one that is saved.
     this.lyrByKey={}; this.lyrKeyById={}; this.lyrSeq=[]; this.lyrOrder=[];
@@ -1118,6 +1122,20 @@ class TrailApp {
     if(t){ const r=t.getBoundingClientRect(); if(r.height && r.top<top) top=r.top; }
     return Math.max(0, mr.bottom-top);
   }
+  /* And the same going up. Popups outrank the top chrome now, so the only thing keeping a
+     popup off the back pill is where it is put — and the pill is raised by the very tap
+     that opens the popup, so left alone it would arrive already buried. Hidden bars
+     measure 0x0, so this is just the tallest one currently up. */
+  obstructedTop(){
+    const m=this.map; if(!m) return 0;
+    const mr=m.getContainer().getBoundingClientRect();
+    let bot=mr.top;
+    ['mapFind','mapBack','measureBar'].forEach(id=>{
+      const e=this.$(id); if(!e) return;
+      const r=e.getBoundingClientRect(); if(r.height && r.bottom>bot) bot=r.bottom;
+    });
+    return Math.max(0, bot-mr.top);
+  }
   // Put a point in the middle of the visible strip rather than the middle of the map.
   centerVisible(lat,lng,zoom){
     const m=this.map; if(!m) return;
@@ -1136,12 +1154,38 @@ class TrailApp {
     const top=r.top-mr.top, bottom=r.bottom-mr.top;
     let dy=0;
     if(bottom > bottomLimit-8) dy = bottom-(bottomLimit-8);
-    dy=Math.min(dy, top-8);          // never push its head off the top to save its feet
+    const topLimit=this.obstructedTop();
+    dy=Math.min(dy, top-topLimit-8);  // never push its head under the top bars to save its feet
     let dx=0;
     const left=r.left-mr.left, right=r.right-mr.left;
     if(right > mr.width-8) dx = right-(mr.width-8);
     if(left-dx < 8) dx = left-8;
     if(abs(dy)>1 || abs(dx)>1) m.panBy([dx,dy],{animate:true,duration:.2});
+  }
+  /* Leaflet nests every pane inside .leaflet-map-pane, which is a stacking context in its
+     own right at z-index 400 — so the popup pane's 700 only ever wins against the rest of
+     the map, and the whole map loses as one box to the finder at 1101, the back pill, the
+     dock and the sheet. No z-index on the popup pane can escape that; the pane has to come
+     out. Reparented to the map container it lands in the same stacking context as the
+     chrome, where POP_PANE_Z beats it, and the search-hit pins at 1150 stay behind the
+     popup you opened by tapping one — they are inside the box the popup just left.
+     The catch is that Leaflet positions popups in layer coordinates, which are relative to
+     the map pane's own translate; out here that translate no longer applies, so the pane
+     has to wear a copy of it or popups slide off their pins the moment the map moves. */
+  liftPopupPane(){
+    const m=this.map; if(!m||!m.getPane) return;
+    const mp=m.getPane('mapPane'), pp=m.getPane('popupPane');
+    if(!mp||!pp||!m.getContainer) return;
+    m.getContainer().appendChild(pp);
+    pp.style.zIndex=POP_PANE_Z;
+    /* The class goes along with the transform. Leaflet tweens a zoom with the descendant
+       rule `.leaflet-zoom-anim .leaflet-zoom-animated`, and it only ever puts the outer
+       class on the map pane — which the popup pane is no longer inside. Without this the
+       popup takes its post-zoom position on the animation's first frame and hangs there,
+       detached from its pin, for the 250ms the tiles spend catching up. */
+    const sync=()=>{ pp.style.transform=mp.style.transform;
+      pp.classList.toggle('leaflet-zoom-anim', mp.classList.contains('leaflet-zoom-anim')); };
+    m.on('move zoom zoomanim viewreset zoomend',sync); sync();
   }
   // Shut is exactly the grab bar, measured rather than guessed.
   shutH(){ const g=this.$('panelGrab'); return g?g.offsetHeight:0; }
@@ -1619,7 +1663,8 @@ class TrailApp {
   updateMeasureBar(){
     const val=this.$('measureVal'); if(!val) return;
     const n=this.measurePts.length;
-    if(n<2){ val.textContent = n===0 ? 'Tap the map to add points' : 'Tap the next point…'; }
+    // Short enough to read at a glance and to leave the bar room to be legible.
+    if(n<2){ val.textContent = n===0 ? 'Tap to start' : 'Tap next point'; }
     else {
       const mi=this.measureMi;
       // Feet under a tenth of a mile, where "0.0 mi" would read as nothing.
@@ -1767,7 +1812,7 @@ class TrailApp {
      "what" to a pin hunt. The popup opens with it. Built fresh at the coordinate
      rather than reaching for the marker's own, so it still works when that category's
      pins are switched off in the layers control — you can read a lodging row with
-     lodging pins hidden and still get its rates, reviews and directions. */
+     lodging pins hidden and still get its rates and its ride figures. */
   zoomTo(lat,lng,z,townName,poi){
     if(!this.map||isNaN(lat)||isNaN(lng)) return;
     this.showTab('map');
@@ -2793,6 +2838,9 @@ class TrailApp {
     f.toggleAttribute('hidden', !on);
     const sc=document.querySelector('[data-screen="map"]');
     if(sc) sc.classList.toggle('is-finding', on);
+    // Popups outrank the bar now, so one left open from an earlier tap would sit over the
+    // field you just asked for, keyboard and all. Starting a search retires it.
+    if(on && this.map) this.map.closePopup();
     // Opening onto a search that is already running — set from the Nearby tab, or left
     // over from before the bar was closed on a result — has to show it. An empty box
     // over a map covered in magenta pins is the bar failing to admit what it did.
@@ -3081,6 +3129,84 @@ class TrailApp {
     return h;
   }
 
+  /* ---------- trail town names ---------- */
+  /* A dot says a town is here and makes you tap it to find out which one, which is a
+     question the map should have answered before you asked. So every stop carries its
+     name, sitting on top of its own dot where the eye already is.
+     Thinned by pixels rather than by a zoom cutoff, the way the mileposts are: at state
+     scale thirty-eight names is a wall of text, so the stops that anchor a trip are
+     placed first and anything that would land on a name already down is dropped. Zoom
+     in, the room appears, and the rest come back — nothing is hidden by a rule, only
+     by something more useful already being there. */
+  // The tags column already ranks these, so this reads it rather than keep a second
+  // list that would drift: the two ends and the leg transition, then the resupply
+  // towns, then everything else in trail order.
+  townRank(t){
+    const g=t.tags||'';
+    if(/START|FINISH|HUB/.test(g)) return 0;
+    if(/MAJOR/.test(g)) return 1;
+    return 2;
+  }
+  // First name only — "Chittenango", not "Chittenango / Old Erie Canal SP", which is a
+  // paragraph on a map. The popup underneath still carries the full name.
+  townLbText(t){ return this.shortTown(t.n); }
+  renderTownLabels(){
+    const m=this.map, g=this.townLbLayer;
+    if(!m||!g) return;
+    // Stops switched off takes the names with it, and hands the mileposts back the
+    // room they were giving up — so the boxes have to go, not just the labels.
+    if(!this.stopLayer||!m.hasLayer(this.stopLayer)){
+      if(this.townBoxes.length){ this.townBoxes=[]; this.mileSig=''; }
+      this.townSig='';
+      return;
+    }
+    const b=m.getBounds();
+    const sig=m.getZoom()+':'+[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()]
+      .map(v=>v.toFixed(3)).join(',');
+    if(sig===this.townSig) return;      // same stretch at the same scale — leave it be
+    this.townSig=sig;
+    g.clearLayers();
+    const placed=[];
+    TOWNS.map((t,i)=>({t,i}))
+      .filter(o=>b.contains([o.t.lat,o.t.lng]))
+      .sort((a,c)=>(this.townRank(a.t)-this.townRank(c.t))||(a.i-c.i))
+      .forEach(o=>{
+        const nm=this.townLbText(o.t), p=m.latLngToContainerPoint([o.t.lat,o.t.lng]);
+        const rank=this.townRank(o.t);
+        const w=nm.length*TOWN_LB_CH*(rank===0?1.12:1)+TOWN_LB_PAD;
+        const box={l:p.x-w/2, r:p.x+w/2, t:p.y-TOWN_LB_DY-TOWN_LB_H, b:p.y-TOWN_LB_DY};
+        const hits=placed.some(k=> k.l<box.r+TOWN_LB_GAP && box.l<k.r+TOWN_LB_GAP
+                                && k.t<box.b+TOWN_LB_GAP && box.t<k.b+TOWN_LB_GAP);
+        if(hits) return;
+        placed.push(box);
+        g.addLayer(this.townLbMarker(o.t, nm, rank));
+      });
+    /* Handed to the mileposts, which give way to them. Same rule the route line already
+       follows by being drawn underneath: a number with a name printed through it is
+       neither, and of the two the name is the one a rider is navigating by. Clearing
+       the milepost signature is what makes them re-run against the new boxes. */
+    this.townBoxes=placed;
+    this.mileSig='';
+  }
+  // Does a box land on a name already placed? Boxes are container points, so this is
+  // only meaningful within one render pass — which is the only place it is asked.
+  hitsTownLb(box){
+    return this.townBoxes.some(k=> k.l<box.r+TOWN_LB_GAP && box.l<k.r+TOWN_LB_GAP
+                                && k.t<box.b+TOWN_LB_GAP && box.t<k.b+TOWN_LB_GAP);
+  }
+  /* Its own marker rather than the dot's icon, because the dot is a circleMarker — an
+     SVG circle, with nowhere to hang text. Never interactive: the dot underneath is the
+     tap target, and a name that swallowed the tap would put the popup out of reach of
+     the very thing it names. */
+  townLbMarker(t, nm, rank){
+    const c=t.s==='hv' ? (this.accent||'#0088b0') : (this.accent2||'#d6006c');
+    const html='<span class="town-lb'+(rank===0?' town-maj':'')+'" style="color:'+c+'">'
+      +esc(nm)+'</span>';
+    return L.marker([t.lat,t.lng],{pane:this.lyrPane('stops'), interactive:false,
+      keyboard:false, zIndexOffset:-200,
+      icon:L.divIcon({className:'town-ic', html, iconSize:[0,0], iconAnchor:[0,0]})});
+  }
+
   /* ---------- mileposts ---------- */
   /* A number every mile is right over a town and unreadable over the state, so the
      interval is picked from how many pixels a mile is actually worth at the zoom you
@@ -3133,9 +3259,18 @@ class TrailApp {
       const p=this.milePoint(mi);
       if(!b.contains(p)) continue;      // off screen, so it costs nothing to skip
       n++;
-      g.addLayer(mi%step===0 ? this.mileLabel(mi,p) : this.mileTick(mi,p));
+      // A number landing under a town's name gives way and rides as a tick instead —
+      // the mark stays, so the scale never breaks, but the covered digits go.
+      g.addLayer(mi%step===0 && !this.hitsTownLb(this.mileBox(p)) ?
+        this.mileLabel(mi,p) : this.mileTick(mi,p));
     }
     this.applyLyrOrder();
+  }
+  // The chip a number would draw into, in container pixels — matching the divIcon's own
+  // 46x26 box anchored at its foot, so the test is against what actually gets drawn.
+  mileBox(p){
+    const c=this.map.latLngToContainerPoint(p);
+    return {l:c.x-23, r:c.x+23, t:c.y-26, b:c.y};
   }
   mileLabel(mile,p){
     const c=this.mileColor(mile);
@@ -4025,6 +4160,7 @@ class TrailApp {
     /* Above the marker pane (600) and below the popup pane (700), so where you are
        is never underneath anything you have switched on. */
     if(map.createPane){ map.createPane(ME_PANE); const pn=map.getPane(ME_PANE); if(pn) pn.style.zIndex=655; }
+    this.liftPopupPane();
     // One place decides where a popup sits, whoever opened it, using the panel height
     // as it is right now — a bind-time padding would be stale the moment it moved.
     map.on('popupopen', e=>setTimeout(()=>this.fitPopup(e.popup),0));
@@ -4083,6 +4219,11 @@ class TrailApp {
       mk.bindPopup('',{maxWidth:300,minWidth:230,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
+    /* The names ride inside the stops group rather than beside it: a layer of town
+       names with the dots switched off is a set of labels pointing at nothing, and it
+       would need a second row in the control to say so. One row, one decision. */
+    this.townLbLayer=L.layerGroup();
+    this.stopLayer.addLayer(this.townLbLayer);
     this.stopLayer.addTo(map);
     this.regLayer('stops', this.stopLayer,'Trail stops <span class="lyr-ct">'+TOWNS.length+'</span>');
     /* On from the start, unlike the weather: it costs a few divs and no requests, and
@@ -4103,7 +4244,9 @@ class TrailApp {
     this.regLayer('route', this.routeLayer,
       this.lyrSrc('Empire State Trail', EST_SRC, 'The official route, and the GPX for your GPS')
       +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
-    map.on('moveend',()=>{ this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
+    // Names first, always: the mileposts are the ones that give way, and they can only
+    // do that against boxes that have already been worked out for this view.
+    map.on('moveend',()=>{ this.renderTownLabels(); this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); });
     map.on('zoomend',()=>this.syncPoiLabels());
     this.syncPoiLabels();
     /* The other half of the coupling: a facility layer switched from Leaflet's own
@@ -4120,6 +4263,11 @@ class TrailApp {
       this.savePrefs(); this.renderCategories(); this.renderNearby(); this.scheduleDecorate();
     });
     map.on('overlayadd', e=>{ if(e.layer===this.mileLayer){ this.mileSig=''; this.renderMileposts(); } });
+    // Both ways round: switching the stops off gives the mileposts their numbers back.
+    map.on('overlayadd overlayremove', e=>{
+      if(e.layer!==this.stopLayer) return;
+      this.townSig=''; this.renderTownLabels(); this.renderMileposts();
+    });
     /* Both off until asked for, and both borrowed, so both name their source in the
        control. The Shoreline is free to draw; the counts cost a request per view. */
     this.shoreLayer=L.polyline([],{pane:this.lyrPane('shore'),color:SHORE.color,weight:4,opacity:.9,className:'shore-ln'});
@@ -4153,7 +4301,7 @@ class TrailApp {
     this.wireMapLongPress(map);
     // Dismissing the prompt is a decision too — don't leave the point armed.
     map.on('popupclose',ev=>{ if(ev.popup.options.className==='mv-pop') this.pendingLL=null; });
-    setTimeout(()=>{ map.invalidateSize(); this.renderMileposts(); },120);
+    setTimeout(()=>{ map.invalidateSize(); this.renderTownLabels(); this.renderMileposts(); },120);
     if(this.myLL){ // restored from a previous session — place the marker and zoom in
       this.setMyLocation(this.myLL.lat,this.myLL.lng);
       this.status('Showing your last known position — tap Locate to update it.');
@@ -4231,31 +4379,23 @@ class TrailApp {
     }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
+    /* Every action is a chip on its own wrapping row rather than a middot-separated
+       sentence — a thumb on a moving handlebar needs a target it can hit, not a word it
+       has to aim at. */
     const lk=[this.measureBtnHtml(p.lat,p.lng),
-      '<button type="button" class="pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
-    const purl=safeUrl(p.url); if(purl) lk.push('<a href="'+purl+'" target="_blank" rel="noopener">Website</a>');
-    // The same two links a tapped spot gets — opening the place in Google Maps (searched
-    // by name so it lands on the business, not a bare pin) and Street View. Every pin on
-    // the map now answers "where is this, really" the same way a bare map tap does.
+      '<button type="button" class="pa pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
+    const purl=safeUrl(p.url); if(purl) lk.push('<a class="pa" href="'+purl+'" target="_blank" rel="noopener">Website</a>');
+    // Searched by name, so it lands on the business rather than a bare pin.
     const gq=[p.name,p.addr].filter(Boolean).join(' ') || (p.lat.toFixed(6)+','+p.lng.toFixed(6));
-    lk.push('<a href="'+searchAt(gq,p.lat,p.lng)+'" target="_blank" rel="noopener">Google Maps</a>');
-    lk.push('<a href="'+panoLink(p.lat,p.lng)+'" target="_blank" rel="noopener">Street View</a>');
-    // Campgrounds get reviews too — same question a rider is asking of a motel.
-    const stay=(p.asset==='Lodging'||p.asset==='Campground');
-    if(p.asset==='Lodging') lk.push('<a href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
-    if(stay) lk.push('<a href="'+reviewsLink([p.name,p.addr].filter(Boolean).join(' '),p.lat,p.lng)+'" target="_blank" rel="noopener">Reviews</a>');
-    // Exact coords here, so this routes precisely — no geocoding guess involved.
-    lk.push('<a href="https://www.google.com/maps/dir/?api=1'+(this.myLL?'&origin='+this.myLL.lat+','+this.myLL.lng:'')
-      +'&destination='+p.lat+','+p.lng+'&travelmode=bicycling" target="_blank" rel="noopener">Directions</a>');
+    lk.push('<a class="pa" href="'+searchAt(gq,p.lat,p.lng)+'" target="_blank" rel="noopener">Google Maps</a>');
+    if(p.asset==='Lodging') lk.push('<a class="pa" href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
     /* Said plainly, because a volunteer map and a state asset register are worth
        different amounts of trust when you are deciding to ride nine miles for a
-       shower — and because whoever mapped it can be told if it has closed. */
-    if(p.src==='bundled' && p.osmId)
-      lk.push('<a href="https://www.openstreetmap.org/'+esc(p.osmId)+'" target="_blank" rel="noopener">OpenStreetMap</a>');
+       shower. */
     const osmNote = p.src==='bundled'
       ? 'From OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
       : '';
-    return h+'<br>'+lk.join(' \u00b7 ')
+    return h+'<div class="pa-row poi-lk">'+lk.join('')+'</div>'
       +(osmNote?'<div class="poi-src">'+osmNote+'</div>':'');
   }
   async fetchAllPOIs(){
@@ -4293,7 +4433,6 @@ class TrailApp {
       if(off!=null && off>5.2) return;                 // safety net; the file is pre-filtered
       const p={asset:o.c, name:o.n||CATCFG[o.c].label, sub:'', addr:o.a||'', phone:o.p||'',
         url:o.u||'', src:'bundled', lat, lng, mile:isFinite(+o.m)?+o.m:null, off:off==null?999:off};
-      if(o.id) p.osmId=String(o.id);
       out.push(p);
     });
     return out;
