@@ -104,12 +104,11 @@ const POI_LABEL_Z=13;
 const HI_PANE_Z='1200';
 // Beats any z-index Leaflet derives from a marker's y position within the same pane.
 const HI_Z_OFFSET=100000;
-// How far the NWS hourly grid actually runs, and therefore how many days we show.
-const WX_MAX_DAYS=6;
-// The town outlook fetches a forecast per town, so it caps how many one tap will pull
-// and how far out it trusts the hourly grid — arrivals past this simply have no data.
-const WX_MAX_TOWNS=14;
-const WX_HORIZON_MS=6.3*24*36e5;
+// The meteogram outlook: a rolling window of this many days (the NWS hourly grid runs
+// ~6.5 days, so four is comfortably inside it), and the mile spacing at which the route
+// is sampled for forecasts — one grid fetch per distinct sample cell.
+const WX_OUTLOOK_DAYS=4;
+const WX_SAMPLE_MI=12;
 
 /* ---- NYSDOT traffic counts -------------------------------------------------
    The AADT layer behind the state's Traffic Data Viewer: annual average daily
@@ -554,6 +553,183 @@ function windParts(fromDeg, hdgDeg, mph){
   const d=(fromDeg-hdgDeg)*Math.PI/180;
   return {head: mph*Math.cos(d), cross: abs(mph*Math.sin(d))};
 }
+/* One reading of the wind as the rider meets it, with the three-way kind baked in —
+   the same maths as windParts, but returning what the Outlook meteogram plots. Under
+   3 mph along the axis is a wind you'd not notice, so it reads as a crosswind. */
+function windOnRider(fromDeg, headingDeg, mph){
+  if(fromDeg==null || headingDeg==null || mph==null) return null;
+  const d=(fromDeg-headingDeg)*Math.PI/180;
+  const head=mph*Math.cos(d), cross=abs(mph*Math.sin(d));
+  const kind= head>3 ? 'head' : head<-3 ? 'tail' : 'cross';
+  return {headMph:Math.round(head*10)/10, crossMph:Math.round(cross*10)/10, kind};
+}
+
+/* ═══════ Outlook: the continuous-timeline meteogram ═══════════════════════════
+   The map layer answers "what am I riding into today". This answers the night-before
+   question — split the days, work out where you'd be at each clock hour, and lay the
+   forecast waiting for you there onto one continuous strip. These are free functions so
+   the fiddly parts (integrating position, expanding the NWS grid) stay pure and were
+   unit-tested apart from the app. Units: NWS gridpoints serve SI, we plot US customary. */
+const C2F=c=>c*9/5+32, KMH2MPH=k=>k*0.621371, MM2IN=m=>m/25.4;
+const _pad2=n=>String(n).padStart(2,'0');
+// Local wall-clock ISO, no zone suffix — the question is "what time do I ride", not UTC.
+function localISO(ms){
+  const d=new Date(ms);
+  return d.getFullYear()+'-'+_pad2(d.getMonth()+1)+'-'+_pad2(d.getDate())
+    +'T'+_pad2(d.getHours())+':'+_pad2(d.getMinutes());
+}
+// ISO-8601 duration → hours. NWS validTimes look like "…/PT1H", "…/PT6H", "…/P1DT2H".
+function isoDurHours(dur){
+  if(!dur) return 1;
+  const m=/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(dur);
+  if(!m) return 1;
+  return (+(m[1]||0))*24+(+(m[2]||0))+(+(m[3]||0))/60;
+}
+/* One NWS grid time-series → a Map keyed by epoch-hour (floor(ms/3.6e6)). `conv`
+   converts the SI value; `distribute` spreads an accumulation (only precip amount)
+   across the hours its period covers, so a 6-hour bucket reads per-hour rather than as
+   a single spike. Everything else is a level that holds across its period. */
+function expandGridSeries(series, conv, distribute){
+  const out=new Map();
+  if(!series || !Array.isArray(series.values)) return out;
+  for(const v of series.values){
+    if(!v || v.value==null || !v.validTime) continue;
+    const slash=v.validTime.indexOf('/');
+    const iso=slash<0 ? v.validTime : v.validTime.slice(0,slash);
+    const startMs=Date.parse(iso);
+    if(!isFinite(startMs)) continue;
+    const hrs=Math.max(1, Math.round(isoDurHours(slash<0 ? '' : v.validTime.slice(slash+1))));
+    const raw=conv ? conv(v.value) : v.value;
+    const per=distribute ? raw/hrs : raw;
+    const h0=Math.floor(startMs/3600000);
+    for(let k=0;k<hrs;k++) out.set(h0+k, per);
+  }
+  return out;
+}
+/* The grid `properties` object → the bundle of hour-keyed maps the timeline reads. Any
+   series an office omits yields an empty map, and the hour record gets null there — the
+   renderer skips nulls, so a missing series drops its line rather than breaking. */
+const GRID_SPEC=[
+  ['temp','temperature',C2F,false], ['dewpoint','dewpoint',C2F,false],
+  ['heatIndex','apparentTemperature',C2F,false], ['rh','relativeHumidity',null,false],
+  ['sky','skyCover',null,false], ['windMph','windSpeed',KMH2MPH,false],
+  ['gustMph','windGust',KMH2MPH,false], ['fromDeg','windDirection',null,false],
+  ['pop','probabilityOfPrecipitation',null,false], ['thunder','probabilityOfThunder',null,false],
+  ['rainIn','quantitativePrecipitation',MM2IN,true]
+];
+function gridMaps(props){
+  const maps={};
+  for(const [key,prop,conv,dist] of GRID_SPEC) maps[key]=expandGridSeries(props && props[prop], conv, dist);
+  return maps;
+}
+function readGrid(maps, key, epochHour){
+  const m=maps && maps[key]; if(!m) return null;
+  const v=m.get(epochHour);
+  return (v==null || !isFinite(v)) ? null : v;
+}
+/* Where the rider is at every clock hour across the horizon. Contiguous calendar hours
+   from day-0 local midnight; advance only during the ride window on non-zero days, only
+   until the day's miles are done, and never before `nowMs`. A zero day holds position.
+   `sgn` carries direction (+1 to Buffalo, −1 to NYC); miles clamp to [0,total]. */
+function planTimeline(o){
+  const days=o.days, sgn=o.sgn, sp=o.speed, per=o.perDay;
+  const startMs=o.startMs, nowMs=(o.nowMs==null?startMs:o.nowMs);
+  const total=o.totalMi, zeroDay=(o.zeroDay==null?-1:o.zeroDay);
+  const reached=(mile,target)=> sgn>0 ? mile>=target-1e-9 : mile<=target+1e-9;
+  const clampMi=m=>Math.max(0, Math.min(total, m));
+  const r2=v=>Math.round(v*100)/100;
+  const hours=[], dayInfo=[];
+  let mile=clampMi(o.anchorMile);
+  for(let day=0; day<days; day++){
+    const zero=day===zeroDay, dayStart=mile;
+    const target=zero ? mile : clampMi(mile+sgn*per);
+    for(let hr=0; hr<24; hr++){
+      const idx=day*24+hr, tMs=startMs+idx*3600000;
+      const inWin=!zero && hr>=o.rideStart && hr<o.rideEnd;
+      const riding=inWin && !reached(mile,target) && tMs>=nowMs;
+      if(riding) mile=clampMi(mile+sgn*sp);
+      hours.push({tMs, hour:hr, day, mile:r2(mile), riding, zero});
+    }
+    mile=target;
+    dayInfo.push({day, zero, startMile:r2(dayStart), endMile:r2(mile)});
+  }
+  return {hours, days:dayInfo};
+}
+/* One forecast is fetched per point, so the set stays small and bounded the way the old
+   town-by-town outlook was: the anchor, the rider's position stepped every `spacing`
+   miles across the ground the plan covers, plus each town in range. Points rounding to
+   the same coarse cell collapse to one fetch. NWS grid fields are smooth over these
+   distances, so reading each hour from its nearest sampled point is honest. */
+function sampleMiles(plan, townMiles, spacing, total){
+  const set=new Map();
+  const add=m=>{ const k=Math.round(m/spacing); if(!set.has(k)) set.set(k, Math.max(0,Math.min(total,m))); };
+  if(plan.hours.length) add(plan.hours[0].mile);
+  let last=null;
+  for(const h of plan.hours){ if(last==null || abs(h.mile-last)>=spacing){ add(h.mile); last=h.mile; } }
+  (townMiles||[]).forEach(add);
+  return Array.from(set.values()).sort((a,b)=>a-b);
+}
+function nearestSampleIndex(arr, mile){
+  let best=0, bd=Infinity;
+  for(let i=0;i<arr.length;i++){ const d=abs(arr[i]-mile); if(d<bd){ bd=d; best=i; } }
+  return best;
+}
+/* Assemble the per-hour records the renderer consumes, reading each hour's series from
+   the grid at its nearest sample point. "Feels like" only earns a line when it's warm
+   and meaningfully hotter than the air — matching the NWS dropping heat index below 80°F. */
+function assembleOutlookHours(plan, smiles, gridByIndex, headingAt){
+  const r0=v=>v==null?null:Math.round(v), r1=v=>v==null?null:Math.round(v*10)/10;
+  return plan.hours.map(hp=>{
+    const eh=Math.floor(hp.tMs/3600000), si=nearestSampleIndex(smiles, hp.mile), g=gridByIndex[si]||{};
+    const temp=readGrid(g,'temp',eh);
+    let hi=readGrid(g,'heatIndex',eh);
+    if(hi==null || temp==null || temp<80 || hi<temp+1) hi=null; else hi=Math.round(hi);
+    const windMph=readGrid(g,'windMph',eh), fromDeg=readGrid(g,'fromDeg',eh), heading=headingAt(hp.mile);
+    const w=windOnRider(fromDeg, heading, windMph);
+    return {t:localISO(hp.tMs), hour:hp.hour, day:hp.day, mile:hp.mile, riding:hp.riding, zero:hp.zero,
+      heading: heading==null?null:Math.round(heading*10)/10,
+      temp:r0(temp), dewpoint:r0(readGrid(g,'dewpoint',eh)), heatIndex:hi,
+      rh:r0(readGrid(g,'rh',eh)), sky:r0(readGrid(g,'sky',eh)),
+      pop:r0(readGrid(g,'pop',eh)), thunder:r0(readGrid(g,'thunder',eh)),
+      rainIn:(v=>v==null?0:Math.round(v*100)/100)(readGrid(g,'rainIn',eh)),
+      windMph:r1(windMph), gustMph:r1(readGrid(g,'gustMph',eh)),
+      fromDeg: fromDeg==null?null:Math.round(fromDeg),
+      headMph:w?w.headMph:null, crossMph:w?w.crossMph:null, kind:w?w.kind:'cross'};
+  });
+}
+/* Each town the rider reaches inside the horizon, turned into an arrival by reading the
+   plan hour where its milepost is crossed and interpolating the minute. `start` marks the
+   single town being departed — nearest at or just behind the anchor — so the strip opens
+   with "← start" rather than a pre-dawn arrival. */
+function outlookTowns(plan, townList, anchorMile, sgn){
+  const H=plan.hours;
+  const passed=(mile,tm)=> sgn>0 ? mile>=tm-1e-9 : mile<=tm+1e-9;
+  const r2=v=>Math.round(v*100)/100;
+  const out=[]; let startPick=null, startD=Infinity;
+  townList.forEach(t=>{
+    const ahead=(t.tm-anchorMile)*sgn;
+    if(ahead<-3) return;
+    let i=-1;
+    for(let k=0;k<H.length;k++){ if(passed(H[k].mile, t.tm)){ i=k; break; } }
+    if(i<0) return;
+    const isStart=ahead<=0.3; let arriveMs;
+    if(isStart){
+      const first=H.find(hh=>hh.riding); arriveMs=(first?first.tMs:H[i].tMs);
+      const d=abs(t.tm-anchorMile); if(d<startD){ startD=d; startPick=t.name; }
+    } else {
+      const prev=H[i-1];
+      if(prev && abs(H[i].mile-prev.mile)>1e-6){
+        const f=(t.tm-prev.mile)/(H[i].mile-prev.mile);
+        arriveMs=prev.tMs+Math.round(Math.max(0,Math.min(1,f))*60)*60000;
+      } else arriveMs=H[i].tMs;
+    }
+    out.push({name:t.name, tm:t.tm, lat:t.lat, lng:t.lng, services:t.services||'',
+      arrive:localISO(arriveMs), ahead:r2(Math.max(0,ahead)), start:false});
+  });
+  out.forEach(o=>{ o.start=(o.name===startPick); });
+  out.sort((a,b)=>a.ahead-b.ahead);
+  return out;
+}
 
 async function fetchSource(src){
   const feats=[]; let offset=0;
@@ -670,7 +846,13 @@ class TrailApp {
     this.tapToSet=true;
     this.showTrip=false; this.screen='map'; this.panelSnap='shut';
     this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
-    this.showWx=true; this.wxPerDay=60; this.wxPlan=null; this.wxBusy=false;
+    this.showWx=true; this.wxPerDay=60; this.wxBusy=false;
+    // The meteogram Outlook's planning state: the ride window (a real preference), an
+    // optional zero (rest) day as a day index, a start-date shift in days, the built
+    // timeline, and the spatial forecast field it was assembled from (kept so the
+    // window/zero controls re-plan without re-fetching). wxCur is the tapped hour.
+    this.wxRideStart=8; this.wxRideEnd=17; this.wxZeroDay=-1; this.wxStartShift=0;
+    this.wxData=null; this.wxGrids=null; this.wxCur=null; this.wxGridCache={};
     this.prices={}; this.poiMarker={};
     // Planning mode: no usable trail position, so distances run from the start of the
     // trip. offTrail records how far a real fix was, for the note that explains it.
@@ -786,6 +968,9 @@ class TrailApp {
     if(isFinite(p.avgSpeed)&&p.avgSpeed>0) this.avgSpeed=p.avgSpeed;
     if(typeof p.showWx==='boolean') this.showWx=p.showWx;
     if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
+    // Clamp a stored ride window to sane bounds and keep start before end.
+    if(isFinite(p.wxRideStart)) this.wxRideStart=Math.max(0,Math.min(21,p.wxRideStart|0));
+    if(isFinite(p.wxRideEnd)) this.wxRideEnd=Math.max(this.wxRideStart+1,Math.min(23,p.wxRideEnd|0));
     if(isFinite(p.miMin)) this.miMin=p.miMin;
     if(isFinite(p.miMax)) this.miMax=p.miMax;
     if(isFinite(p.mpFrom)&&p.mpFrom>=0) this.mpFrom=p.mpFrom;
@@ -824,7 +1009,7 @@ class TrailApp {
     this.syncFollowUi();
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
       grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches})); }catch(e){}
@@ -1188,9 +1373,12 @@ class TrailApp {
     const mc=this.$('miClear');
     if(mc) mc.addEventListener('click',()=>{ ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readBand(); });
     const wg=this.$('wxGo');
-    if(wg) wg.addEventListener('click',()=>this.loadOutlook());
+    if(wg) wg.addEventListener('click',()=>this.buildOutlook());
     const rd=id=>{ const el=this.$(id); if(!el) return;
-      el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this.wxPerDay=n; this.savePrefs(); } }); };
+      el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this.wxPerDay=n; this.savePrefs();
+        // With an outlook already on screen, a new miles-a-day re-plans it (re-fetching
+        // only if the longer day now runs past the ground already sampled).
+        if(this.wxData && !this.wxData.err && !this.wxData.loading) this.wxReplan(); } }); };
     rd('wxPerDay');
     const sw=this.$('showWx');
     if(sw) sw.addEventListener('change',()=>{ this.showWx=sw.checked; this.savePrefs(); this.applyWxTab(); });
@@ -3037,6 +3225,26 @@ class TrailApp {
     this.wxCache[key]={t:Date.now(), v:periods};
     return periods;
   }
+  /* The raw gridpoints data, in two hops like nwsHourly. Where forecastHourly gives a
+     ready-made per-hour list of the headline fields, this is the underlying grid: every
+     time-series NWS models at the point — gust, sky cover, thunder chance, precip amount,
+     apparent temperature — which the meteogram Outlook needs and the hourly endpoint
+     doesn't carry. Expanded into hour-keyed maps once, then cached like the hourly. Any
+     series an office doesn't model simply comes back empty and drops its line. */
+  async nwsGrid(lat,lng){
+    const key=lat.toFixed(2)+','+lng.toFixed(2);
+    const hit=this.wxGridCache[key];
+    if(hit && Date.now()-hit.t < 18e5) return hit.v;
+    const pr=await fetch('https://api.weather.gov/points/'+lat.toFixed(4)+','+lng.toFixed(4));
+    if(!pr.ok) throw new Error('points '+pr.status);
+    const url=((await pr.json()).properties||{}).forecastGridData;
+    if(!url) throw new Error('no grid here');
+    const gr=await fetch(url);
+    if(!gr.ok) throw new Error('grid '+gr.status);
+    const maps=gridMaps((await gr.json()).properties||{});
+    this.wxGridCache[key]={t:Date.now(), v:maps};
+    return maps;
+  }
   // Periods are hourly buckets; find the one holding a given moment.
   wxAt(periods, when){
     for(let i=0;i<periods.length;i++){
@@ -3225,211 +3433,525 @@ class TrailApp {
   townLabel(n){ return !n ? '' : (n.off<=3 ? n.t.n : 'near '+n.t.n); }
   // Chart labels get the first name only — "Chittenango", not the whole park.
   shortTown(n){ return String(n||'').split(' / ')[0]; }
-  /* The towns you'd roll through, ahead in your direction of travel, each turned into
-     an arrival: how far off it is, and the day and hour you'd reach it riding at your
-     average speed. The night's stop is baked into the clock — each day resumes at 8am —
-     so a town three days out is read three mornings on, not seventy-two hours from now.
-     Bounded twice: by the miles-a-day window, and by how far the hourly forecast still
-     reaches, because past either there is nothing true to say. Capped in count too,
-     since every town here is a forecast fetched, and a hundred of them is rude. */
-  wxTowns(){
-    const anchor=this.wxAnchorMile();
-    if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
-    const sgn=this.dir==='B2NYC'?-1:1;
-    const per=Math.max(5, this.wxPerDay||60), sp=this.avgSpeed>0?this.avgSpeed:12;
-    const horizon=per*WX_MAX_DAYS, forecastEnd=Date.now()+WX_HORIZON_MS;
-    const out=[];
-    TOWNS.forEach(t=>{
-      const ahead=(t.mi-anchor)*sgn;                 // trail miles in front of you
-      if(ahead<-0.3 || ahead>horizon) return;        // behind you, or past the window
-      const day=Math.max(0, Math.floor((ahead-0.001)/per));
-      const when=this.wxDepart(day)+(Math.max(0,ahead-day*per)/sp)*36e5;
-      if(when>forecastEnd) return;                   // you'd arrive past the forecast's reach
-      out.push({t, mile:t.mi, ahead:Math.max(0,ahead), day, when});
-    });
-    out.sort((a,b)=>a.ahead-b.ahead);
-    let truncated=false;
-    if(out.length>WX_MAX_TOWNS){ out.length=WX_MAX_TOWNS; truncated=true; }
-    if(!out.length) return {err:'No towns coming up within your miles-a-day window — try a longer day, or check your direction of travel.'};
-    out.truncated=truncated;
-    return out;
-  }
   // Day 0 starts now if you're already up and riding; every other day starts at eight.
   wxDepart(d){
     const now=new Date();
     const start=new Date(now.getFullYear(),now.getMonth(),now.getDate()+d,8,0,0,0).getTime();
     return (d===0 && now.getTime()>start) ? now.getTime() : start;
   }
-  async loadOutlook(){
+  /* ---------- the outlook, assembled ----------
+     Gather the planning parameters the timeline integrator needs. Returns null with a
+     message when there's no trail position to hang a plan off. Day 0 is local midnight
+     of today (plus any start-date shift); the rider advances from `now` so a plan opened
+     mid-morning doesn't pretend you rode the pre-dawn hours. */
+  wxPlanOpts(){
+    const anchor=this.wxAnchorMile();
+    if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
+    const now=new Date();
+    const midnight=new Date(now.getFullYear(),now.getMonth(),now.getDate()+ (this.wxStartShift||0),0,0,0,0).getTime();
+    const zero=(this.wxZeroDay>=0 && this.wxZeroDay<WX_OUTLOOK_DAYS) ? this.wxZeroDay : -1;
+    return {opts:{days:WX_OUTLOOK_DAYS, sgn:this.dir==='B2NYC'?-1:1,
+      speed:this.avgSpeed>0?this.avgSpeed:12, perDay:Math.max(5,this.wxPerDay||60),
+      startMs:midnight, nowMs:Date.now(), totalMi:TOTAL, anchorMile:anchor,
+      rideStart:this.wxRideStart, rideEnd:this.wxRideEnd, zeroDay:zero}, anchor};
+  }
+  // The town list the plan reads, in the renderer's shape: short name, milepost, a spot
+  // of context, and coordinates for the nearest-sample fetch.
+  wxTownList(){
+    return TOWNS.map(t=>({name:this.shortTown(t.n), tm:t.mi, lat:t.lat, lng:t.lng,
+      services:t.tags||''}));
+  }
+  // Fold a built plan + the fetched spatial grids into the {meta,days,towns,hours} the
+  // renderer draws. Pure once the grids are in hand, so the ride-window and zero controls
+  // re-run it against the cached field without touching the network.
+  wxAssemble(plan, smiles, gridByIndex, opts, anchor){
+    const hours=assembleOutlookHours(plan, smiles, gridByIndex, m=>this.routeBearing(m));
+    const towns=outlookTowns(plan, this.wxTownList(), anchor, opts.sgn);
+    const days=plan.days.map((d,i)=>{
+      const ms=opts.startMs+i*24*36e5, date=localISO(ms).slice(0,10);
+      return {date, zero:d.zero,
+        label:new Date(ms).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'}),
+        startMile:d.startMile, endMile:d.endMile,
+        towns:towns.filter(t=>t.arrive.slice(0,10)===date).map(t=>t.name)};
+    });
+    const lastMile=plan.hours[plan.hours.length-1].mile;
+    return {meta:{generatedAt:localISO(Date.now()), place:'Empire State Trail',
+      direction:this.dir==='B2NYC'?'Buffalo → NYC':'NYC → Buffalo',
+      startMile:anchor, startTown:this.shortTown((this.nearestTown(anchor)||{t:{n:''}}).t.n),
+      endMile:lastMile, avgSpeed:opts.speed, milesPerDay:opts.perDay,
+      rideStart:this.wxClockHour(opts.rideStart), rideEnd:this.wxClockHour(opts.rideEnd),
+      startDate:days[0].date, source:'api.weather.gov'}, days, towns, hours};
+  }
+  wxClockHour(hr){ return String(hr).padStart(2,'0')+':00'; }
+  /* Read the forecast field along the route and build the timeline. One grid per sample
+     point, deduped by cell and cached; a single fetch buys every series for ~7 days at
+     that point, so the whole strip comes from a handful of requests — the budget the old
+     town-by-town outlook already spent. Kept in memory only. */
+  async buildOutlook(){
     if(this.wxBusy) return;
-    const towns=this.wxTowns();
-    if(towns.err){ this.wxPlan={err:towns.err}; this.renderOutlook(); return; }
-    this.wxBusy=true; this.wxPlan={loading:true}; this.renderOutlook();
-    // One hourly grid per town — a single fetch buys the whole six-and-a-half days at
-    // that point, so we read straight down it to whatever hour you'd be standing there.
-    // Cached to a hundredth of a degree, so towns that share a grid cell cost once.
-    await Promise.allSettled(towns.map(async o=>{
-      try{ o.periods=await this.nwsHourly(o.t.lat, o.t.lng); }
-      catch(e){ o.periods=null; }
+    const po=this.wxPlanOpts();
+    if(po.err){ this.wxData={err:po.err}; this.renderOutlook(); return; }
+    this.wxBusy=true; this.wxData={loading:true}; this.renderOutlook();
+    const opts=po.opts, anchor=po.anchor;
+    const plan=planTimeline(opts);
+    const townMiles=this.wxTownList().map(t=>t.tm)
+      .filter(m=>{ const a=(m-anchor)*opts.sgn; return a>=-3 && a<=opts.perDay*opts.days+3; });
+    const smiles=sampleMiles(plan, townMiles, WX_SAMPLE_MI, TOTAL);
+    const res=await Promise.allSettled(smiles.map(m=>{
+      const p=this.routePtAt(m); return this.nwsGrid(p[0], p[1]);
     }));
+    const gridByIndex=res.map(r=> r.status==='fulfilled' ? r.value : {});
+    const got=gridByIndex.filter(g=>g && g.temp && g.temp.size).length;
     this.wxBusy=false;
-    this.wxPlan={towns, at:Date.now(), truncated:!!towns.truncated,
-      got:towns.filter(o=>o.periods && o.periods.length).length};
+    if(!got){ this.wxData={err:'No answer from api.weather.gov. It’s the US forecast service — it covers the whole trail, but it does go down. Worth another try in a minute.'}; this.renderOutlook(); return; }
+    this.wxGrids={smiles, gridByIndex, anchor, sgn:opts.sgn, min:smiles[0], max:smiles[smiles.length-1]};
+    const data=this.wxAssemble(plan, smiles, gridByIndex, opts, anchor);
+    data.at=Date.now(); data.got=got; data.of=smiles.length;
+    this.wxData=data;
+    if(this.wxCur==null){ const f=data.hours.find(hh=>hh.riding); this.wxCur=f?data.hours.indexOf(f):0; }
     this.renderOutlook();
   }
-  /* One town, read the way the NWS hourly graph reads: temperature over rain over
-     wind, all on one clock, so straight down a column is the whole story for that hour.
-     The wind panel is the part rewritten for a bicycle — the compass bearing is gone,
-     and what's drawn is the component that reaches you: up and red into your face, down
-     and green at your back, grey and straddling the line when it only shoves you
-     sideways, height its speed — read against your heading through this town. The day
-     fits without scrolling and the night is tucked off to the right, shaded, reached by
-     a swipe rather than paid for up front. Fixed pixels per hour, not a stretched
-     viewBox, so the strip runs wider than the screen and scrolls; the scales ride in a
-     fixed gutter beside it so they never scroll away. A dashed line marks when you'd
-     roll in. */
-  townChart(o){
-    const P=o.periods||[];
-    if(P.length<2) return '<div class="wx-none">No forecast came back for this town.</div>';
-    const PXH=26, WIN_H=30, H=196, GUT=30, PW=WIN_H*PXH;
-    const d0=new Date(o.when);
-    let winStart=new Date(d0.getFullYear(),d0.getMonth(),d0.getDate(),6,0,0,0).getTime();
-    const first=Date.parse(P[0].startTime);
-    if(winStart<first) winStart=first;               // don't open on hours already spent
-    const winEnd=winStart+WIN_H*36e5;
-    const cols=P.map(p=>({p, s:Date.parse(p.startTime)}))
-      .filter(c=>isFinite(c.s) && c.s>=winStart-1 && c.s<winEnd);
-    if(cols.length<2) return '<div class="wx-none">This town sits past the end of the hourly forecast.</div>';
-    const hdg=this.routeBearing(o.mile);
-    const rd=cols.map(c=>this.wxRead({w:c.p, hdg}));
-    const temps=rd.map(r=>r.temp).filter(t=>t!=null && isFinite(t));
-    if(!temps.length) return '<div class="wx-none">No forecast came back for this town.</div>';
-    const x=t=>((t-winStart)/36e5)*PXH;
-    const cx=c=>x(c.s)+PXH/2;
-    const bw=PXH*0.6;
-    const T0=30, T1=70;            // temperature band
-    const RB=112, RH=30;           // rain baseline, full-height bar
-    const WZ=158, WH=24;           // wind zero line, half height
-    const TOP=14, BOT=WZ+WH;
-    const n2=v=>(Math.round(v*10)/10).toFixed(1);
-    const tHi=Math.max.apply(null,temps), tLo=Math.min.apply(null,temps);
-    let tMax=tHi, tMin=tLo;
-    if(tMax-tMin<6){ const m=(tMin+tMax)/2; tMin=m-3; tMax=m+3; }
-    const ty=t=>T1-((t-tMin)/(tMax-tMin))*(T1-T0);
-
-    let g='';
-    /* ---- night shaded, and the date where it turns over ---- */
-    cols.forEach(c=>{ if(c.p.isDaytime) return;
-      g+='<rect class="wx-nite" x="'+n2(x(c.s))+'" y="'+TOP+'" width="'+n2(PXH)+'" height="'+(BOT-TOP)+'"/>'; });
-    cols.forEach(c=>{ const dt=new Date(c.s); if(dt.getHours()!==0) return;
-      g+='<line class="wx-mid" x1="'+n2(x(c.s))+'" y1="'+TOP+'" x2="'+n2(x(c.s))+'" y2="'+BOT+'"/>'
-        +'<text class="wx-dl" x="'+n2(x(c.s)+3)+'" y="'+(TOP+8)+'">'+esc(dt.toLocaleDateString([], {weekday:'short'}))+'</text>'; });
-
-    /* ---- temperature ---- */
-    g+='<line class="wx-gl" x1="0" y1="'+T0+'" x2="'+PW+'" y2="'+T0+'"/>'
-      +'<line class="wx-gl" x1="0" y1="'+T1+'" x2="'+PW+'" y2="'+T1+'"/>';
-    const pts=cols.map((c,i)=>rd[i].temp==null?null:n2(cx(c))+','+n2(ty(rd[i].temp))).filter(Boolean);
-    if(pts.length>1){
-      const x0=n2(cx(cols[0])), x1=n2(cx(cols[cols.length-1]));
-      g+='<polygon class="wx-tfill" points="'+x0+','+T1+' '+pts.join(' ')+' '+x1+','+T1+'"/>';
-      g+='<polyline class="wx-temp" points="'+pts.join(' ')+'"/>';
-    }
-    rd.forEach((r,i)=>{ if(r.temp!=null) g+='<circle class="wx-dot" cx="'+n2(cx(cols[i]))+'" cy="'+n2(ty(r.temp))+'" r="1.7"/>'; });
-    const iHi=rd.findIndex(r=>r.temp===tHi), iLo=rd.findIndex(r=>r.temp===tLo);
-    if(iHi>=0) g+='<text class="wx-tl" x="'+n2(cx(cols[iHi]))+'" y="'+n2(ty(tHi)-5)+'" text-anchor="middle">'+tHi+'°</text>';
-    if(iLo>=0 && iLo!==iHi) g+='<text class="wx-tl" x="'+n2(cx(cols[iLo]))+'" y="'+n2(ty(tLo)+11)+'" text-anchor="middle">'+tLo+'°</text>';
-
-    /* ---- rain ---- */
-    g+='<line class="wx-gl wx-dash" x1="0" y1="'+(RB-RH/2)+'" x2="'+PW+'" y2="'+(RB-RH/2)+'"/>'
-      +'<line class="wx-ax" x1="0" y1="'+RB+'" x2="'+PW+'" y2="'+RB+'"/>';
-    let wet=-1, wetV=0;
-    rd.forEach((r,i)=>{
-      if(!r.pop) return;
-      if(r.pop>wetV){ wetV=r.pop; wet=i; }
-      const hgt=Math.max(1.5,(r.pop/100)*RH);
-      g+='<rect class="wx-rain" x="'+n2(cx(cols[i])-bw/2)+'" y="'+n2(RB-hgt)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1.5"/>';
-    });
-    if(wet<0) g+='<text class="wx-xl" x="4" y="'+(RB-4)+'">no rain in the forecast</text>';
-    else if(wetV>=20) g+='<text class="wx-tl" x="'+n2(cx(cols[wet]))+'" y="'+n2(RB-Math.max(1.5,(wetV/100)*RH)-3)+'" text-anchor="middle">'+wetV+'%</text>';
-
-    /* ---- wind, as a rider meets it ---- */
-    const wv=rd.map(r=>{ if(!r.parts) return null; const k=this.wxKind(r); return {k, v: k==='cross'?r.parts.cross:abs(r.parts.head)}; });
-    const seen=wv.filter(Boolean);
-    const wMax=Math.max(10, Math.ceil(Math.max.apply(null, seen.length?seen.map(w=>w.v):[0])/5)*5);
-    g+='<line class="wx-ax" x1="0" y1="'+WZ+'" x2="'+PW+'" y2="'+WZ+'"/>';
-    wv.forEach((w,i)=>{
-      // A calm hour draws nothing; a floored bar would read as a light crosswind.
-      if(!w || w.v<1) return;
-      const hgt=Math.max(1.5,(w.v/wMax)*WH);
-      const y = w.k==='head' ? WZ-hgt : w.k==='tail' ? WZ : WZ-hgt/2;
-      g+='<rect class="wx-b-'+w.k+'" x="'+n2(cx(cols[i])-bw/2)+'" y="'+n2(y)+'" width="'+n2(bw)+'" height="'+n2(hgt)+'" rx="1"/>';
-    });
-    let iw=-1, wtop=0;
-    wv.forEach((w,i)=>{ if(w && w.v>wtop){ wtop=w.v; iw=i; } });
-    if(iw>=0 && wtop>=3){
-      const w=wv[iw], hgt=(w.v/wMax)*WH;
-      const y = w.k==='head' ? WZ-hgt-3 : w.k==='tail' ? WZ+hgt+8 : WZ-hgt/2-3;
-      g+='<text class="wx-wl wx-'+w.k+'" x="'+n2(cx(cols[iw]))+'" y="'+n2(y)+'" text-anchor="middle">'+Math.round(wtop)+' mph</text>';
-    }
-
-    /* ---- the arrival, marked where you'd roll in ---- */
-    const ax=x(o.when);
-    if(ax>=-1 && ax<=PW+1){
-      g+='<line class="wx-arr" x1="'+n2(ax)+'" y1="'+TOP+'" x2="'+n2(ax)+'" y2="'+BOT+'"/>';
-      const anch = ax>PW-52 ? 'end' : 'start', lx = ax + (anch==='end'?-3:3);
-      g+='<text class="wx-arrl" x="'+n2(lx)+'" y="'+(TOP+8)+'" text-anchor="'+anch+'">arrive '+esc(this.wxClock(o.when))+'</text>';
-    }
-
-    /* ---- the clock, every three hours the way the NWS strip reads ---- */
-    cols.forEach((c,i)=>{
-      const dt=new Date(c.s);
-      if(dt.getHours()%3!==0 && i!==0 && i!==cols.length-1) return;
-      const t=dt.toLocaleTimeString([], {hour:'numeric'}).replace(/\s?([AP])M/i,(m,a)=>a.toLowerCase());
-      g+='<text class="wx-xl" x="'+n2(cx(c))+'" y="190" text-anchor="middle">'+esc(t)+'</text>';
-    });
-
-    /* ---- the fixed gutter: the scales that would otherwise scroll off ---- */
-    const gut='<text class="wx-gt" x="'+(GUT-3)+'" y="'+(T0+3)+'" text-anchor="end">'+Math.round(tMax)+'°</text>'
-      +'<text class="wx-gt" x="'+(GUT-3)+'" y="'+(T1+3)+'" text-anchor="end">'+Math.round(tMin)+'°</text>'
-      +'<text class="wx-gt" x="'+(GUT-3)+'" y="'+(RB-RH/2+3)+'" text-anchor="end">50%</text>'
-      +'<text class="wx-gt wx-g-head" x="'+(GUT-3)+'" y="'+(WZ-WH+7)+'" text-anchor="end">head</text>'
-      +'<text class="wx-gt wx-g-tail" x="'+(GUT-3)+'" y="'+(WZ+WH-1)+'" text-anchor="end">tail</text>';
-
-    return '<div class="wx-town-chart">'
-      +'<svg class="wx-gut" width="'+GUT+'" height="'+H+'" viewBox="0 0 '+GUT+' '+H+'" aria-hidden="true">'+gut+'</svg>'
-      +'<div class="wx-scroll"><svg class="wx-plot" width="'+PW+'" height="'+H+'" viewBox="0 0 '+PW+' '+H+'" role="img" '
-        +'aria-label="Hour by hour at '+esc(this.shortTown(o.t.n))+': temperature, rain chance, and head or tail wind, running into the night">'
-        +g+'</svg></div></div>';
+  /* A control moved. If the new plan stays inside the ground already fetched, re-fold the
+     cached field — instant, no network. If it walks past the sampled range (a longer day,
+     a shifted start), fetch afresh. */
+  wxReplan(){
+    if(!this.wxGrids || !this.wxData || this.wxData.err || this.wxData.loading){ this.buildOutlook(); return; }
+    const po=this.wxPlanOpts();
+    if(po.err){ this.wxData={err:po.err}; this.renderOutlook(); return; }
+    const opts=po.opts, anchor=po.anchor;
+    // A start-date shift moves every hour's clock, so the cached grids (keyed to absolute
+    // time) no longer line up — that one always refetches.
+    if(anchor!==this.wxGrids.anchor || opts.sgn!==this.wxGrids.sgn || this.wxStartShift!==(this.wxGrids.shift||0)){ this.buildOutlook(); return; }
+    const plan=planTimeline(opts);
+    const lo=this.wxGrids.min-WX_SAMPLE_MI, hi=this.wxGrids.max+WX_SAMPLE_MI;
+    if(plan.hours.some(h=>h.mile<lo || h.mile>hi)){ this.buildOutlook(); return; }
+    const data=this.wxAssemble(plan, this.wxGrids.smiles, this.wxGrids.gridByIndex, opts, anchor);
+    data.at=this.wxData.at; data.got=this.wxData.got; data.of=this.wxData.of;
+    this.wxData=data;
+    if(this.wxCur==null){ const f=data.hours.find(hh=>hh.riding); this.wxCur=f?data.hours.indexOf(f):0; }
+    this.renderOutlook();
   }
+
+  /* ---------- the meteogram (concept "Broadsheet re-cut") ----------
+     The NWS hourly meteogram's information, re-set in the app's own newsprint: one
+     continuous clock scrolled left-to-right, a sticky y-gutter and hour readout, the
+     towns and mileposts laid on the same axis, and the wind panel carrying the weight —
+     one line recoloured along its length by what the wind does to the rider, each kind
+     also carrying its own dash, weight and marker so the three survive greyscale and
+     red-green colour blindness. Off-window hours and the zero day read recessive. */
   renderOutlook(){
     const el=this.$('wxOut'); if(!el) return;
-    const pl=this.wxPlan;
     const echo=this.$('wxSpeedEcho'); if(echo) echo.textContent=this.avgSpeed;
-    if(!pl){ el.innerHTML='<div class="up-empty">Set your miles a day and press the button. It reads the US National Weather Service where you’d be at each town along the way, so it only asks when you ask.</div>'; return; }
-    if(pl.err){ el.innerHTML='<div class="up-empty">'+esc(pl.err)+'</div>'; return; }
-    if(pl.loading){ el.innerHTML='<div class="up-empty">Reading the forecast town by town…</div>'; return; }
-    if(!pl.got){ el.innerHTML='<div class="up-empty">No answer from api.weather.gov. It covers the whole trail, but it does go down — worth another try in a minute.</div>'; return; }
-    let h='<div class="wx-key"><span class="wx-k-t">temp</span><span class="wx-k-r">rain %</span>'
-      +'<span class="wx-k-h">headwind</span><span class="wx-k-l">tailwind</span><span class="wx-k-c">crosswind</span>'
-      +'<span class="wx-k-scroll">swipe a strip for the night →</span></div>';
-    pl.towns.forEach(o=>{
-      const nm=this.shortTown(o.t.n);
-      const day=new Date(o.when).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
-      const dist=o.ahead<=0.3 ? 'you’re here' : fmtWin(o.ahead)+' mi ahead';
-      h+='<div class="wx-town">'
-        +'<div class="wx-town-h">'
-          +'<a class="wx-town-n" href="'+nwsLink(o.t.lat,o.t.lng)+'" target="_blank" rel="noopener">'
-            +esc(nm)+'<span class="wx-town-ext"> ↗</span></a>'
-          +'<span class="wx-town-d">'+esc(dist)+'</span>'
-        +'</div>'
-        +'<div class="wx-town-sub">TM '+fmtMp(o.mile)+' · arrive '+esc(day)+' '+esc(this.wxClock(o.when))+'</div>'
-        +this.townChart(o)
-      +'</div>';
+    const d=this.wxData;
+    if(!d){ el.innerHTML='<div class="up-empty">Set your miles a day and press the button. It reads the US National Weather Service along the route ahead of you and lays the next four days onto one graph — so it only asks when you ask.</div>'; return; }
+    if(d.err){ el.innerHTML='<div class="up-empty">'+esc(d.err)+'</div>'; return; }
+    if(d.loading){ el.innerHTML='<div class="up-empty">Reading the forecast along your route…</div>'; return; }
+    const app=this, data=d;
+    const NS='http://www.w3.org/2000/svg';
+    const H=data.hours, DAYS=data.days, TOWNS_=data.towns, META=data.meta;
+    const NH=H.length, DC=DAYS.length;
+
+    /* geometry */
+    const PPH=16, LEFT=34, RIGHT=26, RAIL_H=100, SPINE_Y=73;
+    const PANELS=[
+      {key:'temp',   title:'TEMPERATURE · °F',          h:74, titleH:15, extra:0},
+      {key:'wind',   title:'WIND ON THE RIDER · MPH',   h:92, titleH:30, extra:16},
+      {key:'hum',    title:'HUMIDITY & SKY COVER · %',  h:52, titleH:15, extra:0},
+      {key:'chance', title:'RAIN & THUNDER CHANCE · %', h:54, titleH:15, extra:0}
+    ];
+    let _y=RAIL_H;
+    PANELS.forEach(p=>{ p.titleY=_y; p.top=_y+p.titleH; p.bot=p.top+p.h; p.tickY=p.bot+p.extra+11; _y=p.bot+p.extra+14+12; });
+    const TOTAL_H=_y-6, SVG_W=LEFT+NH*PPH+RIGHT;
+
+    /* palette */
+    const INK='#201e1d';
+    const C_TEMP='#bf3b22', C_DEW='#2f6b46', C_HI='#8a6a1e';
+    const C_HEAD='#7a1410', C_CROSS='#9a6b00', C_TAIL='#279a52';   // luminances spread: .047 / .174 / .242
+    const C_GUST='#7d7979', C_RH='#2f6b46', C_SKY='#3b6ea5', C_POP='#35688c', C_THU='#9c2b2b';
+    const NEUTRAL_FILL='#d5cfc8';
+
+    /* helpers */
+    const E=(tag,attrs,parent)=>{ const n=document.createElementNS(NS,tag);
+      if(attrs) for(const k in attrs){ if(attrs[k]!=null) n.setAttribute(k,attrs[k]); }
+      if(parent) parent.appendChild(n); return n; };
+    const TX=(parent,x,y,str,cls,attrs)=>{ const t=E('text',attrs||{},parent);
+      t.setAttribute('x',x); t.setAttribute('y',y); if(cls) t.setAttribute('class',cls);
+      t.textContent=str; return t; };
+    const EL=(tag,cls,txt)=>{ const n=document.createElement(tag); if(cls) n.className=cls;
+      if(txt!==undefined) n.textContent=txt; return n; };
+    const hourLabel=hr=>{ let s=hr%12; if(s===0) s=12; return s+(hr<12?'a':'p'); };
+    const clockLabel=hr=>{ let s=hr%12; if(s===0) s=12; return s+':00 '+(hr<12?'am':'pm'); };
+    const n1=v=>(Math.round(v*10)/10).toFixed(1);
+    const domain=(vals,step,floorZero)=>{
+      let lo=Infinity, hi=-Infinity;
+      for(const v of vals){ if(v==null) continue; if(v<lo) lo=v; if(v>hi) hi=v; }
+      if(!isFinite(lo)){ lo=0; hi=step; }
+      const dlo=floorZero?0:Math.floor((lo-step*0.35)/step)*step;
+      let dhi=Math.ceil((hi+step*0.35)/step)*step;
+      if(dhi<=dlo) dhi=dlo+step;
+      return [dlo,dhi];
+    };
+    const ticksOf=(dom,step)=>{ const t=[]; for(let v=dom[0]; v<=dom[1]+1e-6; v+=step) t.push(Math.round(v*100)/100); return t; };
+    const glyph=(shape,cx,cy,r)=>{
+      if(shape==='diamond') return 'M'+cx+' '+(cy-r)+'L'+(cx+r)+' '+cy+'L'+cx+' '+(cy+r)+'L'+(cx-r)+' '+cy+'Z';
+      if(shape==='tri') return 'M'+cx+' '+(cy-r-.3)+'L'+(cx+r)+' '+(cy+r*.8)+'L'+(cx-r)+' '+(cy+r*.8)+'Z';
+      return 'M'+(cx-r)+' '+(cy-r)+'h'+(2*r)+'v'+(2*r)+'h'+(-2*r)+'Z';
+    };
+
+    /* domains from the data actually plotted */
+    (function(){
+      const temps=[], winds=[], chances=[];
+      H.forEach(r=>{ temps.push(r.temp); temps.push(r.dewpoint); if(r.heatIndex!=null) temps.push(r.heatIndex);
+        winds.push(r.gustMph); winds.push(r.windMph); chances.push(r.pop); chances.push(r.thunder); });
+      PANELS[0].dom=domain(temps,10); PANELS[0].ticks=ticksOf(PANELS[0].dom,20);
+      PANELS[1].dom=domain(winds,10,true); PANELS[1].ticks=ticksOf(PANELS[1].dom,10);
+      PANELS[2].dom=[0,100]; PANELS[2].ticks=[0,50,100];
+      PANELS[3].dom=domain(chances,20,true); PANELS[3].ticks=ticksOf(PANELS[3].dom, PANELS[3].dom[1]/2 || 20);
+    })();
+
+    /* town positions on the shared clock (hf = hours from day-0 midnight) */
+    const towns=TOWNS_.map(t=>{
+      let di=0; for(let i=0;i<DC;i++){ if(DAYS[i].date===t.arrive.slice(0,10)) di=i; }
+      const hh=+t.arrive.slice(11,13), mm=+t.arrive.slice(14,16);
+      return {name:t.name, tm:t.tm, services:t.services, start:t.start, di, hf:di*24+hh+mm/60};
     });
-    if(pl.truncated) h+='<div class="wx-none">Showing the nearest '+WX_MAX_TOWNS+' towns — the hourly forecast thins out past here anyway, and the rest come into range as you ride.</div>';
-    const at=new Date(pl.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
-    h+='<div class="wx-asof">Forecast read at '+esc(at)+' · arrivals figured at '+(this.avgSpeed>0?this.avgSpeed:12)+' mph, each day resuming at 8am. Tap a town for its full weather.gov page.</div>';
-    el.innerHTML=h;
+
+    const isZero=di=> di>=0 && di<DC && !!DAYS[di].zero;
+    const riding=i=> i>=0 && i<NH && !!H[i].riding;
+    const x=hf=>LEFT+hf*PPH;
+    const yOf=(p,v)=>{ let t=(v-p.dom[0])/(p.dom[1]-p.dom[0]); if(t<0)t=0; else if(t>1)t=1; return p.bot-t*p.h; };
+    const clampY=(p,y)=>Math.min(Math.max(y,p.top+9),p.bot-3);
+    const dayLabel=di=> (DAYS[di]?DAYS[di].label:'').toUpperCase();
+
+    /* ---- build the DOM shell ---- */
+    el.innerHTML='';
+    const root=EL('div','pd-root'); el.appendChild(root);
+
+    /* controls */
+    const ctl=EL('div','pd-ctl');
+    const r1=EL('div','pd-row');
+    r1.appendChild(EL('span','pd-lab','Ride window'));
+    const selStart=document.createElement('select'), selEnd=document.createElement('select');
+    for(let hh=4; hh<=12; hh++) selStart.appendChild(new Option(clockLabel(hh), String(hh)));
+    for(let hh=12; hh<=22; hh++) selEnd.appendChild(new Option(clockLabel(hh), String(hh)));
+    selStart.value=String(app.wxRideStart); selEnd.value=String(app.wxRideEnd);
+    r1.appendChild(selStart); r1.appendChild(EL('span','pd-dash','–')); r1.appendChild(selEnd);
+    const durNote=EL('span','pd-note'); r1.appendChild(durNote); ctl.appendChild(r1);
+
+    const r2=EL('div','pd-row');
+    r2.appendChild(EL('span','pd-lab','Day 1'));
+    const dateIn=document.createElement('input'); dateIn.type='date'; dateIn.value=META.startDate;
+    r2.appendChild(dateIn);
+    r2.appendChild(EL('span','pd-lab','Zero'));
+    const selZero=document.createElement('select'); r2.appendChild(selZero);
+    ctl.appendChild(r2);
+
+    const r3=EL('div','pd-days');
+    const dayBtns=DAYS.map((dd,i)=>{ const b=document.createElement('button'); b.className='pd-day'; b.type='button';
+      b.addEventListener('click',()=>{ scroller.scrollTo({left:Math.max(0,LEFT+i*24*PPH-4), behavior:'smooth'}); });
+      r3.appendChild(b); return b; });
+    ctl.appendChild(r3);
+    root.appendChild(ctl);
+
+    const read=EL('div','pd-read'); root.appendChild(read);
+    const scroller=EL('div','pd-scroll');
+    const svg=E('svg',{width:SVG_W, height:TOTAL_H, viewBox:'0 0 '+SVG_W+' '+TOTAL_H});
+    scroller.appendChild(svg); root.appendChild(scroller);
+    root.appendChild(EL('div','pd-hint','Drag sideways · tap an hour'));
+    const foot=EL('div','pd-foot'); root.appendChild(foot);
+
+    /* fill the zero dropdown */
+    (function(){
+      selZero.appendChild(new Option('no zero','-1'));
+      DAYS.forEach((dd,i)=> selZero.appendChild(new Option(dd.label, String(i))));
+      selZero.value=String(app.wxZeroDay);
+    })();
+
+    /* value labels + series drawing (closures over the groups set up in render) */
+    let gFade,gStrong,gLbl;
+    function linePath(p,vals){ let dd='',pen=false;
+      for(let i=0;i<NH;i++){ const v=vals[i]; if(v==null){ pen=false; continue; }
+        dd+=(pen?'L':'M')+x(i).toFixed(1)+' '+yOf(p,v).toFixed(1)+' '; pen=true; } return dd; }
+    function markPath(p,vals,shape,r,every){ let dd='';
+      for(let i=0;i<NH;i++){ if(every && i%every!==0) continue; const v=vals[i]; if(v==null) continue;
+        dd+=glyph(shape,x(i),yOf(p,v),r); } return dd; }
+    function series(p,vals,color,opt){ opt=opt||{}; const dd=linePath(p,vals); if(!dd) return;
+      const base={d:dd, fill:'none', stroke:color, 'stroke-width':opt.w||1.4, 'stroke-linejoin':'round', 'stroke-linecap':'round'};
+      if(opt.dash) base['stroke-dasharray']=opt.dash;
+      const a=E('path',base,gFade); a.setAttribute('opacity',opt.fadeOp||.3);
+      E('path',base,gStrong);
+      if(opt.shape){ const md=markPath(p,vals,opt.shape,opt.r||1.4,opt.every||1);
+        if(md){ const mf=E('path',{d:md, fill:opt.hollow?'none':color, stroke:color, 'stroke-width':.8},gFade); mf.setAttribute('opacity',.28);
+          E('path',{d:md, fill:opt.hollow?'#f3f2f2':color, stroke:color, 'stroke-width':.8},gStrong); } } }
+    function valueLabels(p,vals,every,dy,color,offset,skipZero){
+      for(let i=(offset||0); i<NH; i+=every){ const v=vals[i]; if(v==null) continue; if(skipZero && v<=0) continue;
+        const t=TX(gLbl,x(i),clampY(p,yOf(p,v)+dy),String(Math.round(v)),'val',{'text-anchor':'middle', fill:color});
+        t.setAttribute('opacity', riding(i)?1:.42); } }
+    function seriesTagOnce(p,vals,dy,color,label,preferHour){
+      let i0=-1;
+      for(let i=(preferHour||app.wxRideStart); i<NH; i++){ if(Math.floor(i/24)>0) break; if(!isZero(0) && riding(i) && vals[i]!=null){ i0=i; break; } }
+      if(i0<0){ for(let j=0;j<NH;j++){ if(vals[j]!=null){ i0=j; break; } } }
+      if(i0<0) return;
+      TX(gLbl,x(i0)+3,clampY(p,yOf(p,vals[i0])+dy),label,'tag',{fill:color, 'text-anchor':'start'}); }
+
+    let stickyG=null, stickyDay=null, stickyDayBg=null, gCurRef=null;
+
+    function render(){
+      while(svg.firstChild) svg.removeChild(svg.firstChild);
+      const vw=scroller.clientWidth||346;
+
+      const defs=E('defs',null,svg);
+      /* clip strong ink to the hours actually on the bike — recessive = off the bike */
+      const clip=E('clipPath',{id:'pd-ride-'+app._wxN},defs);
+      let runS=-1;
+      for(let i=0;i<=NH;i++){ const on=i<NH && riding(i);
+        if(on && runS<0) runS=i;
+        else if(!on && runS>=0){ E('rect',{x:x(runS)-PPH/2, y:0, width:(i-runS)*PPH, height:TOTAL_H},clip); runS=-1; } }
+      const hatch=E('pattern',{id:'pd-hatch-'+app._wxN, width:6, height:6, patternUnits:'userSpaceOnUse', patternTransform:'rotate(45)'},defs);
+      E('rect',{width:6, height:6, fill:'#e6e3e3'},hatch);
+      E('line',{x1:0,y1:0,x2:0,y2:6, stroke:'#d0cbcb', 'stroke-width':1.6},hatch);
+      const gl=E('linearGradient',{id:'pd-fadeL-'+app._wxN, x1:0,y1:0,x2:1,y2:0},defs);
+      E('stop',{offset:0,'stop-color':'#f3f2f2','stop-opacity':1},gl); E('stop',{offset:1,'stop-color':'#f3f2f2','stop-opacity':0},gl);
+      const gr=E('linearGradient',{id:'pd-fadeR-'+app._wxN, x1:0,y1:0,x2:1,y2:0},defs);
+      E('stop',{offset:0,'stop-color':'#f3f2f2','stop-opacity':0},gr); E('stop',{offset:1,'stop-color':'#f3f2f2','stop-opacity':1},gr);
+
+      const gBg=E('g',null,svg), gRail=E('g',null,svg);
+      gFade=E('g',null,svg); gStrong=E('g',{'clip-path':'url(#pd-ride-'+app._wxN+')'},svg);
+      gLbl=E('g',null,svg); const gCur=E('g',null,svg);
+
+      /* washes: the zero day hatched, off-window hours knocked back */
+      for(let d0=0; d0<DC; d0++){ const s=d0*24, zero=isZero(d0);
+        for(const p of PANELS){
+          if(zero){ E('rect',{x:x(s), y:p.top, width:24*PPH, height:p.h+p.extra, fill:'url(#pd-hatch-'+app._wxN+')', opacity:.75},gBg); }
+          else{ E('rect',{x:x(s), y:p.top, width:app.wxRideStart*PPH, height:p.h+p.extra, fill:'#e6e3e3', opacity:.62},gBg);
+            E('rect',{x:x(s+app.wxRideEnd), y:p.top, width:(24-app.wxRideEnd)*PPH, height:p.h+p.extra, fill:'#e6e3e3', opacity:.62},gBg); } } }
+
+      /* grid + hour ticks */
+      for(const pp of PANELS){
+        for(const tv of pp.ticks){ const yy=yOf(pp,tv);
+          E('line',{x1:LEFT, y1:yy, x2:LEFT+NH*PPH, y2:yy, stroke:INK, 'stroke-width':.5, opacity:.1},gBg); }
+        E('line',{x1:LEFT, y1:pp.bot, x2:LEFT+NH*PPH, y2:pp.bot, stroke:INK, 'stroke-width':.8, opacity:.32},gBg);
+        for(let hx=0; hx<=NH; hx+=6){ E('line',{x1:x(hx), y1:pp.top, x2:x(hx), y2:pp.bot, stroke:INK, 'stroke-width':.5, opacity: hx%24===0?0:.07},gBg); }
+        for(let hx=0; hx<NH; hx+=3){ E('line',{x1:x(hx), y1:pp.bot+pp.extra, x2:x(hx), y2:pp.bot+pp.extra+3, stroke:INK, 'stroke-width':.6, opacity:.3},gBg);
+          const lt=TX(gBg,x(hx),pp.tickY,hourLabel(hx%24),'ax',{'text-anchor':'middle'}); if(riding(hx)) lt.setAttribute('fill','#605d5d'); } }
+
+      /* day rules */
+      for(let db=0; db<DC; db++) E('line',{x1:x(db*24), y1:2, x2:x(db*24), y2:TOTAL_H-16, stroke:INK, 'stroke-width':db===0?.8:1, opacity:db===0?.25:.38},gBg);
+
+      /* ---- town rail: dates, town stack, trail miles ---- */
+      const order=towns.slice().sort((a,b)=>a.hf-b.hf);
+      const GAP=5, MAXROW=4;
+      const rowBaseline=r=>SPINE_Y-6-r*10;
+      const rowsEnd=[];
+      order.forEach(t=>{
+        const label=t.name+(t.start?'  ← start':'');
+        const tt=TX(gRail,0,0,label,'town',{'text-anchor':'start'});
+        const w=tt.getComputedTextLength(), dotX=x(t.hf); let wantX=dotX+2, row=0;
+        while(row<rowsEnd.length && rowsEnd[row]+GAP>wantX) row++;
+        if(row>MAXROW){ row=0; for(let q=1;q<rowsEnd.length;q++) if(rowsEnd[q]<rowsEnd[row]) row=q; wantX=Math.max(wantX,rowsEnd[row]+GAP); }
+        if(row>=rowsEnd.length) rowsEnd.push(0);
+        rowsEnd[row]=wantX+w; t._el=tt; t._lx=wantX; t._row=row; t._dotX=dotX; t._w=w;
+      });
+      for(let dl=0; dl<DC; dl++){ const lab=dayLabel(dl);
+        const dt=TX(gRail,x(dl*24)+5,10,lab,'dayl'); const dw=dt.getComputedTextLength();
+        if(isZero(dl)){ const zt=TX(gRail,x(dl*24)+5+dw+7,10,'· ZERO DAY','dayl'); zt.setAttribute('fill','#a86a00'); } }
+      if(order.length) E('line',{x1:x(order[0].hf), y1:SPINE_Y, x2:x(order[order.length-1].hf), y2:SPINE_Y, stroke:INK, 'stroke-width':1.3, opacity:.5},gBg);
+      order.forEach(t=>{ const dim=isZero(t.di), dotX=t._dotX, by=rowBaseline(t._row);
+        E('line',{x1:dotX, y1:SPINE_Y, x2:dotX, y2:TOTAL_H-16, stroke:INK, 'stroke-width':.6, 'stroke-dasharray':'1.5 2.5', opacity:dim?.09:.2},gBg);
+        E('line',{x1:dotX, y1:SPINE_Y-2.5, x2:t._lx+.5, y2:by+1.5, stroke:INK, 'stroke-width':.5, opacity:dim?.2:.42},gBg);
+        if(t.start) E('circle',{cx:dotX, cy:SPINE_Y, r:3, fill:'#f3f2f2', stroke:INK, 'stroke-width':1.3, opacity:dim?.3:1},gBg);
+        else E('circle',{cx:dotX, cy:SPINE_Y, r:2.4, fill:INK, opacity:dim?.3:1},gBg); });
+      order.forEach(t=>{ const dim=isZero(t.di), by=rowBaseline(t._row);
+        t._el.setAttribute('x',t._lx); t._el.setAttribute('y',by);
+        if(dim){ t._el.setAttribute('opacity',.5);
+          E('line',{x1:t._lx, y1:by-2.5, x2:t._lx+t._w, y2:by-2.5, stroke:INK, 'stroke-width':.8, opacity:.5},gRail); } });
+      for(let zi=0; zi<DC; zi++){ if(!isZero(zi)) continue;
+        if(towns.some(t=>t.di===zi)) continue;
+        let here=null; for(let ti=0;ti<towns.length;ti++){ if(towns[ti].hf<zi*24) here=towns[ti]; }
+        const msg=here?'ZERO — RESTING AT '+here.name.toUpperCase()+' · TM '+n1(here.tm):'ZERO — NO MILES';
+        TX(gRail,x(zi*24+12),rowBaseline(0)-12,msg,'zero',{'text-anchor':'middle'}); }
+      let lastTM=null;
+      for(let mi=0; mi<NH; mi+=3){ const val=Math.round(H[mi].mile), moving=riding(mi);
+        if(val===lastTM && !(mi%24===0)) continue; lastTM=val;
+        const mt=TX(gRail,x(mi),RAIL_H-6,String(val),'tmv',{'text-anchor':'middle', fill:moving?INK:'#9b9797'});
+        E('line',{x1:x(mi), y1:SPINE_Y+3, x2:x(mi), y2:SPINE_Y+6, stroke:INK, 'stroke-width':.6, opacity:moving?.4:.18},gRail);
+        if(!moving) mt.setAttribute('opacity',.85); }
+      E('line',{x1:LEFT, y1:RAIL_H-2.5, x2:LEFT+NH*PPH, y2:RAIL_H-2.5, stroke:INK, 'stroke-width':.6, opacity:.22},gBg);
+
+      /* ---- P1 temperature ---- */
+      const P1=PANELS[0];
+      const vTemp=H.map(r=>r.temp), vDew=H.map(r=>r.dewpoint), vHI=H.map(r=>r.heatIndex);
+      series(P1,vHI,C_HI,{w:1.2, dash:'4 2.5', shape:'diamond', r:1.6, hollow:true, every:2});
+      series(P1,vDew,C_DEW,{w:1.2, shape:'tri', r:1.6, every:2});
+      series(P1,vTemp,C_TEMP,{w:1.9, shape:'sq', r:1.6});
+      valueLabels(P1,vTemp,4,-5.5,C_TEMP,0); valueLabels(P1,vDew,8,10,C_DEW,0);
+
+      /* ---- P2 wind on the rider ---- */
+      const P2=PANELS[1];
+      const vGust=H.map(r=>r.gustMph), vWind=H.map(r=>r.windMph);
+      let areaD='M'+x(0).toFixed(1)+' '+P2.bot, opened=false;
+      for(let i=0;i<NH;i++){ if(vWind[i]==null) continue; areaD+='L'+x(i).toFixed(1)+' '+yOf(P2,vWind[i]).toFixed(1); opened=true; }
+      areaD+='L'+x(NH-1).toFixed(1)+' '+P2.bot+'Z';
+      if(opened){ const fa=E('path',{d:areaD, fill:NEUTRAL_FILL, stroke:'none'},gFade); fa.setAttribute('opacity',.28);
+        const fs=E('path',{d:areaD, fill:NEUTRAL_FILL, stroke:'none'},gStrong); fs.setAttribute('opacity',.55); }
+      const kstyle={ head:{c:C_HEAD,w:2.3,dash:null,shape:'sq',r:1.9},
+        cross:{c:C_CROSS,w:1.7,dash:'5 2.6',shape:'diamond',r:2.0},
+        tail:{c:C_TAIL,w:1.6,dash:'1.4 3.2',shape:'tri',r:2.0} };
+      const kinds=['head','cross','tail'], segd={head:'',cross:'',tail:''};
+      for(let si=0; si<NH-1; si++){ if(vWind[si]==null || vWind[si+1]==null) continue;
+        const k=H[si].kind; segd[k]+='M'+x(si).toFixed(1)+' '+yOf(P2,vWind[si]).toFixed(1)+'L'+x(si+1).toFixed(1)+' '+yOf(P2,vWind[si+1]).toFixed(1)+' '; }
+      series(P2,vGust,C_GUST,{w:1, dash:'1.5 2', shape:null, fadeOp:.26});
+      kinds.forEach(kk=>{ if(!segd[kk]) return; const st=kstyle[kk];
+        const attr={d:segd[kk], fill:'none', stroke:st.c, 'stroke-width':st.w, 'stroke-linecap':'round'}; if(st.dash) attr['stroke-dasharray']=st.dash;
+        const a=E('path',attr,gFade); a.setAttribute('opacity',.3); E('path',attr,gStrong); });
+      const mk={head:'',cross:'',tail:''};
+      for(let mi=0; mi<NH; mi++){ if(vWind[mi]==null) continue; const kkm=H[mi].kind, stk=kstyle[kkm]; mk[kkm]+=glyph(stk.shape,x(mi),yOf(P2,vWind[mi]),stk.r); }
+      kinds.forEach(kk=>{ if(!mk[kk]) return; const a=E('path',{d:mk[kk], fill:kstyle[kk].c, stroke:'none'},gFade); a.setAttribute('opacity',.3); E('path',{d:mk[kk], fill:kstyle[kk].c, stroke:'none'},gStrong); });
+      valueLabels(P2,vWind,4,-6,INK,0);
+      for(let gi=0; gi<NH; gi+=8){ if(vGust[gi]==null) continue; const gt=TX(gLbl,x(gi),clampY(P2,yOf(P2,vGust[gi])-4.5),String(Math.round(vGust[gi])),'val',{'text-anchor':'middle', fill:C_GUST}); gt.setAttribute('opacity',riding(gi)?.95:.4); }
+      seriesTagOnce(P2,vGust,-5,C_GUST,'Gusts',10);
+      const arrowY=P2.bot+10;
+      for(let ari=0; ari<NH; ari+=2){ const rr=H[ari]; if(rr.fromDeg==null||rr.heading==null) continue;
+        const theta=(rr.fromDeg-rr.heading)+180, col=kstyle[rr.kind].c;
+        const ag=E('g',{transform:'translate('+x(ari)+','+arrowY+') rotate('+theta.toFixed(1)+')'},gBg);
+        const ap=E('path',{d:'M0 4.4L0 -4.4M-2.3 -1.6L0 -4.4L2.3 -1.6', fill:'none', stroke:col, 'stroke-width':1.1, 'stroke-linecap':'round', 'stroke-linejoin':'round'},ag);
+        ap.setAttribute('opacity',riding(ari)?.95:.3); }
+
+      /* ---- P3 humidity & sky ---- */
+      const P3=PANELS[2];
+      const vRH=H.map(r=>r.rh), vSky=H.map(r=>r.sky);
+      series(P3,vSky,C_SKY,{w:1.2, dash:'4 2.5', shape:'diamond', r:1.5, hollow:true, every:2});
+      series(P3,vRH,C_RH,{w:1.6, shape:'sq', r:1.5, every:1});
+      valueLabels(P3,vRH,8,-5.5,C_RH,0); valueLabels(P3,vSky,8,10,C_SKY,4);
+
+      /* ---- P4 rain & thunder chance, rain amount folded in ---- */
+      const P4=PANELS[3];
+      const vPop=H.map(r=>r.pop), vThu=H.map(r=>r.thunder), vRain=H.map(r=>r.rainIn);
+      series(P4,vThu,C_THU,{w:1.3, dash:'4 2.5', shape:'tri', r:1.7, every:2});
+      series(P4,vPop,C_POP,{w:1.7, shape:'sq', r:1.6});
+      valueLabels(P4,vPop,4,-6,C_POP,0,true); valueLabels(P4,vThu,8,10,C_THU,4,true);
+      let run=-1, runMax=0, runIdx=-1; const boxBase=P4.bot-2.5; let boxRight=-1e9;
+      for(let wi=0; wi<=NH; wi++){ const wet=wi<NH && vRain[wi]>0;
+        if(wet){ if(vRain[wi]>runMax){ runMax=vRain[wi]; runIdx=wi; } if(run<0) run=wi; }
+        else if(run>=0){ const ax0=x(runIdx), on=riding(runIdx);
+          const txt=runMax.toFixed(2).replace(/^0/,'')+'″';
+          const lab=TX(gLbl,-999,boxBase,txt,'val',{fill:'#7a5a00'}); const tw=lab.getComputedTextLength();
+          let bx=Math.max(ax0-4, boxRight+2); if(bx+tw+12>LEFT+NH*PPH) bx=LEFT+NH*PPH-tw-12; boxRight=bx+tw+12;
+          E('line',{x1:ax0, y1:yOf(P4,vPop[runIdx])+2, x2:ax0, y2:boxBase-8, stroke:C_POP, 'stroke-width':.7, 'stroke-dasharray':'1 1.6', opacity:on?.6:.3},gLbl);
+          const box=E('rect',{x:bx, y:boxBase-9.5, width:tw+12, height:11, rx:1.5, fill:'#f6eec5', stroke:'#d9c88a', 'stroke-width':.7},gLbl); box.setAttribute('opacity',on?1:.55);
+          const dx=bx+5, dy=boxBase-4;
+          const dp=E('path',{d:'M'+dx+' '+(dy+2.6)+'c-1.9 -2.1 -1.9 -3.9 0 -6 c1.9 2.1 1.9 3.9 0 6Z', fill:'#7a5a00', stroke:'none'},gLbl); dp.setAttribute('opacity',on?1:.55);
+          lab.setAttribute('x',bx+9); lab.setAttribute('opacity',on?1:.55);
+          run=-1; runMax=0; runIdx=-1; } }
+
+      /* ---- sticky gutter, titles, legends ---- */
+      stickyG=E('g',null,svg);
+      E('rect',{x:LEFT, y:0, width:24, height:TOTAL_H-8, fill:'url(#pd-fadeL-'+app._wxN+')'},stickyG);
+      E('rect',{x:vw-20, y:0, width:20, height:TOTAL_H-8, fill:'url(#pd-fadeR-'+app._wxN+')'},stickyG);
+      E('rect',{x:0, y:0, width:LEFT, height:TOTAL_H, fill:'#f3f2f2'},stickyG);
+      E('line',{x1:LEFT-.5, y1:SPINE_Y-2, x2:LEFT-.5, y2:TOTAL_H-16, stroke:INK, 'stroke-width':.5, opacity:.18},stickyG);
+      TX(stickyG,1,44,'Towns','cap',{'text-anchor':'start'});
+      TX(stickyG,1,RAIL_H-6,'TM','cap',{'text-anchor':'start'});
+      stickyDayBg=E('rect',{x:0, y:0, width:0, height:14, fill:'#f3f2f2'},stickyG);
+      stickyDay=TX(stickyG,1,11,'','dayl');
+
+      const legends={
+        temp:[{c:C_TEMP,w:1.9,shape:'sq',label:'Temp'},{c:C_DEW,w:1.2,shape:'tri',label:'Dew'},{c:C_HI,w:1.2,dash:'4 2.5',shape:'diamond',label:'Heat idx'}],
+        hum:[{c:C_RH,w:1.6,shape:'sq',label:'Humidity'},{c:C_SKY,w:1.2,dash:'4 2.5',shape:'diamond',label:'Sky cover'}],
+        chance:[{c:C_POP,w:1.7,shape:'sq',label:'Rain %'},{c:C_THU,w:1.3,dash:'4 2.5',shape:'tri',label:'Thunder %'}]
+      };
+      const LINE=15, PRE=3, POST=9;
+      PANELS.forEach(p=>{
+        E('rect',{x:0, y:p.titleY-1, width:vw, height:p.titleH, fill:'#f3f2f2'},stickyG);
+        const titleT=TX(stickyG,1,p.titleY+8,p.title,'ttl');
+        const items=(legends[p.key]||[]).slice();
+        if(items.length){
+          items.forEach(it=>{ it._t=TX(stickyG,-999,p.titleY+8,it.label,'lg',{fill:it.c}); it._w=LINE+PRE+it._t.getComputedTextLength()+POST; });
+          const titleMin=1+titleT.getComputedTextLength()+10;
+          const total=()=>items.reduce((a,it)=>a+it._w,0);
+          while(items.length>1 && (vw-5-total())<titleMin){ const drop=items.pop(); stickyG.removeChild(drop._t); }
+          let cx=Math.max(titleMin, vw-5-total());
+          items.forEach(it=>{ const at={x1:cx, y1:p.titleY+5.4, x2:cx+LINE, y2:p.titleY+5.4, stroke:it.c, 'stroke-width':it.w, 'stroke-linecap':'round'}; if(it.dash) at['stroke-dasharray']=it.dash;
+            E('line',at,stickyG); E('path',{d:glyph(it.shape,cx+7.5,p.titleY+5.4,1.7), fill:it.c},stickyG);
+            it._t.setAttribute('x',cx+LINE+PRE); cx+=it._w; }); }
+        E('line',{x1:1, y1:p.titleY+11.5, x2:vw-4, y2:p.titleY+11.5, stroke:INK, 'stroke-width':.5, opacity:.16},stickyG);
+        p.ticks.forEach(tv=> TX(stickyG,LEFT-5,yOf(p,tv)+2.8,String(tv),'ax',{'text-anchor':'end'})); });
+      const lg=E('g',{transform:'translate(1,'+(PANELS[1].titleY+23)+')'},stickyG); let lx=0;
+      [['head','Headwind (red)'],['cross','Crosswind (amber)'],['tail','Tailwind (green)']].forEach(pair=>{
+        const st=kstyle[pair[0]]; const at={x1:lx, y1:-2.5, x2:lx+15, y2:-2.5, stroke:st.c, 'stroke-width':st.w, 'stroke-linecap':'round'}; if(st.dash) at['stroke-dasharray']=st.dash;
+        E('line',at,lg); E('path',{d:glyph(st.shape,lx+7.5,-2.5,st.r), fill:st.c},lg);
+        const wt=TX(lg,lx+19,0,pair[1],'lg',{fill:st.c, 'font-weight':600}); lx+=19+wt.getComputedTextLength()+9; });
+      TX(stickyG,vw-5,PANELS[1].titleY+8,'↑ = your heading · ▼ into your face','cap',{'text-anchor':'end'});
+
+      drawCursor(gCur); syncSticky(); paintChrome();
+    }
+
+    function drawCursor(g){ gCurRef=g; while(g.firstChild) g.removeChild(g.firstChild);
+      const i=app.wxCur==null?0:app.wxCur;
+      E('line',{x1:x(i), y1:RAIL_H-20, x2:x(i), y2:TOTAL_H-12, stroke:'#0088b0', 'stroke-width':1, opacity:.85},g);
+      E('path',{d:'M'+(x(i)-3.4)+' '+(RAIL_H-20)+'L'+(x(i)+3.4)+' '+(RAIL_H-20)+'L'+x(i)+' '+(RAIL_H-15)+'Z', fill:'#0088b0'},g);
+      PANELS.forEach(p=>{ const v=valueFor(p,i); if(v==null) return; E('circle',{cx:x(i), cy:yOf(p,v), r:2.6, fill:'none', stroke:'#0088b0', 'stroke-width':1.2},g); }); }
+    function valueFor(p,i){ const r=H[i]; if(!r) return null;
+      if(p.key==='temp') return r.temp; if(p.key==='wind') return r.windMph; if(p.key==='hum') return r.rh; return r.pop; }
+
+    function paintReadout(){ const i=app.wxCur==null?0:app.wxCur, r=H[i]; if(!r){ read.textContent=''; return; }
+      const di=Math.floor(i/24); read.innerHTML='';
+      const sep=()=>read.appendChild(EL('span','sep','·'));
+      read.appendChild(EL('b',null,dayLabel(di)+' '+clockLabel(r.hour)));
+      sep(); read.appendChild(EL('span','tm','TM '+n1(r.mile)));
+      if(r.temp!=null){ sep(); read.appendChild(EL('span',null,r.temp+'°'+(r.heatIndex?' feels '+r.heatIndex+'°':''))); }
+      if(r.windMph!=null){ sep(); const kw=r.kind==='head'?'Head':(r.kind==='tail'?'Tail':'Cross');
+        read.appendChild(EL('span','k-'+r.kind, kw+' '+Math.round(Math.abs(r.kind==='cross'?r.crossMph:r.headMph))+' mph'+(r.gustMph!=null?' · gust '+Math.round(r.gustMph):''))); }
+      if(r.pop!=null){ sep(); read.appendChild(EL('span',null,'rain '+r.pop+'%'+(r.rainIn>0?' / '+r.rainIn.toFixed(2)+'"':''))); }
+      if(!riding(i)){ sep(); read.appendChild(EL('span','off', isZero(di)?'zero day — off the bike':'outside the ride window')); } }
+
+    function paintChrome(){
+      const hrs=app.wxRideEnd-app.wxRideStart;
+      durNote.textContent=hrs+' h · '+(hrs*META.avgSpeed)+' mi';
+      dayBtns.forEach((b,i)=>{ b.innerHTML=''; b.appendChild(document.createTextNode((DAYS[i].label||'').replace(/,.*/,'')+' '+DAYS[i].date.slice(8)));
+        b.appendChild(EL('span','z', isZero(i)?'zero':' ')); });
+      highlightDay();
+      const gotNote = data.got<data.of ? ' · '+data.got+' of '+data.of+' points answered' : '';
+      foot.textContent='Source: api.weather.gov · '+META.milesPerDay+' mi/day at '+META.avgSpeed+' mph, TM '+n1(META.startMile)+'–'+n1(META.endMile)
+        +'. Recessive hours are the ones you are not on the bike; rain amount rides on the chance panel as a callout on the floor'+gotNote
+        +'. Read at '+new Date(data.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})+'.'; }
+
+    function highlightDay(){ const centre=(scroller.scrollLeft+(scroller.clientWidth||346)/2-LEFT)/PPH;
+      const di=Math.max(0,Math.min(DC-1,Math.floor(centre/24)));
+      dayBtns.forEach((b,i)=>{ b.className='pd-day'+(i===di?' on':''); }); }
+
+    function syncSticky(){ const sl=scroller.scrollLeft;
+      if(stickyG) stickyG.setAttribute('transform','translate('+sl+',0)');
+      if(!stickyDay) return;
+      const di=Math.max(0,Math.min(DC-1,Math.floor((sl+6)/PPH/24))), ownLabelX=x(di*24)+5;
+      if(ownLabelX<sl+LEFT+2){ const txt=dayLabel(di)+(isZero(di)?' · ZERO':'');
+        stickyDay.textContent=txt; stickyDay.setAttribute('opacity',1); stickyDayBg.setAttribute('width',txt.length*5.7+8); }
+      else{ stickyDay.setAttribute('opacity',0); stickyDayBg.setAttribute('width',0); } }
+
+    /* events */
+    scroller.addEventListener('scroll',()=>{ app._wxScroll=scroller.scrollLeft; syncSticky(); highlightDay(); });
+    svg.addEventListener('click',ev=>{ const box=svg.getBoundingClientRect();
+      let i=Math.round((ev.clientX-box.left-LEFT)/PPH); if(i<0)i=0; if(i>NH-1)i=NH-1;
+      app.wxCur=i; if(gCurRef) drawCursor(gCurRef); paintReadout(); });
+    selStart.addEventListener('change',()=>{ app.wxRideStart=+selStart.value;
+      if(app.wxRideEnd<=app.wxRideStart+1){ app.wxRideEnd=Math.min(22,app.wxRideStart+2); }
+      app.savePrefs(); app.wxReplan(); });
+    selEnd.addEventListener('change',()=>{ app.wxRideEnd=+selEnd.value;
+      if(app.wxRideEnd<=app.wxRideStart+1){ app.wxRideStart=Math.max(4,app.wxRideEnd-2); }
+      app.savePrefs(); app.wxReplan(); });
+    dateIn.addEventListener('change',()=>{ if(!dateIn.value) return;
+      const a=dateIn.value.split('-'), chosen=new Date(+a[0],+a[1]-1,+a[2],0,0,0,0).getTime();
+      const now=new Date(), midnight=new Date(now.getFullYear(),now.getMonth(),now.getDate(),0,0,0,0).getTime();
+      app.wxStartShift=Math.round((chosen-midnight)/86400000); app.wxCur=null; app.buildOutlook(); });
+    selZero.addEventListener('change',()=>{ app.wxZeroDay=+selZero.value; app.wxReplan(); });
+
+    /* go */
+    app._wxN=(app._wxN||0)+1;
+    render(); paintReadout();
+    scroller.scrollLeft = app._wxScroll!=null ? app._wxScroll : Math.max(0,LEFT+app.wxRideStart*PPH-8);
+    syncSticky(); highlightDay();
+    // one re-measure once the tab has laid out (legend fit / sticky widths need clientWidth)
+    if(!app._wxLaidOut){ app._wxLaidOut=true; setTimeout(()=>{ if(app.wxData===data) render(); },0); }
   }
 
   /* ---------- map + live data ---------- */

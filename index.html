@@ -249,41 +249,8 @@
   .mp-dot{width:5px;height:5px;border-radius:50%;background:currentColor;
     box-shadow:0 0 0 1.5px var(--color-bg)}
   .mp-tick{opacity:.9}
-  /* The day chart: stacked panels over one time axis, an hour of riding per column. */
-  .wx-svg{display:block;width:100%;height:auto;margin-top:var(--space-2);overflow:visible}
-  .wx-ax{stroke:var(--color-neutral-400);stroke-width:1}
-  .wx-gl{stroke:var(--color-divider);stroke-width:1}
-  .wx-dash{stroke-dasharray:2 3}
-  .wx-rain{fill:var(--color-accent);opacity:.35}
-  .wx-tfill{fill:var(--color-accent-800);opacity:.08}
-  .wx-temp{fill:none;stroke:var(--color-accent-800);stroke-width:1.75;
-    stroke-linejoin:round;stroke-linecap:round}
-  .wx-dot{fill:var(--color-accent-800)}
-  .wx-tl{fill:var(--color-text);font-family:var(--font-body);font-size:10px;font-weight:700}
-  .wx-xl{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:9px}
-  .wx-gt{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:8px}
-  .wx-wl{font-family:var(--font-body);font-size:9px;font-weight:700}
-  /* Wind as a rider meets it: up in your face, down at your back, straddling
-     the line when it only pushes you sideways. */
-  .wx-b-head{fill:#b3261e}
-  .wx-b-tail{fill:#146c2e}
-  .wx-b-cross{fill:var(--color-neutral-400)}
-  .wx-g-head{fill:#b3261e}
-  .wx-g-tail{fill:#146c2e}
-  /* Towns ruled down the stack — the chart's landmarks. */
-  .wx-tn{stroke:var(--color-neutral-400);stroke-width:1;stroke-dasharray:1 3;opacity:.75}
-  .wx-tnl{fill:var(--color-neutral-600);font-family:var(--font-body);font-size:8.5px;font-weight:600}
-  text.wx-head{fill:#b3261e}
-  text.wx-tail{fill:#146c2e}
-  text.wx-cross{fill:var(--color-neutral-500)}
-  .wx-key{display:flex;flex-wrap:wrap;gap:9px;margin-top:3px;font-size:10px;color:var(--color-neutral-500)}
-  .wx-key span::before{content:"";display:inline-block;width:8px;height:8px;margin-right:4px;
-    border-radius:2px;vertical-align:-1px}
-  .wx-k-t::before{background:var(--color-accent-800)}
-  .wx-k-r::before{background:var(--color-accent);opacity:.4}
-  .wx-k-h::before{background:#b3261e}
-  .wx-k-l::before{background:#146c2e}
-  .wx-k-c::before{background:var(--color-neutral-400)}
+  /* The multi-day chart is now the meteogram Outlook (styles under .pd-root, further
+     down). What remains here is the map's own forecast pins. */
   /* The map's forecast: one dial per riding-hour, readable without a tap. */
   .wx-ic{background:none;border:0;overflow:visible}
   .wx-pin{display:flex;flex-direction:column;align-items:center;gap:1px;
@@ -317,54 +284,64 @@
     font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .sheet-line b{color:var(--color-text);font-size:13px}
   .sheet-dot{color:var(--color-neutral-400)}
-  /* Outlook */
-  .wx-out{display:flex;flex-direction:column;gap:var(--space-3);margin-top:var(--space-3)}
-  .wx-day{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
-  .wx-day-h{display:flex;align-items:baseline;gap:7px}
-  .wx-day-n{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px}
-  .wx-day-d{font-size:12px;color:var(--color-neutral-600)}
-  .wx-day-m{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
-  .wx-day-tw{font-size:13px;font-weight:600;color:var(--color-neutral-800);margin-top:2px}
-  .wx-day-tm{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums;margin-top:1px}
-  .wx-night{margin-top:5px;padding:5px 8px;font-size:12px;color:var(--color-neutral-700);
-    background:var(--color-neutral-100);border-radius:var(--radius-md)}
-  .wx-night b{color:var(--color-text)}
-  /* Sky, temperature and rain are what you decide a day on; wind is a detail you
-     read after. It used to be the other way round on the page. */
-  .wx-day-w{font-size:16px;font-weight:600;color:var(--color-text);margin-top:6px;line-height:1.4}
-  .wx-none{font-size:12px;color:var(--color-neutral-500);margin-top:5px}
-  .wx-wind{display:flex;align-items:center;gap:5px;margin-top:3px;font-size:12px;font-weight:400}
-  .wx-wind .ic{flex:none}
-  .wx-asof{font-size:11px;color:var(--color-neutral-500);border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
-  /* Outlook, a town at a time — each an NWS-style hourly strip, the town linked out to
-     its own weather.gov page. */
-  .wx-town{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
-  .wx-town-h{display:flex;align-items:baseline;gap:8px}
-  .wx-town-n{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-    font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:16px;
-    color:var(--color-accent-800);text-decoration:none}
-  .wx-town-n:hover{text-decoration:underline}
-  .wx-town-ext{font-size:12px;color:var(--color-accent);font-weight:400}
-  .wx-town-d{flex:none;margin-left:auto;font-size:12px;color:var(--color-neutral-600);
-    font-variant-numeric:tabular-nums;white-space:nowrap}
-  .wx-town-sub{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums;margin:1px 0 2px}
-  /* The chart in two parts: a fixed gutter that carries the scales, and a strip that
-     scrolls under it. The scrollbar is hidden by design — the night is reached by a
-     swipe, not by chrome that eats a row of height. */
-  .wx-town-chart{display:flex;align-items:flex-start;margin-top:3px}
-  .wx-gut{flex:none;overflow:visible}
-  .wx-scroll{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;
-    -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;
-    scrollbar-width:none;-ms-overflow-style:none}
-  .wx-scroll::-webkit-scrollbar{display:none}
-  .wx-plot{display:block}
-  .wx-nite{fill:var(--color-neutral-800);opacity:.07}
-  .wx-mid{stroke:var(--color-neutral-400);stroke-width:1;opacity:.55}
-  .wx-dl{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:8px;font-weight:600}
-  .wx-arr{stroke:var(--color-accent);stroke-width:1.5;stroke-dasharray:3 2}
-  .wx-arrl{fill:var(--color-accent-800);font-family:var(--font-body);font-size:8.5px;font-weight:700}
-  .wx-k-scroll{color:var(--color-neutral-500);font-style:italic}
-  .wx-k-scroll::before{display:none}
+  /* Outlook — the continuous meteogram ("Broadsheet re-cut"). One scrolled strip in the
+     app's serif: sticky y-gutter and hour readout, the towns and mileposts on the shared
+     clock, and a wind line recoloured by what the wind does to the rider. Scoped under
+     .pd-root; the custom props below mirror the Broadsheet tokens so the block is
+     self-contained. */
+  .pd-root{--pbg:var(--color-bg);--ptext:var(--color-text);--paccent:var(--color-accent);
+    --pdiv:var(--color-divider);--pn500:var(--color-neutral-500);--pn600:var(--color-neutral-600);--pn700:var(--color-neutral-700);
+    margin-top:var(--space-2);background:var(--pbg);color:var(--ptext);
+    font-family:ui-serif,Georgia,"Times New Roman",serif;font-variant-numeric:tabular-nums;line-height:1.35;color-scheme:light}
+  .pd-root *{box-sizing:border-box}
+  .pd-ctl{padding:8px 0 9px;border-bottom:1px solid var(--pdiv);display:flex;flex-direction:column;gap:6px}
+  .pd-row{display:flex;align-items:center;gap:7px;flex-wrap:nowrap}
+  .pd-lab{font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--pn600);white-space:nowrap}
+  .pd-root select,.pd-root input[type=date]{font-family:inherit;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ptext);
+    background:#fff;border:1px solid var(--pdiv);border-bottom-color:var(--paccent);border-bottom-width:1.5px;
+    border-radius:2px;padding:6px 7px;line-height:1.1;min-height:30px;-webkit-appearance:none;appearance:none}
+  .pd-root select{padding-right:20px;background-image:linear-gradient(45deg,transparent 50%,var(--pn600) 50%),linear-gradient(135deg,var(--pn600) 50%,transparent 50%);
+    background-position:calc(100% - 11px) 54%,calc(100% - 7px) 54%;background-size:4px 4px,4px 4px;background-repeat:no-repeat}
+  .pd-root select:focus,.pd-root input[type=date]:focus{outline:1.5px solid var(--paccent);outline-offset:0}
+  .pd-dash{color:var(--pn500);font-size:12px}
+  .pd-note{font-size:10.5px;color:var(--pn600);margin-left:auto;white-space:nowrap;overflow:hidden}
+  .pd-root input[type=date]{min-width:120px;max-width:150px}
+  .pd-days{display:flex;gap:0;border:1px solid var(--pdiv);border-radius:2px;overflow:hidden}
+  .pd-day{flex:1 1 0;font-family:inherit;font-size:11px;letter-spacing:.02em;color:var(--pn700);
+    background:#fff;border:0;border-right:1px solid var(--pdiv);padding:6px 0;cursor:pointer;min-height:31px;font-variant-numeric:tabular-nums}
+  .pd-day:last-child{border-right:0}
+  .pd-day.on{background:var(--ptext);color:#f8f4f4}
+  .pd-day .z{display:block;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:#a86a00;line-height:1.1}
+  .pd-day.on .z{color:#f5c518}
+  /* readout — sticky so a tapped hour stays named while the panels scroll */
+  .pd-read{position:sticky;top:0;z-index:6;padding:7px 0;background:var(--pbg);border-bottom:1px solid var(--ptext);
+    box-shadow:0 1px 2px rgba(45,43,43,.10);font-size:12px;display:flex;flex-wrap:wrap;gap:0 6px;align-items:baseline;min-height:46px}
+  .pd-read b{font-weight:600;letter-spacing:.02em}
+  .pd-read .sep{color:var(--color-neutral-400)}
+  .pd-read .tm{color:var(--paccent)}
+  .pd-read .k-head{color:#7a1410;font-weight:600}
+  .pd-read .k-cross{color:#9a6b00;font-weight:600}
+  .pd-read .k-tail{color:#279a52;font-weight:600}
+  .pd-read .off{color:var(--pn600);font-style:italic}
+  .pd-scroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;
+    border-bottom:1px solid var(--pdiv);background:var(--pbg);scrollbar-width:none;-ms-overflow-style:none}
+  .pd-scroll::-webkit-scrollbar{display:none}
+  .pd-scroll svg{display:block}
+  .pd-hint{padding:6px 0 0;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--pn500)}
+  .pd-foot{padding:9px 0 0;font-size:10px;color:var(--pn600);border-top:1px solid var(--pdiv);margin-top:9px}
+  .pd-root svg text{font-family:ui-serif,Georgia,"Times New Roman",serif;font-variant-numeric:tabular-nums}
+  .pd-root text.ax{font-size:8.5px;fill:#8f8b8b}
+  .pd-root text.ttl{font-size:9px;letter-spacing:.13em;fill:#201e1d;text-transform:uppercase}
+  .pd-root text.cap{font-size:8.5px;letter-spacing:.03em;fill:#8f8b8b;text-transform:uppercase}
+  .pd-root text.val{font-size:8.5px}
+  .pd-root text.tag{font-size:8.5px;letter-spacing:.07em;text-transform:uppercase}
+  .pd-root text.town{font-size:9px;fill:#201e1d}
+  .pd-root text.tmv{font-size:8.5px}
+  .pd-root text.val,.pd-root text.tag,.pd-root text.town,.pd-root text.tmv,
+  .pd-root text.dayl,.pd-root text.zero{paint-order:stroke;stroke:#f3f2f2;stroke-width:2.6px;stroke-linejoin:round}
+  .pd-root text.dayl{font-size:9px;letter-spacing:.1em;fill:#201e1d;text-transform:uppercase}
+  .pd-root text.zero{font-size:8.5px;letter-spacing:.14em;fill:#7d7979;text-transform:uppercase}
+  .pd-root text.lg{font-size:8.5px;fill:#201e1d}
   /* Zoom is one control in two halves, so it sits tighter than the gap between the
      independent FABs above it. */
   .fab-pair{display:flex;flex-direction:column;gap:4px}
@@ -951,8 +928,8 @@
           <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
         </div>
         <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
-        <div id="wxOut" class="wx-out"></div>
-        <p class="poi-band-note">One hourly strip per town coming up, from the US National Weather Service (api.weather.gov). <b>Miles a day</b> sets how far ahead it looks and where each night’s stop falls; your riding speed (in More, currently <b id="wxSpeedEcho">12</b> mph) sets the hour you’d roll into each town. Each strip runs into the night — swipe it left to read the overnight. Tap a town name for its full weather.gov page.</p>
+        <div id="wxOut"></div>
+        <p class="poi-band-note">The next four days along the route ahead of you, on one NWS-style graph, from the US National Weather Service (api.weather.gov). <b>Miles a day</b> and your riding speed (in More, currently <b id="wxSpeedEcho">12</b> mph) decide where you’d be at each forecast hour; the <b>ride window</b>, <b>start date</b> and a <b>zero</b> (rest) day are set on the graph itself. Drag the strip sideways for later hours; tap an hour to read it. The wind line is coloured by what the wind does to <em>you</em> — red headwind, amber crosswind, green tailwind.</p>
       </div>
     </section>
 
