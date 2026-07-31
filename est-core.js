@@ -299,6 +299,84 @@ const AMICON={store:'store',lodging:'bed',camp:'tent',rail:'train'};
 const AMQ={store:'grocery store supermarket',lodging:'hotel motel lodging',camp:'campground',rail:'train station'};
 function iconStrTxt(t){ const c=cats(t); return AMKEYS.filter(k=>c[k]).map(k=>({store:'resupply',lodging:'lodging',camp:'camping',rail:'rail'}[k])).join(' · '); }
 
+/* ---- the sort vocabulary ----
+   Built once. localeCompare constructs a fresh collator on every call, and numeric is
+   what stops "Lock 17" sorting above "Lock 2". */
+const COLL=new Intl.Collator(undefined,{sensitivity:'base',numeric:true});
+/* One place that decides what a name query means, so the box, the persisted value and
+   the two match paths cannot drift. Lower-cased and accent-stripped, because a rider
+   typing one-handed at a light will not reach for a diacritic. */
+function normKey(s){ return String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+/* A row with no answer is not the closest one, so nulls sink whichever way the column
+   points — flipping the arrow must never promote them. Guarded before the subtraction
+   on purpose: null-3 is -3, which would file every location-less row as if it sat
+   three miles behind you. */
+function cmpNum(x,y,s){ if(x==null||y==null) return x==null?(y==null?0:1):-1; return s*(x-y); }
+/* Signed ride distance, ahead positive. The ahead/behind split never reverses; only
+   the distance inside each half does — "furthest first" is a question about the road
+   in front of you, not an invitation to lead with a motel you rode past this morning. */
+function cmpAhead(x,y,s){
+  if(x==null||y==null) return x==null?(y==null?0:1):-1;
+  if((x>=0)!==(y>=0)) return x>=0?-1:1;
+  return x>=0 ? s*(x-y) : s*(y-x);
+}
+/* Every column a rider can tap, keyed by view then by column id. Comparators take
+   DECORATED rows (see visibleStops and renderNearby) so a comparison never re-runs
+   cats() or rideMi() — worth more for agreement than for speed, because the comparator,
+   the filter and the cell markup would otherwise each derive the same value
+   independently and can disagree about the same row. The fourth argument is the app:
+   the two trail-mile keys need dirSign(), because an absolute milepost is direction-
+   symmetric and a sort that ignores that re-renders an identical list when the rider
+   flips — verbatim the bug documented above aheadMi. Ascending TM therefore means "in
+   the direction I am riding", the rule travelOrder() and the no-location POI order
+   already follow. Booleans read (b?1:0)-(a?1:0), so ascending is "has it first" — the
+   only thing anyone means by tapping Camp. */
+const SORTCOL={
+  itin:{
+    mi:     {lbl:'trail mile', cmp:(a,b,s,app)=> s*app.dirSign()*(a.t.mi-b.t.mi)},
+    nm:     {lbl:'stop name',  cmp:(a,b,s)=> s*COLL.compare(a.t.n,b.t.n)},
+    store:  {lbl:'shop',       cmp:(a,b,s)=> s*((b.c.store?1:0)-(a.c.store?1:0))},
+    lodging:{lbl:'stay',       cmp:(a,b,s)=> s*((b.c.lodging?1:0)-(a.c.lodging?1:0))},
+    camp:   {lbl:'camp',       cmp:(a,b,s)=> s*((b.c.camp?1:0)-(a.c.camp?1:0))},
+    rail:   {lbl:'rail',       cmp:(a,b,s)=> s*((b.c.rail?1:0)-(a.c.rail?1:0))},
+    from:   {lbl:'distance',   cmp:(a,b,s)=> cmpAhead(a.d,b.d,s)}
+  },
+  poi:{
+    ride: {lbl:'distance',   cmp:(a,b,s)=> cmpAhead(a.ride,b.ride,s)},
+    nm:   {lbl:'name',       cmp:(a,b,s)=> s*COLL.compare(a.p.name||'',b.p.name||'')},
+    mile: {lbl:'trail mile', cmp:(a,b,s,app)=> cmpNum(a.p.mile,b.p.mile,s*app.dirSign())},
+    spur: {lbl:'detour',     cmp:(a,b,s)=> s*(a.spur-b.spur)},
+    price:{lbl:'rate',       cmp:(a,b,s)=> cmpNum(a.amt,b.amt,s)}
+  }
+};
+/* Three keys. Seven columns of 9.5px type on a phone will not carry more badges than
+   that, and in a 38-row table where every trail mile is distinct a third key already
+   never breaks a tie. */
+const SORT_MAX=3;
+/* Sanitised against the column table rather than merely type-checked: a stored key
+   naming a column a later version renames has to go inert the way a retired category
+   key already does, not throw and not resurrect a comparator that no longer exists.
+   Deduped and capped because a hand-edited blob must not be able to hand renderItin a
+   forty-key chain. A spec that sanitises down to empty is indistinguishable from a
+   fresh install, which is the whole of the migration story. */
+function sanitizeSort(view, v){
+  const tbl=SORTCOL[view]; if(!Array.isArray(v)||!tbl) return [];
+  const seen={}, out=[];
+  for(let i=0;i<v.length && out.length<SORT_MAX;i++){
+    const k=v[i];
+    if(!k || typeof k.col!=='string' || !tbl[k.col] || seen[k.col]) continue;
+    if(k.dir!=='asc' && k.dir!=='desc') continue;
+    seen[k.col]=1; out.push({col:k.col,dir:k.dir});
+  }
+  return out;
+}
+/* What the amenity chips say about themselves. The state lives in the button's own
+   words, not in a glyph and not in aria-pressed: pressed is a two-state attribute and
+   this is not a two-state control, and iOS VoiceOver — this app's primary screen
+   reader — ignores aria-describedby outright, so a label that changes with the state is
+   the only announcement that actually lands. */
+const TRIWORD={0:'any', 1:'has one', '-1':'has none'};
+
 /* ---- layers the rider brings themselves ----
    Two ways in, because these are the two things a trail is published as: an ArcGIS
    layer endpoint, or a GPX. What is kept differs by kind and that is deliberate —
@@ -611,8 +689,33 @@ class TrailApp {
     // typing a bound themselves.
     this.followMap=true;
     // Nearby list: optional day-planning band (trail miles ahead) + per-category
-    // expansion. Filters start collapsed — the list is the reason you opened the tab.
-    this.miMin=null; this.miMax=null; this.poiOpen={}; this.filtersOpen=false;
+    // expansion. The fold state of the filter blocks is not kept here — <details> holds
+    // its own, and it starts closed because the list is the reason you opened the tab.
+    this.miMin=null; this.miMax=null; this.poiOpen={};
+    /* Sort state, one ordered list per view. The array index IS the rank, so a tap that
+       appends a key needs no rank field to maintain and a tap that clears one closes the
+       gap by itself. Empty is not "unsorted": it means the rider has not spoken, and the
+       view falls back to the order it has always had — which for the POI lists is a
+       partition with no column and cannot be spelled as a spec. */
+    this.sort={itin:[],poi:[]};
+    /* Shared across all three views, because a trail mile and a name mean the same thing
+       to a town and to a guesthouse. nameQ is what the rider typed and what the boxes
+       show; _nameKey is the folded needle every match runs against, derived once rather
+       than on both sides of every comparison — and keeping them apart is what stops a
+       reload handing the rider back their own word in lower case. */
+    this.nameQ=''; this._nameKey='';
+    /* Trip-only. Both derive from a town's prose via cats(), which is a different
+       taxonomy from the State service's asset types — cats().camp alone collapses
+       Campground and Lock camping, a split poiCat() exists solely to create. */
+    this.seg=''; this.am={store:0,lodging:0,camp:0,rail:0};
+    /* Nearby/panel-only. offMax is the counterpart to the Detour column, priced to the
+       Rate column; a town has neither a spur nor a saved rate. Both default to "don't
+       narrow" — every new facet has to be a thing the rider switched on, never a thing
+       that switched itself on the first time they updated. */
+    this.offMax=null; this.priced=false;
+    /* poisByCat walks every POI, and this change gives it a third caller per render.
+       Cached on the array length and cleared wherever POIS is rebuilt. */
+    this._byCat=null; this._byCatN=-1;
     this.map=null; this.myMarker=null; this.townMarker={}; this.poiLayers={}; this.stopLayer=null;
     this.mileLayer=null; this.mileSig='';
     // Overlays by key, the order they were registered in, and the order the rider
@@ -643,6 +746,27 @@ class TrailApp {
     this.lyrGrpShut=new Set();
   }
   $(id){ return document.getElementById(id); }
+  /* One filter state, more than one screen showing it: the trail-mile range, the name
+     box and the passed-stops switch each have a control on two screens, and neither copy
+     is the real one. Skips whatever has focus, so a rider mid-keystroke never has their
+     own box rewritten under the caret by the copy on the other screen. */
+  fSet(cls,v){
+    document.querySelectorAll('.'+cls).forEach(el=>{
+      if(el===document.activeElement) return;
+      if(el.type==='checkbox') el.checked=!!v; else el.value=(v==null?'':v);
+    });
+  }
+  /* Compare before writing. renderItin runs on every position fix, and assigning
+     textContent replaces the node even when the string is identical — which a
+     role="status" region announces. Without this the sort sentence is read out to a
+     screen-reader user every few seconds for the length of the ride. */
+  setTxt(el,s){ if(el && el.textContent!==s) el.textContent=s; }
+  setAttr(el,a,v){ if(!el) return; if(v==null){ if(el.hasAttribute(a)) el.removeAttribute(a); }
+    else if(el.getAttribute(a)!==v) el.setAttribute(a,v); }
+  /* Which way "ascending" points for an absolute milepost. Riding west, mile 0 is behind
+     you and 561 is the far end; riding east it is the other way round. Baked into the two
+     trail-mile comparators so a direction flip actually re-orders. */
+  dirSign(){ return this.dir==='B2NYC' ? -1 : 1; }
   destName(){ return this.dir==='B2NYC' ? 'NYC' : 'Buffalo'; }
   travelOrder(){ return [...TOWNS].sort((a,b)=> this.dir==='B2NYC' ? b.mi-a.mi : a.mi-b.mi); }
   /* Where the trip starts in the current direction of travel — Buffalo heading east,
@@ -655,9 +779,34 @@ class TrailApp {
     this.planning=true; this.myMile=t.mi;
   }
   isAhead(t){ return this.dir==='B2NYC' ? t.mi < this.myMile-0.3 : t.mi > this.myMile+0.3; }
+  /* aheadMi's town-shaped sibling. TOWNS carry .mi and POIs carry .mile, so aheadMi(t)
+     would read undefined and answer null for all thirty-eight rows — and a town is on the
+     route by definition, so the trail leg IS the ride and rideMi has nothing to add.
+     Direction is baked into the sign, which is why flipDir's existing renderAll re-signs
+     every row and the sort re-orders itself with no help. */
+  townAhead(t){ if(this.myMile==null) return null; return this.dir==='B2NYC' ? this.myMile-t.mi : t.mi-this.myMile; }
+  /* Order, then predicates, then whatever the rider has stacked on the headers. This was
+     already order-plus-one-predicate, so the new facets join it rather than growing a
+     second pipeline beside it. showPassed keeps the thresholds it always had — isAhead
+     decides at ±0.3 while the keep-window is <1, and they disagree on purpose so the stop
+     you are standing in survives being technically behind you; re-deriving a threshold
+     here would make rows vanish while still labelled "you are here". Decorated once so
+     cats() runs thirty-eight times instead of once per amenity cell and again per
+     comparison, and so the amenity filter, the amenity sort and the amenity cell cannot
+     end up disagreeing about the same row. */
   visibleStops(){
-    if(this.myMile==null || this.showPassed) return this.travelOrder();
-    return this.travelOrder().filter(t=> this.isAhead(t) || abs(t.mi-this.myMile)<1);
+    let rows=this.travelOrder().map(t=>({t:t, c:cats(t), d:this.townAhead(t)}));
+    if(this.myMile!=null && !this.showPassed) rows=rows.filter(r=> this.isAhead(r.t) || abs(r.t.mi-this.myMile)<1);
+    if(this.seg) rows=rows.filter(r=> r.t.s===this.seg);
+    if(this._nameKey) rows=rows.filter(r=> this.matchName(r.t.n));
+    /* The absolute range reaches this table only when the rider took the wheel. While the
+       map drives it those boxes are a readout of the viewport — syncFollowUi flattens them
+       for exactly that reason — and a table on a screen with no map on it has no business
+       emptying because somebody panned somewhere else. Stop following, from either copy
+       of the control, and the range applies here too. */
+    if(!this.followMap) rows=rows.filter(r=> this.inMileRange({mile:r.t.mi}));
+    AMKEYS.forEach(k=>{ const w=this.am[k]; if(w) rows=rows.filter(r=> w>0 ? r.c[k] : !r.c[k]); });
+    return this.sortRows('itin', rows);
   }
 
   init(){
@@ -672,6 +821,7 @@ class TrailApp {
     this.wireControls();
     this.wireTabAutohide();
     this.wirePanelDrag();
+    this.watchMapStrip();
     this.initMap();
     this.renderAll();
     // Shut is measured off the laid-out grab bar, so it can only be set once it exists.
@@ -723,35 +873,124 @@ class TrailApp {
     if(p.catCoupled && Array.isArray(p.catHidden)) this.catHidden=new Set(p.catHidden.filter(c=>typeof c==='string'));
     if(Array.isArray(p.grpShut)) this.grpShut=new Set(p.grpShut.filter(c=>typeof c==='string'));
     if(Array.isArray(p.lyrGrpShut)) this.lyrGrpShut=new Set(p.lyrGrpShut.filter(c=>typeof c==='string'));
+    /* No version bump and no companion flag. This adds meaning rather than changing any: a
+       rider on the old payload has no `sort` key, every new facet lands on its don't-narrow
+       default, and the app behaves on the first launch after the update exactly as it does
+       today. catCoupled next door exists because an existing key changed what it meant;
+       nothing here does that. */
+    if(p.sort && typeof p.sort==='object'){
+      this.sort.itin=sanitizeSort('itin',p.sort.itin);
+      this.sort.poi =sanitizeSort('poi', p.sort.poi);
+    }
+    if(typeof p.nameQ==='string'){ this.nameQ=p.nameQ.slice(0,60); this._nameKey=normKey(this.nameQ).trim(); }
+    if(p.seg==='hv'||p.seg==='erie') this.seg=p.seg;
+    if(p.am && typeof p.am==='object') AMKEYS.forEach(k=>{ const v=p.am[k]; if(v===1||v===-1) this.am[k]=v; });
+    if(isFinite(p.offMax)&&p.offMax>=0) this.offMax=p.offMax;
+    if(typeof p.priced==='boolean') this.priced=p.priced;
     if(Array.isArray(p.searches)) this.searches=p.searches.filter(s=>s&&isFinite(s.lat)&&isFinite(s.lng)).slice(0,60);
     this.renderDirLabels();
-    const sp=this.$('showPassed'); if(sp) sp.checked=this.showPassed;
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
     const tr=this.$('showTrip'); if(tr) tr.checked=this.showTrip;
     const spd=this.$('avgSpeed'); if(spd) spd.value=this.avgSpeed;
     const sw=this.$('showWx'); if(sw) sw.checked=this.showWx;
     const pd=this.$('wxPerDay'); if(pd) pd.value=this.wxPerDay;
-    const a=this.$('miMin'); if(a && this.miMin!=null) a.value=this.miMin;
-    const b=this.$('miMax'); if(b && this.miMax!=null) b.value=this.miMax;
-    const c=this.$('mpFrom'); if(c && this.mpFrom!=null) c.value=this.mpFrom;
-    const d=this.$('mpTo'); if(d && this.mpTo!=null) d.value=this.mpTo;
+    if(this.miMin!=null) this.fSet('f-miMin',this.miMin);
+    if(this.miMax!=null) this.fSet('f-miMax',this.miMax);
+    if(this.mpFrom!=null) this.fSet('f-mpFrom',this.mpFrom);
+    if(this.mpTo!=null) this.fSet('f-mpTo',this.mpTo);
+    if(this.nameQ) this.fSet('f-nameQ',this.nameQ);
+    // Two switches, one pref — the one on More and the one in the Trip block.
+    this.fSet('f-showPassed',this.showPassed);
+    if(this.offMax!=null) this.fSet('f-offMax',this.offMax);
+    this.fSet('f-priced',this.priced);
+    const sg=this.$('itSeg'); if(sg) sg.value=this.seg;
     if(typeof p.followMap==='boolean') this.followMap=p.followMap;
-    const fm=this.$('mpFollow'); if(fm) fm.checked=this.followMap;
+    this.fSet('f-mpFollow',this.followMap);
     this.syncFollowUi();
+    /* Restore the badges from the loaded sort here, or they and the actual order disagree
+       on the first paint. init() calls loadPrefs before renderAll, so this ordering is
+       already right — do not move it. */
+    this.syncSortUi(); this.syncFilterState();
   }
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,dockTapped:this.dockTapped,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
-      grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches})); }catch(e){}
+      grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches,
+      sort:{itin:this.sort.itin,poi:this.sort.poi},
+      nameQ:this.nameQ,seg:this.seg,am:this.am,offMax:this.offMax,priced:this.priced})); }catch(e){}
   }
-  /* While following, the two boxes are an output, not an input — say so rather than
-     leaving a rider typing into fields the next pan silently overwrites. */
+  /* While following, the boxes are an output, not an input — say so rather than leaving a
+     rider typing into fields the next pan silently overwrites. There are two of each now
+     (Nearby and Trip), so this walks the shared class: the same number showing two
+     different affordances on two screens is worse than either affordance alone. Same for
+     the two Clear buttons. Taking the wheel is the Follow checkbox on Nearby or the
+     [data-stopfollow] button on Trip — neither screen sends the rider to the other. */
   syncFollowUi(){
     const on=this.followMap;
-    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el){ el.readOnly=on; el.classList.toggle('is-auto',on); } });
-    const pv=this.$('mpFromMap'); if(pv) pv.disabled=on;
-    const pc=this.$('mpClear'); if(pc) pc.disabled=on;
+    document.querySelectorAll('.f-mpFrom,.f-mpTo').forEach(el=>{ el.readOnly=on; el.classList.toggle('is-auto',on); });
+    document.querySelectorAll('[data-clearrange]').forEach(el=>{ el.disabled=on; });
+    document.querySelectorAll('[data-stopfollow]').forEach(el=>{ el.disabled=!on; });
+    document.querySelectorAll('[data-rangefrommap]').forEach(el=>{ el.disabled=on; });
+  }
+  /* State lives on the instance and the DOM restates it, never the reverse: the table
+     body is rewritten on every position fix and both POI lists are rebuilt on every pan,
+     so anything a tap left behind in a class would be gone within seconds. The header row
+     and the two chip strips survive those rebuilds, so they take a cheap attribute pass
+     here instead of joining the string — every write compared first, because this runs on
+     the watchPosition path. */
+  syncSortUi(){
+    const rank={};
+    ['itin','poi'].forEach(v=>{ rank[v]={}; this.sort[v].forEach((k,i)=>{ rank[v][k.col]={i:i+1,dir:k.dir}; }); });
+    document.querySelectorAll('.sh').forEach(b=>{
+      const spec=this.sort[b.dataset.sv]||[], st=(rank[b.dataset.sv]||{})[b.dataset.sc];
+      b.classList.toggle('on',!!st);
+      b.classList.toggle('desc',!!(st && st.dir==='desc'));
+      // Only drawn from the second key on: a lone "1" beside the only sorted column is
+      // noise, and the caret has already said everything there is to say.
+      this.setTxt(b.querySelector('.sh-rk'), (st && spec.length>1) ? String(st.i) : '');
+      const th=b.closest('th');
+      if(th){
+        /* aria-sort on EVERY sorted column, not only the first. The spec's one-at-a-time
+           is a SHOULD, written because ARIA has no way to express rank at all
+           (w3c/aria#283, open and still only triaged into ARIA 1.3) — marking columns two
+           and three as unsorted would actively misdescribe the table. */
+        this.setAttr(th,'aria-sort', st ? (st.dir==='asc'?'ascending':'descending') : 'none');
+        /* And nothing else. A columnheader is named from its contents, and a descendant
+           button's aria-label IS that button's accessible name — so a label here would
+           rename the <th> to "Camp, descending, sort 2 of 3" and VoiceOver would repeat
+           that sentence on all thirty-eight cells in the column. Direction is already
+           carried by aria-sort; rank is carried by the visible status line, which is the
+           only channel iOS VoiceOver honours. */
+        b.removeAttribute('aria-label');
+      } else {
+        // The strip pills are not inside a table and have no name-from-content parent,
+        // so they can afford to say the whole thing once, on focus.
+        const lbl=(b.querySelector('.sh-t')||{}).textContent||'';
+        this.setAttr(b,'aria-label', st
+          ? lbl+', '+(st.dir==='asc'?'ascending':'descending')+(spec.length>1?', sort '+st.i+' of '+spec.length:'')
+          : 'Sort by '+lbl);
+      }
+    });
+    document.querySelectorAll('[data-sortclear]').forEach(x=>{ x.hidden = !this.sort[x.dataset.sortclear].length; });
+    document.querySelectorAll('.sort-say').forEach(el=>{ this.setTxt(el, this.sortSay(el.dataset.sv)); });
+  }
+  /* The sentence a rider reads at a glance, and the only channel every screen reader
+     honours: aria-describedby is the one published way to convey sort rank and iOS
+     VoiceOver ignores it outright. Visible, so it needs no hidden-text machinery and
+     costs nothing extra to be correct. On the POI lists it opens by naming the group,
+     because the categories are rank one and the rider set that order themselves by
+     dragging the chips — and it closes by saying that an explicit sort has dropped the
+     ahead/behind split, so a name sort with passed places in it reads as a consequence
+     rather than as a fault. */
+  sortSay(view){
+    const a=this.sort[view]; if(!a || !a.length) return '';
+    const tbl=SORTCOL[view];
+    let s=(view==='poi' ? 'Within each category, sorted by ' : 'Sorted by ')
+      + a.map(k=>tbl[k.col].lbl+(k.dir==='desc'?' (reversed)':'')).join(', then ') + '.';
+    if(view==='poi' && this.myMile!=null && !a.some(k=>k.col==='ride'))
+      s+=' Includes places you have passed — add Distance to put what is ahead of you first.';
+    return s;
   }
   /* Is this place inside the map's current viewport? While following the map this is
      what decides the list, rather than the trail-mile range: the range was only ever a
@@ -771,30 +1010,141 @@ class TrailApp {
     if(r){
       const lo=Math.floor(r.lo), hi=Math.ceil(r.hi);
       this.mpFrom=lo; this.mpTo=hi;
-      const a=this.$('mpFrom'); if(a) a.value=lo;
-      const b=this.$('mpTo'); if(b) b.value=hi;
+      // The range has a box on Nearby and a box on Trip now. Still safe from feedback
+      // loops: assigning .value fires no input event, and fSet skips whatever has focus.
+      this.fSet('f-mpFrom',lo); this.fSet('f-mpTo',hi);
       this.savePrefs();
     }
-    this.renderNearby();
+    this.queueNearby();
   }
   /* Any manual edit to the range takes the wheel back from the map. */
   stopFollowing(){
     if(!this.followMap) return;
     this.followMap=false;
-    const fm=this.$('mpFollow'); if(fm) fm.checked=false;
+    this.fSet('f-mpFollow',false);
     this.syncFollowUi();
   }
-  /* Summary shown on the collapsed header. A filter you can't see is a filter you
-     forget you set, so the closed state has to say when something is narrowing. */
-  renderFilterState(){
-    const el=this.$('filtersState'); if(!el) return;
-    const byCat=this.poisByCat(), all=Object.keys(byCat).filter(c=>byCat[c].length);
-    const on=all.filter(c=>!this.catHidden.has(c)).length;
-    const bits=[];
-    bits.push(on===all.length ? 'all categories' : on+' of '+all.length+' categories');
-    if(this.miMin!=null||this.miMax!=null) bits.push((this.miMin!=null?this.miMin:0)+'–'+(this.miMax!=null?this.miMax:'∞')+' mi');
-    if(this.mpFrom!=null||this.mpTo!=null) bits.push('TM '+(this.mpFrom!=null?this.mpFrom:0)+'–'+(this.mpTo!=null?this.mpTo:Math.round(TOTAL)));
-    el.textContent=bits.join(' · ');
+  /* Every reason this view's list is shorter than the data behind it, as bits. One
+     function because the state chip, the "X of Y" counts, the empty states and the accent
+     rule were each separately deciding what counted as narrowing and quietly disagreeing.
+       inert  — the facet is set but its precondition is missing, so it is doing nothing.
+                The miles-ahead band with no location is set, persisted, displayed on the
+                chip and having no effect, and a chip reading "0–40 mi" over an unfiltered
+                list has told the rider something false. Inert bits are not printed.
+       dflt   — the facet is at its shipped default. It prints, because it is true and
+                worth knowing, but it must not light the accent rule, must not un-hide
+                Clear and must not be reset by Clear. Three of these ship on: passed stops
+                are hidden (showPassed:false), four of seven categories are hidden (the
+                CAT_DEFAULT seed, so the map doesn't open under 700 pins), and the range
+                follows the map (followMap:true). An indicator that is lit before the
+                rider has touched anything is an indicator that says nothing.
+       scope  — 'group' means the facet removes whole categories rather than narrowing the
+                items inside one. Excluded from `banded`, because a category the rider hid
+                does not make the surviving groups print "34 of 34". */
+  narrowing(view){
+    const b=[];
+    if(view==='poi'){
+      const byCat=this.poisByCat();
+      const all=Object.keys(byCat).filter(c=>byCat[c].length && catGrp(c)!=='bundled');
+      const on=all.filter(c=>!this.catHidden.has(c)).length;
+      const seeded=all.every(c=> this.catHidden.has(c) === !CAT_DEFAULT[c]);
+      if(on<all.length) b.push({lbl:on+' of '+all.length+' categories', scope:'group', dflt:seeded});
+      if(this.followMap && this.map) b.push({lbl:'map view', dflt:true});
+      if(this.miMin!=null||this.miMax!=null)
+        b.push({lbl:(this.miMin!=null?this.miMin:0)+'–'+(this.miMax!=null?this.miMax:'∞')+' mi', inert:this.myMile==null});
+      if(this.offMax!=null) b.push({lbl:'≤'+this.offMax+' mi off'});
+      if(this.priced) b.push({lbl:'rate noted'});
+    } else {
+      if(!this.showPassed) b.push({lbl:'nothing passed', inert:this.myMile==null, dflt:true});
+      if(this.seg) b.push({lbl:this.seg==='hv'?'Hudson Valley':'Erie Canal'});
+      AMKEYS.forEach(k=>{ if(this.am[k]) b.push({lbl:(this.am[k]<0?'no ':'')+SORTCOL.itin[k].lbl}); });
+    }
+    // Following the map, the range is a readout of the viewport rather than something the
+    // rider set — so on Trip it is not narrowing anything and must not claim to be.
+    if(!(view==='itin' && this.followMap) && (this.mpFrom!=null||this.mpTo!=null))
+      b.push({lbl:'TM '+(this.mpFrom!=null?this.mpFrom:0)+'–'+(this.mpTo!=null?this.mpTo:Math.round(TOTAL))});
+    if(this.nameQ) b.push({lbl:'“'+this.nameQ+'”'});
+    return b;
+  }
+  // Did the rider set any of this themselves? Drives the accent rule and Clear.
+  userSet(view){ return this.narrowing(view).some(x=>!x.inert && !x.dflt) || this.sort[view].length>0; }
+  /* The collapsed summary now has three homes, and only one of them is the screen the
+     controls live on: a rider who set a range on Nearby on Tuesday reads the consequence
+     on Trip on Thursday, and the map panel — which has always shown the same filtered rows
+     as Nearby — has never had any way to say so at all.
+     Capped at three bits plus a count, because the folded chip is one line of 11px type on
+     a phone and six facets will not fit in it. The rule down the left carries the "the
+     rider set something" half; this line only has to carry "what". */
+  syncFilterState(){
+    /* The Clear row is the block's next sibling, but only once the markup that carries it
+       has shipped — so it is matched by class rather than taken on position. Hiding
+       whatever happens to follow a <details> would, on the day the row is not there yet,
+       hide the list the block filters. */
+    const paint=(box,view)=>{
+      if(!box) return;
+      const live=this.narrowing(view).filter(x=>!x.inert), set=this.userSet(view);
+      box.classList.toggle('is-on', set);
+      this.setTxt(box.querySelector('.filters-state'), live.length
+        ? live.slice(0,3).map(x=>x.lbl).join(' · ') + (live.length>3?' · +'+(live.length-3):'')
+        : 'all showing');
+      const cw=box.nextElementSibling;
+      if(cw && cw.classList && cw.classList.contains('filters-clear')) cw.hidden = !set;
+    };
+    /* Every block that declares which view it filters, wherever it is — Nearby's, Trip's
+       and the copy in the map sheet. Keyed on the attribute rather than on three ids
+       because the sheet's block is a duplicate of Nearby's down to the last control, and
+       an id that exists twice is an id the second copy never answers to. */
+    document.querySelectorAll('.filters[data-fview]').forEach(box=>{ paint(box, box.dataset.fview); });
+    // The amenity chips carry their own state in words, so they are repainted here rather
+    // than left to a tap that a loadPrefs restore would never have made.
+    document.querySelectorAll('.feat-tri').forEach(c=>{
+      const v=this.am[c.dataset.am]||0, n=(c.querySelector('.tri-n')||{}).textContent||'';
+      c.classList.toggle('yes',v>0); c.classList.toggle('no',v<0);
+      this.setTxt(c.querySelector('.tri-v'), TRIWORD[v]);
+      this.setAttr(c,'aria-label', n+': '+TRIWORD[v]);
+    });
+    // The range is shared, but not unconditionally — say which it is, on the screen where
+    // the map that drives it is not visible.
+    this.setTxt(this.$('itMpNote'), this.followMap
+      ? 'Shared with Nearby and the map — but right now the range is following the map view, so it narrows those two and not this table. Both boxes are a readout while it does. Stop following, above, to type your own and have it apply everywhere.'
+      : 'Shared with Nearby and the map list. TM is the fixed milepost measured along the route from the NYC end, so it works with no location at all.');
+  }
+  /* Clears exactly what THIS view narrowed by, sort included — a rider hitting Clear on a
+     short list means "give me everything back", and leaving a three-key sort standing
+     would be answering a different question. Three things it deliberately does not touch:
+     the facets this view does not own (clearing Trip must not switch four map layers back
+     on), followMap (a mode, not a filter — the map underneath is its own evidence), and
+     the shipped category defaults. Categories ARE restored, because they are a filter like
+     any other, and they go through applyCatVis so the pins come back with the rows — but
+     restored TO THE SEED, not to nothing hidden. CAT_DEFAULT exists so the map does not
+     open under 700 pins, and a Clear that floods it is not a reset, it is a different and
+     worse state with no way back. */
+  clearFilters(view){
+    this.nameQ=''; this._nameKey='';
+    this.sort[view]=[];
+    if(!this.followMap){ this.mpFrom=null; this.mpTo=null; }
+    if(view==='poi'){
+      this.miMin=null; this.miMax=null; this.offMax=null; this.priced=false;
+      let moved=false;
+      CAT_ORDER.forEach(c=>{
+        const want=!!CAT_DEFAULT[c];
+        if(this.catHidden.has(c)===!want) return;
+        this.applyCatVis(c,want); moved=true;
+      });
+      if(moved){ this.renderCategories(); this.scheduleDecorate(); }
+    } else {
+      this.showPassed=true; this.seg=''; AMKEYS.forEach(k=>{ this.am[k]=0; });
+    }
+    this.fSet('f-nameQ',''); this.fSet('f-mpFrom',this.mpFrom); this.fSet('f-mpTo',this.mpTo);
+    this.fSet('f-showPassed',this.showPassed);
+    this.fSet('f-offMax',this.offMax); this.fSet('f-priced',this.priced);
+    this.fSet('f-miMin',this.miMin); this.fSet('f-miMax',this.miMax);
+    const sg=this.$('itSeg'); if(sg) sg.value=this.seg;
+    /* No status() here on purpose: it writes #locStatus, which lives on the More screen,
+       so a rider on Trip or on the map would never see the confirmation. The chip
+       reverting to "all showing" and the accent rule going out are the confirmation, on
+       the screen they are standing on. */
+    this.savePrefs(); this.syncSortUi(); this.renderAll();
   }
   /* Stored order first, then anything it doesn't mention — a newly shipped
      category, or an asset type the service returned that we don't hardcode. */
@@ -803,9 +1153,68 @@ class TrailApp {
     const rest=[...new Set([...CAT_ORDER, ...(present||[])])];
     return [...this.catOrder, ...rest.filter(c=>!seen.has(c))];
   }
+  /* Walks every POI — around ten thousand once the OSM corridor is loaded — and had two
+     callers per render before this change and three after. Keyed on the array length, and
+     cleared outright wherever POIS is rebuilt, because a reassignment that happened to
+     land on the same count would otherwise serve a stale bucket map. Visibility is not
+     membership, so hiding a category does not invalidate it. */
   poisByCat(){
+    if(this._byCat && this._byCatN===this.POIS.length) return this._byCat;
     const by={}; this.POIS.forEach(p=>{ const k=poiCat(p); (by[k]=by[k]||[]).push(p); });
-    return by;
+    this._byCatN=this.POIS.length;
+    return (this._byCat=by);
+  }
+  /* asc → desc → gone, and a second column appends rather than replacing: two taps is how
+     you say "by camping, then by trail mile" without a sheet to open. A direction flip
+     mutates in place, so correcting an arrow never costs the key order, and dropping a key
+     is a splice because the index IS the rank — nothing in this file renumbers anything.
+     Past three keys the newest tap takes the last slot rather than doing nothing: a tap
+     with no visible effect reads as a broken control, and the key the rider is least
+     attached to is the one they asked for least recently. */
+  cycleSort(view, col){
+    const a=this.sort[view]; if(!a || !SORTCOL[view] || !SORTCOL[view][col]) return;
+    const i=a.findIndex(k=>k.col===col);
+    if(i<0){ if(a.length>=SORT_MAX) a.pop(); a.push({col:col,dir:'asc'}); }
+    else if(a[i].dir==='asc') a[i].dir='desc';
+    else a.splice(i,1);
+    this.savePrefs(); this.syncSortUi(); this.syncFilterState();
+    if(view==='itin') this.renderItin(); else this.queueNearby();
+  }
+  clearSort(view){
+    if(!this.sort[view].length) return;
+    this.sort[view]=[];
+    this.savePrefs(); this.syncSortUi(); this.syncFilterState();
+    if(view==='itin') this.renderItin(); else this.queueNearby();
+  }
+  /* Sorts a decorated array in place and hands it back. The natural order is carried as .k
+     rather than leaned on: Array#sort has been stable since ES2019 and would give the same
+     answer, but writing it down is what makes the no-keys case obvious — with nothing set
+     this is the identity, which is exactly the promise Clear has to keep. It is also the
+     final tie-break, so dropping the last key lands the list back in trail order rather
+     than in whatever arrangement the last comparator left. */
+  sortRows(view, rows){
+    const keys=this.sort[view], tbl=SORTCOL[view];
+    rows.forEach((r,i)=>{ r.k=i; });
+    if(!keys.length) return rows;
+    return rows.sort((a,b)=>{
+      for(let i=0;i<keys.length;i++){
+        const col=tbl[keys[i].col]; if(!col) continue;
+        const c=col.cmp(a,b,keys[i].dir==='desc'?-1:1,this);
+        if(c) return c;
+      }
+      return a.k-b.k;
+    });
+  }
+  /* moveend has no throttle, and setPanelSnap pans the map itself — so dragging the sheet
+     open re-rendered the list you opened it to read. Same shape as scheduleDecorate:
+     coalesce into the next frame and let a burst of pans pay for one rebuild. Typing still
+     renders straight through, because a keystroke that waits a frame to show its effect
+     feels like a dropped keystroke. */
+  queueNearby(){
+    if(this._nbPending) return;
+    this._nbPending=true;
+    const run=()=>{ this._nbPending=false; this.renderNearby(); };
+    if(typeof requestAnimationFrame==='function') requestAnimationFrame(run); else setTimeout(run,0);
   }
 
   /* ---------- tabs ---------- */
@@ -911,11 +1320,140 @@ class TrailApp {
   // Shut is exactly the grab bar, measured rather than guessed — its padding grows by
   // the home-indicator inset once the dock slides out from under it.
   shutH(){ const g=this.$('panelGrab'); return g?g.offsetHeight:0; }
+  /* The strip of map left above the sheet — measured, not derived. Everything anchored to
+     the panel's top edge has to fit inside it, and CSS cannot express it: the FAB rail's
+     containing block IS the panel, so a percentage there measures the sheet rather than
+     what is left above it. The panel's own top against its parent's is the one number that
+     stays true through a height transition, a bottom transition, a drag, a dock flip and a
+     rotation all at once, which is why it is the measurement that decides and not the
+     arithmetic — arithmetic on the height being written has to be told which of those is
+     happening. Where the arithmetic does get a say is as a ceiling, below: it never sets the
+     strip, it only refuses to let a stale reading raise one. It is the mirror of obstructedH,
+     taken from the other side of the same edge.
+     Published on the rail rather than on the panel: it changes on every frame of a drag,
+     and on the panel that would invalidate style for the 264-row list underneath instead
+     of for seven buttons. Both consumers — the rail, and the layers card that initMap
+     drops inside it — are the rail's own descendants, so one write still reaches both. */
+  syncMapStrip(aimH){
+    const p=this.$('mapPanel'), r=this.fabRail, par=p&&p.parentElement;
+    if(!p||!r||!par) return;
+    const pr=p.getBoundingClientRect(), rr=par.getBoundingClientRect();
+    // The map screen is display:none, so this measures zero — a rider on another tab is
+    // not news about the strip, and publishing that zero would fold the rail to its floor
+    // until they came back. Keep the last good value; the observer fires again on the way in.
+    if(!rr.height) return;
+    let s=Math.max(0, Math.round(pr.top-rr.top));
+    /* A measurement can only ever report a box that has already been laid out, so through
+       the .24s ease it trails the sheet by a frame. Trailing is harmless while the strip is
+       growing — the rail is merely capped smaller than it could be, for a frame. Trailing
+       while it shrinks is this whole bug in miniature: a cap a frame wide of the sheet hangs
+       the rail off the top of the screen for the length of the animation. So whoever knows
+       the height the sheet is heading for says so, and the smaller of the two is what gets
+       published: the strip never claims room the sheet is about to take, and the measurement
+       still leads on the way back down, where it is the safe one. A drag says so on every
+       move, an eased snap once at the top of the ease. And the foot the strip is measured
+       back from moves with the dock, which is the one change that resizes nothing at all and
+       so is invisible to the observer from either end. */
+    if(aimH!=null){
+      const app=document.querySelector('.phone-app');
+      const foot=app&&app.classList.contains('dock-hidden') ? 0 : this.tabbarPx();
+      this.stripAim=Math.max(0, Math.round(par.clientHeight-aimH-foot));
+    }
+    /* The ceiling has to stand for the length of the ease, not just for the frame it was
+       handed over on: the observer fires again a frame later with no destination to offer
+       and would hand the stale measurement straight back. It comes down the moment the sheet
+       has caught up with it — to the pixel, allowing for the rounding at each end — so the
+       strip is free to grow again the instant the sheet stops taking room. A destination
+       that was never ahead of the sheet in the first place, which is every snap that lowers
+       it, is dropped on the same breath it arrived. */
+    if(this.stripAim!=null){
+      if(s<=this.stripAim+1) this.stripAim=null; else s=this.stripAim;
+    }
+    if(s===this.stripPx) return;
+    this.stripPx=s;
+    r.style.setProperty('--map-strip', s+'px');
+    /* The rail rests on its foot, where the zoom pair and the layers control sit nearest the
+       thumb, and rest is somewhere it has to be put back to: a rider who scrolled up for find
+       and then raised the sheet would otherwise keep that offset against a window half the
+       size, leaving the layers button a sliver with its card no longer launchable from it.
+       Reading it back first is what makes the assignment clamp against the cap just written
+       rather than the one it replaced. */
+    r.scrollTop=r.scrollHeight;
+    // And a card the sheet has grown under is closed rather than left hanging: below the room
+    // cardFits asks for it has stopped being a control, and the rule that stands the rest of
+    // the rail down for it would leave the map with no controls at all.
+    if(this.layersCtl && !this.cardFits() && r.querySelector('.leaflet-control-layers-expanded'))
+      this.layersCtl.collapse();
+  }
+  /* --fab-room, read back rather than re-derived. It is two arms — one holding the rail clear
+     of the sheet, one holding it clear of the notch — and which of them binds depends on the
+     inset, so a copy of the arithmetic here is a second source of truth that is wrong on
+     exactly the phones this app is ridden on. It was: the copy modelled the gutter arm alone,
+     agreed with the stylesheet at inset 0, where every measurement of it was taken, and on a
+     notched phone let a 46px card open onto a 22px window with the whole rail stood down
+     behind it. So ask the engine that knows what env() is worth. The rail resolves the whole
+     expression into its own max-height; while a card is open the :has rule lifts that cap and
+     the card is the one wearing --fab-room, so read whichever element currently carries the
+     number. Null when neither does — before first layout — and the callers read that as no
+     reason to refuse. */
+  fabRoom(){
+    const r=this.fabRail; if(!r) return null;
+    const c=r.querySelector('.leaflet-control-layers-expanded');
+    if(c){ const m=parseFloat(getComputedStyle(c).maxHeight); return isFinite(m)?m:null; }
+    const cs=getComputedStyle(r), m=parseFloat(cs.maxHeight);
+    return isFinite(m) ? m-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom) : null;
+  }
+  /* That room against the room an expanded card is worth opening into. Under it there is
+     nothing for the card's max-height to bind but its own floor, above the top of the screen,
+     with the rest of the rail stood down behind it. The 68 is 22 of padding and border the card
+     only wears once it is open, and so cannot be measured before, plus 46 of list beneath that.
+     The 46 is the layers button's own height, and it is the trade this test is really about:
+     opening the card stands the whole rail down, so a window shorter than the button it replaced
+     spends six controls to hand back less than one. Chrome alone was not enough of a test. At the
+     full snap on a 390x844 phone it came out at 45, which passed, and painted a 43px slot onto a
+     700px list — one radio and the top of the next, reading as a half-drawn card rather than as a
+     control, with no FAB left on the map beside it. That snap now takes the refusal the landscape
+     ones already took, where the bar says which way out of it; every snap that leaves a rider
+     more than a buttonful of list is untouched. */
+  cardFits(){
+    const room=this.fabRoom();
+    return room==null || room>=68;
+  }
+  /* Almost nothing here is wired to a call site, on purpose. Nearly every way the strip can
+     move — a snap, a drag frame, the hint re-measuring the shut bar, a rotation, the URL bar
+     folding away, coming back to the map tab — ends in the panel's box being resized, and
+     that is the thing worth watching; one more way to stretch the sheet cannot forget to tell
+     the rail about it. Watching the box also means the cap tracks the .24s height ease frame
+     by frame, where publishing only the settled value up front would widen the cap a quarter
+     second early — which is why the callers that do pass their destination pass it as a
+     ceiling rather than as the answer.
+     The exception is the dock. When it ducks, the sheet keeps its height and changes where
+     its foot is, so no box resizes and no observer fires; the flip publishes its destination
+     on the way in through setPanelSnap, and transitionend catches the settled value on the
+     way out. Listening for the panel's own transitions rather than the dock's is what makes
+     that true of the height ease as well, whichever end of it a gesture was interrupted at.
+     The panel catches its own height; its parent catches the screen changing under both,
+     which is a rotation, and is the only reason this app needs to hear about one. The rail
+     is deliberately NOT observed: writing --map-strip resizes it, and it would spend the
+     rest of the ride answering its own callback. */
+  watchMapStrip(){
+    const p=this.$('mapPanel'); this.fabRail=document.querySelector('.map-fabs');
+    if(!p||!this.fabRail) return;
+    if(typeof ResizeObserver!=='undefined'){
+      const ro=new ResizeObserver(()=>this.syncMapStrip());
+      ro.observe(p); if(p.parentElement) ro.observe(p.parentElement);
+    }
+    p.addEventListener('transitionend', e=>{ if(e.target===p){ this.stripAim=null; this.syncMapStrip(); } });
+    this.syncMapStrip();
+  }
   setPanelSnap(snap, fromH, noPan){
     const p=this.$('mapPanel'); if(!p) return;
     const h0 = fromH!=null ? fromH : p.getBoundingClientRect().height;
     this.panelSnap=snap;
     p.dataset.snap=snap;
+    // Same as showTab: the panel list is not rebuilt while it is shut, so fill it on the
+    // way up. queueNearby so the snap's own map pan and this entry pay for one rebuild.
+    if(snap!=='shut') this.queueNearby();
     const avail=p.parentElement?p.parentElement.clientHeight:0;
     // When the dock is hidden the sheet reaches to the very bottom, so a raised sheet
     // is that much taller — expressed as a calc so the % base still tracks the screen.
@@ -926,6 +1464,11 @@ class TrailApp {
     p.style.height = snap==='shut' ? h1+'px'
       : bonus ? 'calc('+frac+'% + '+bonus+'px)'
       : frac+'%';
+    // Hand the rail the height this is easing towards, before the ease starts. It takes it
+    // as a ceiling, so the cap can only ever shrink early and never grow early — and a dock
+    // flip, which changes where the sheet's foot is without resizing it at all, has no other
+    // way to reach the rail on the way in.
+    this.syncMapStrip(h1);
     /* The panel covers the map instead of resizing it, so sliding it up used to push
        whatever you were looking at down behind the sheet. Moving the map half the
        height change keeps it in the middle of what's left. */
@@ -954,6 +1497,11 @@ class TrailApp {
   snapByGesture(snap, fromH){
     // The hint offers a way to get the dock back; it has nothing to say once it's back.
     if(snap==='shut'){ this.setBarHint(''); this.setTabsHidden(false); }
+    /* Reaching for the sheet says you are done with the layers card, and it is what stops a
+       raised sheet leaving a card squeezed to a sliver with the rest of the rail still stood
+       down for it. Deliberately here and not in setPanelSnap: a dock flip, a rotation or a
+       tap on a list row are not the rider asking for this. */
+    if(this.layersCtl) this.layersCtl.collapse();
     this.setPanelSnap(snap, fromH);
   }
   /* The bar carries no text of its own. This is the exception: the first time the dock
@@ -987,7 +1535,13 @@ class TrailApp {
       const dy=y0-e.clientY;
       if(abs(dy)>6) moved=true;
       const max=p.parentElement.clientHeight*0.86;
-      p.style.height=Math.max(this.shutH(), Math.min(max, h0+dy))+'px';
+      const h=Math.max(this.shutH(), Math.min(max, h0+dy));
+      p.style.height=h+'px';
+      // The rail hears it here rather than from the observer, which cannot report a box
+      // until it has been laid out — a frame of the rail hanging over the top of the screen
+      // for every frame of a drag that raises the sheet. Told in the same breath, it is
+      // capped and laid out once, with the height it is being capped against.
+      this.syncMapStrip(h);
     });
     const end=()=>{
       if(id==null) return;
@@ -1013,7 +1567,12 @@ class TrailApp {
     // textContent is empty and the pill rendered a bare "Back to".
     const tab=this.tabs.find(b=>b.dataset.tab===sc.dataset.screen);
     const label=tab ? (tab.getAttribute('aria-label')||tab.title||tab.textContent.trim()) : '';
-    this.ret={screen:sc.dataset.screen, top:sc.scrollTop, label:label||'the list'};
+    // The Trip table is a capped scroller inside its screen, so the section's own offset is
+    // only half the answer — without the inner one, tapping row 30 and coming back lands
+    // you at the top of the table, which is the exact thing this remembering exists to
+    // prevent. A screen with no [data-scroller] child reads 0 and behaves as before.
+    const in1=sc.querySelector('[data-scroller]');
+    this.ret={screen:sc.dataset.screen, top:sc.scrollTop, inner:in1?in1.scrollTop:0, label:label||'the list'};
     this.renderReturn();
   }
   clearReturn(){ if(this.ret){ this.ret=null; this.renderReturn(); } }
@@ -1028,13 +1587,19 @@ class TrailApp {
     this.showTab(r.screen);
     const sc=document.querySelector('[data-screen="'+r.screen+'"]');
     // display:none can zero scrollTop, so this has to land after the screen is back
-    if(sc) requestAnimationFrame(()=>{ sc.scrollTop=r.top; });
+    if(sc) requestAnimationFrame(()=>{ sc.scrollTop=r.top;
+      const in1=sc.querySelector('[data-scroller]'); if(in1) in1.scrollTop=r.inner||0; });
   }
   showTab(name){
     this.screen=name;
     this.setTabsHidden(false);
     this.tabs.forEach(b=>{ const on=b.dataset.tab===name; b.classList.toggle('active',on); b.setAttribute('aria-current', on?'page':'false'); });
     this.screens.forEach(s=>{ s.classList.toggle('active', s.dataset.screen===name); });
+    // Only the visible mount is rendered, so the other one holds whatever it held when
+    // the rider last looked at it. Rebuild on the way in rather than tracking staleness:
+    // one screen is active at a time, so a flag for this would be a flag that is always
+    // set. renderNearby's own mount test decides whether there is anything to do.
+    if(name==='nearby') this.renderNearby();
     // Only resize. Recentring here threw away wherever you had panned to the moment
     // you glanced at another tab and came back.
     if(name==='map' && this.map){ setTimeout(()=>this.map.invalidateSize(),60); }
@@ -1062,7 +1627,6 @@ class TrailApp {
     this.wirePoiHover();
     const zi=this.$('zoomInBtn'); if(zi) zi.addEventListener('click',()=>{ if(this.map) this.map.zoomIn(); });
     const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ if(this.map) this.map.zoomOut(); });
-    const sp=this.$('showPassed'); if(sp) sp.addEventListener('change',e=>{ this.showPassed=e.target.checked; this.savePrefs(); this.renderItin(); });
     const tp=this.$('tapToSet'); if(tp) tp.addEventListener('change',e=>{ this.tapToSet=e.target.checked; this.savePrefs();
       this.status(this.tapToSet?'The map spot dialog (long-press or right-click) can offer to move you there.':'The map spot dialog no longer moves you — use Locate or a simulated spot.'); });
     const dest=this.$('destSel'); if(dest) dest.addEventListener('change',()=>{ this.destIdx=dest.value===''?-1:+dest.value; this.renderNext(); });
@@ -1103,48 +1667,129 @@ class TrailApp {
       const t=e.target.closest('.poi-toggle'); if(!t) return;
       const c=t.dataset.cat; this.poiOpen[c]=!this.poiOpen[c]; this.renderNearby();
     });
+    /* Delegated like every other control this app renders or duplicates: the table body is
+       rebuilt on every position fix, and the sort strip exists twice, so one listener
+       reaches both copies without either owning the state. No stopPropagation — a <th> has
+       no [data-lat] ancestor to escape from, and stopping here would blind the
+       document-level .dir-toggle and .pa[data-sq] handlers inside the same subtree. */
+    document.addEventListener('click',e=>{
+      const b=e.target.closest('.sh'); if(b){ this.cycleSort(b.dataset.sv, b.dataset.sc); return; }
+      const x=e.target.closest('[data-sortclear]'); if(x) this.clearSort(x.dataset.sortclear);
+    });
+    // No preventDefault needed: Clear lives outside the <summary>, so activating it cannot
+    // toggle the block it clears.
+    document.addEventListener('click',e=>{
+      const b=e.target.closest('[data-clearf]'); if(b) this.clearFilters(b.dataset.clearf);
+    });
+    document.addEventListener('click',e=>{
+      const b=e.target.closest('.feat-tri'); if(!b) return;
+      const k=b.dataset.am; if(!(k in this.am)) return;
+      // any → has one → has none → any. Three states because "somewhere with no
+      // campground" is a real day-planning question and a checkbox cannot ask it.
+      this.am[k] = this.am[k]===0 ? 1 : (this.am[k]===1 ? -1 : 0);
+      this.savePrefs(); this.renderItin();
+    });
+    document.addEventListener('click',e=>{
+      if(!e.target.closest('[data-clearrange]')) return;
+      this.stopFollowing(); this.mpFrom=null; this.mpTo=null;
+      this.fSet('f-mpFrom',null); this.fSet('f-mpTo',null);
+      this.savePrefs(); this.renderAll();
+    });
+    document.addEventListener('click',e=>{
+      if(!e.target.closest('[data-stopfollow]')) return;
+      // The Trip screen's way to take the wheel. Nearby has the Follow checkbox; this does
+      // the same thing from the screen where the map it follows is not on show.
+      this.stopFollowing(); this.savePrefs(); this.renderAll();
+    });
+    document.addEventListener('click',e=>{
+      if(!e.target.closest('[data-clearoff]')) return;
+      this.offMax=null; this.fSet('f-offMax',null);
+      this.savePrefs(); this.queueNearby();
+    });
+    /* The shared facets have a control on more than one screen. Each handler reads the
+       element that was actually typed into — NEVER a class lookup, which would resolve to
+       whichever copy sits first in the document (the Trip one) and silently ignore the
+       other — and writes the answer back to the rest. */
+    document.addEventListener('input',e=>{
+      const el=e.target; if(!el.classList) return;
+      if(el.classList.contains('f-nameQ')){
+        this.nameQ=el.value.trim(); this._nameKey=normKey(this.nameQ);
+        this.fSet('f-nameQ',this.nameQ);
+        this.savePrefs(); this.renderAll(); return;
+      }
+      if(el.classList.contains('f-offMax')){
+        const v=el.value.trim(), n=+v;
+        this.offMax=(v==='' || !isFinite(n) || n<0) ? null : n;
+        this.fSet('f-offMax',this.offMax);
+        this.savePrefs(); this.renderNearby(); return;
+      }
+      /* Trail miles are absolute and can't go below zero; the band is relative to you, so
+         a negative one is just the road behind — that's what Prev steps into. Read off the
+         event target for the box that was typed in and mirrored to its twin, never looked
+         up by class: a class lookup answers with whichever copy the parser hit first, so
+         typing into the sheet's band would have set the value from Nearby's empty box. */
+      const isMin=el.classList.contains('f-miMin'), isMax=el.classList.contains('f-miMax');
+      if(isMin || isMax){
+        const v=el.value.trim(), n=+v;
+        const val=(v==='' || !isFinite(n)) ? null : n;
+        if(isMin) this.miMin=val; else this.miMax=val;
+        this.fSet(isMin?'f-miMin':'f-miMax', val);
+        this.savePrefs(); this.renderNearby(); return;
+      }
+      const isFrom=el.classList.contains('f-mpFrom'), isTo=el.classList.contains('f-mpTo');
+      if(!isFrom && !isTo) return;
+      const v=el.value.trim(), n=+v;
+      const val=(v==='' || !isFinite(n) || n<0) ? null : n;
+      if(isFrom) this.mpFrom=val; else this.mpTo=val;
+      // Belt and braces: while following, both boxes are readOnly and cannot fire this.
+      this.stopFollowing();
+      this.fSet('f-mpFrom',this.mpFrom); this.fSet('f-mpTo',this.mpTo);
+      this.savePrefs(); this.renderAll();
+    });
+    document.addEventListener('change',e=>{
+      const el=e.target; if(!el.classList) return;
+      if(el.classList.contains('f-showPassed')){
+        // One pref, two switches — the one on More, which is always reachable, and the one
+        // in the Trip block, which is on the screen it actually filters. The Trip tab ships
+        // hidden and applyTripTab navigates away from it, so the copy on More has to stay.
+        this.showPassed=el.checked; this.fSet('f-showPassed',this.showPassed);
+        this.savePrefs(); this.renderItin(); return;
+      }
+      if(el.classList.contains('f-priced')){
+        this.priced=el.checked; this.fSet('f-priced',this.priced);
+        this.savePrefs(); this.renderNearby(); return;
+      }
+      if(el.classList.contains('f-mpFollow')){
+        this.followMap=el.checked; this.fSet('f-mpFollow',this.followMap);
+        this.syncFollowUi(); this.savePrefs();
+        if(this.followMap){ this.syncRangeToMap(); this.status('Trail mile range now follows the map view.'); }
+        else this.status('Trail mile range held — pan the map without changing it.');
+      }
+    });
+    const sg=this.$('itSeg');
+    if(sg) sg.addEventListener('change',()=>{ this.seg=sg.value; this.savePrefs(); this.renderItin(); });
     document.addEventListener('click',e=>{
       const t=e.target.closest('.poi-page');
       if(t && t.dataset.page) this.applyPage(t);
     });
-    // Trail miles are absolute and can't go below zero; the band is relative to you,
-    // so a negative one is just the road behind — that's what Prev steps into.
-    const g=(id,neg)=>{ const el=this.$(id); if(!el) return null; const v=el.value.trim(); if(v==='') return null;
-      const n=+v; if(!isFinite(n)) return null; return (neg||n>=0) ? n : null; };
-    const readBand=()=>{
-      this.miMin=g('miMin',1); this.miMax=g('miMax',1);
+    document.addEventListener('click',e=>{
+      if(!e.target.closest('[data-clearband]')) return;
+      this.miMin=null; this.miMax=null;
+      this.fSet('f-miMin',null); this.fSet('f-miMax',null);
       this.savePrefs(); this.renderNearby();
-    };
-    ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',readBand); });
-    const readRange=()=>{
-      this.mpFrom=g('mpFrom'); this.mpTo=g('mpTo');
-      this.savePrefs(); this.renderNearby();
-    };
-    // Typing a bound is the rider overriding the map, so it stops the follow. Safe
-    // from feedback loops: syncRangeToMap assigns .value, which fires no input event.
-    ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.addEventListener('input',()=>{ this.stopFollowing(); readRange(); }); });
-    const fm=this.$('mpFollow');
-    if(fm) fm.addEventListener('change',()=>{
-      this.followMap=fm.checked; this.syncFollowUi(); this.savePrefs();
-      if(this.followMap){ this.syncRangeToMap(); this.status('Trail mile range now follows the map view.'); }
-      else this.status('Trail mile range held — pan the map without changing it.');
     });
-    const pc=this.$('mpClear');
-    if(pc) pc.addEventListener('click',()=>{ this.stopFollowing(); ['mpFrom','mpTo'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readRange(); });
-    const pv=this.$('mpFromMap');
-    if(pv) pv.addEventListener('click',()=>{
+    document.addEventListener('click',e=>{
+      if(!e.target.closest('[data-rangefrommap]')) return;
       const r=this.mileRangeInView();
       if(!r){ this.status('No trail in the map view — pan to a stretch of the route first.'); return; }
       // Round outward, so a facility right at the edge of the view isn't filtered out
       // of a range the rider set by looking at it.
       const lo=Math.floor(r.lo), hi=Math.ceil(r.hi);
-      const a=this.$('mpFrom'); if(a) a.value=lo;
-      const b=this.$('mpTo'); if(b) b.value=hi;
-      readRange();
+      this.mpFrom=lo; this.mpTo=hi;
+      this.fSet('f-mpFrom',lo); this.fSet('f-mpTo',hi);
+      this.savePrefs(); this.renderAll();
       this.status('Showing trail mile '+lo+' to '+hi+' — the stretch on the map.');
     });
-    const mc=this.$('miClear');
-    if(mc) mc.addEventListener('click',()=>{ ['miMin','miMax'].forEach(id=>{ const el=this.$(id); if(el) el.value=''; }); readBand(); });
     const wg=this.$('wxGo');
     if(wg) wg.addEventListener('click',()=>this.loadOutlook());
     const rd=id=>{ const el=this.$(id); if(!el) return;
@@ -1161,10 +1806,12 @@ class TrailApp {
         if(this.wxLayer && this.map && this.map.hasLayer(this.wxLayer)) this.loadWeather();
       }
     });
-    const fl=this.$('poiFilters');
-    // Deliberately not remembered: the list is the point of the screen, and a filter
-    // block left open from three days ago costs a third of a phone screen to say so.
-    if(fl) fl.addEventListener('toggle',()=>{ this.filtersOpen=fl.open; });
+    /* Nothing listens for the filter block opening any more. The fold is a native
+       <details> and is deliberately not remembered — the list is the point of every
+       screen it sits on, and a block left open from three days ago costs a third of a
+       phone screen to say so. The flag the old toggle handler kept was read nowhere, and
+       there are three blocks now, so keeping it would have meant three writers for a
+       value with no readers. */
   }
   status(msg){ const el=this.$('locStatus'); if(el) el.textContent=msg; }
   /* The direction control is no longer one button in a bar that no longer exists —
@@ -1706,11 +2353,22 @@ class TrailApp {
 
   renderItin(){
     const body=this.$('itinBody'); if(!body) return;
-    const amCell=(t,key)=>{
-      if(!cats(t)[key]) return '<td class="am am-off">·</td>';
+    const amCell=(r,key)=>{
+      if(!r.c[key]) return '<td class="am am-off">·</td>';
+      const t=r.t;
       return '<td class="am"><a href="'+mapsLink(t,AMQ[key],this.myLL)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="'+(this.myLL?'Bike directions to ':'Find ')+key+' near '+esc(t.n)+'">'+icon(AMICON[key],17)+'</a></td>';
     };
-    body.innerHTML = this.visibleStops().map(t=>{
+    const rows=this.visibleStops();
+    if(!rows.length){
+      /* This table has hidden rows since the day showPassed shipped and has never once
+         said so on this screen. With a whole block of filters behind it now — some of them
+         set on another screen — an empty table has to name what emptied it, the way every
+         other empty state in this app names the control that would fix it. */
+      const w=this.narrowing('itin').filter(x=>!x.inert);
+      body.innerHTML='<tr><td colspan="7" class="up-empty">No stops match'
+        +(w.length ? ' — '+esc(w.map(x=>x.lbl).join(' · '))+'. Clear is just under the filters above.' : '.')+'</td></tr>';
+    } else body.innerHTML = rows.map(r=>{
+      const t=r.t;
       let cls='irow', from='—';
       if(this.myMile!=null){ const d=abs(t.mi-this.myMile);
         if(d<1){ cls+=' here'; from='<span class="fr here">you are here</span>'; }
@@ -1720,9 +2378,14 @@ class TrailApp {
       return '<tr class="'+cls+'" data-lat="'+t.lat+'" data-lng="'+t.lng+'" data-town="'+esc(t.n)+'" data-z="12">'
         +'<td class="mi">'+t.mi+'</td>'
         +'<td class="nm"><span class="seg-pill '+t.s+'">'+(t.s==='hv'?'HV':'ERIE')+'</span> '+esc(t.n)+'</td>'
-        +amCell(t,'store')+amCell(t,'lodging')+amCell(t,'camp')+amCell(t,'rail')
+        +amCell(r,'store')+amCell(r,'lodging')+amCell(r,'camp')+amCell(r,'rail')
         +'<td class="frcell">'+from+'</td></tr>';
     }).join('');
+    // The <thead> survives the wipe, but the wipe fires on every watchPosition tick, so
+    // the badges are re-stated from state rather than assumed sticky. Both syncs compare
+    // before they write — see setTxt — so an unchanged tick costs no DOM and, more to the
+    // point, no live-region announcement.
+    this.syncSortUi(); this.syncFilterState();
   }
 
   // Signed trail distance from the rider to p along the current direction of
@@ -1776,6 +2439,26 @@ class TrailApp {
     if(this.miMax!=null && d > this.miMax) return false;
     return true;
   }
+  /* Case- and accent-insensitive substring, not a word match: the rider is typing
+     one-handed at a light and will not finish the word, so "elm" has to find Elmwood. The
+     needle is folded once into _nameKey, so the per-row cost is one indexOf. */
+  matchName(s){
+    if(!this._nameKey) return true;
+    return normKey(s).indexOf(this._nameKey)>=0;
+  }
+  /* The row-level POI facets, in one predicate, because two callers need the same answer:
+     renderNearby builds the list and countInWin counts what a pager step would land on.
+     The pager's own comment promises "a step that lands on something, so an empty
+     direction reads as unavailable rather than as a button that appears to work and
+     doesn't" — a predicate the counter does not know about breaks exactly that. Category,
+     viewport, absolute range and the miles-ahead band stay where they are: countInWin
+     already applies them, in its own shape, against a window that is not the current one. */
+  poiPasses(p){
+    if(this._nameKey && !this.matchName(p.name)) return false;
+    if(this.offMax!=null && this.spurMi(p)>this.offMax) return false;
+    if(this.priced && !this.priceOf(p)) return false;
+    return true;
+  }
   /* ---------- stepping the window ---------- */
   /* Which window Prev/Next moves. The band wins when both filters are on: it's the
      one anchored to you, so a step means "the next day's ride" rather than "the next
@@ -1815,6 +2498,7 @@ class TrailApp {
     Object.keys(byCat).forEach(c=>{
       if(this.catHidden.has(c)) return;
       byCat[c].forEach(p=>{
+        if(!this.poiPasses(p)) return;
         if(w.kind==='band'){
           if(!this.inMileRange(p)) return;
           const d=this.rideMi(p);
@@ -1858,22 +2542,38 @@ class TrailApp {
     const w=this.pagerWin(); if(!w) return;
     const lo=+el.dataset.lo, hi=+el.dataset.hi;
     if(!isFinite(lo)||!isFinite(hi)) return;
-    const ids = w.kind==='band' ? ['miMin','miMax'] : ['mpFrom','mpTo'];
     // Stepping to another stretch is a manual choice about range, so it takes the
     // wheel back from the map the same way typing a bound does.
     if(w.kind!=='band') this.stopFollowing();
     if(w.kind==='band'){ this.miMin=lo; this.miMax=hi; } else { this.mpFrom=lo; this.mpTo=hi; }
-    const a=this.$(ids[0]); if(a) a.value=lo;
-    const b=this.$(ids[1]); if(b) b.value=hi;
-    this.savePrefs(); this.renderNearby();
+    // Both copies of whichever pair this window drives, and the whole app after: a band
+    // step leaves the itinerary alone, but a range step calls stopFollowing above — and
+    // that is exactly the moment the range starts narrowing the Trip table too.
+    if(w.kind==='band'){ this.fSet('f-miMin',lo); this.fSet('f-miMax',hi); }
+    else { this.fSet('f-mpFrom',lo); this.fSet('f-mpTo',hi); }
+    this.savePrefs(); this.renderAll();
   }
   renderNearby(){
-    // Two mounts, one list: the Nearby tab and the map panel show the same thing, so
-    // a filter or a category toggle lands in both without either owning the state.
-    const mounts=[this.$('poiList'), this.$('panelList')].filter(Boolean);
+    /* Before anything that can return early. The readouts this feature adds live on
+       screens this function may decline to render — and the one that matters most is the
+       map sheet's, which has to be right when the POI service has not answered at all.
+       Offline, POIS is empty for the whole ride and every early return below fires on
+       every call. */
+    this.syncFilterState();
+    /* Two mounts, one list: the Nearby tab and the map panel show the same thing, so a
+       filter or a category toggle lands in both without either owning the state. A mount
+       nobody can see is skipped outright — this whole string was being parsed twice on
+       every pan, once into a screen that was display:none — and showTab/setPanelSnap
+       re-render on the way in, so a skipped mount is never read while stale. */
+    const mounts=[ this.screen==='nearby'?this.$('poiList'):null,
+                   (this.screen==='map'&&this.panelSnap!=='shut')?this.$('panelList'):null ].filter(Boolean);
     if(!mounts.length) return;
     this.clearPoiHi();
-    const list={ set innerHTML(v){ mounts.forEach(m=>{ m.innerHTML=v; }); } };
+    /* A rebuild drops every row and the scroller lands at the top with them. Nobody
+       noticed while the only thing that rebuilt this was the rider's own pan; a sort tap
+       that threw the sheet back to the top under a thumb would read as a crash. */
+    const keep=mounts.map(m=>m.scrollTop);
+    const list={ set innerHTML(v){ mounts.forEach((m,i)=>{ m.innerHTML=v; m.scrollTop=keep[i]; }); } };
     if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
     // The two controls are orthogonal: the chips decide which groups appear and in
     // what order, the band filters the items inside each one.
@@ -1884,10 +2584,12 @@ class TrailApp {
     // the promise the two views make to each other. Zoom is what shortens this list.
     const view=this.followMap && !!this.map;
     const CAP=view ? Infinity : 6;
-    const banded=view || ((this.miMin!=null||this.miMax!=null) && this.myMile!=null)
-      || this.mpFrom!=null || this.mpTo!=null;
+    /* banded now comes from the one place that decides what counts as narrowing — except
+       for the category bit, which is scope:'group'. Hiding a category removes a whole
+       group; it does not narrow the items inside the groups that survive, and counting it
+       here would print "34 of 34" on every one of them. */
+    const banded=this.narrowing('poi').some(x=>!x.inert && x.scope!=='group');
     const byCat=this.poisByCat();
-    this.renderFilterState();
     // OSM POIs are a map layer, toggled from the layers control — deliberately kept out
     // of this browse list, so the Nearby screen stays the State's curated trail POIs.
     const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length && catGrp(c)!=='bundled');
@@ -1895,13 +2597,16 @@ class TrailApp {
     // No pager while the list follows the map: panning IS how you move the window,
     // and a stepper for it only repeated what the map already does, three rows deep.
     let h=view?'':this.pagerHTML();
+    // Rows that survived every facet, across every group. Seven headings each repeating
+    // the same sentence is a wall, not an empty state — this is what tells them apart.
+    let shownAny=0;
     // Same parents as the chips above, so "where did this come from" is answered
     // once per run of categories instead of never.
     GRP_ORDER.forEach(grp=>{
     const inGrp=keys.filter(c=>catGrp(c)===grp);
     if(!inGrp.length) return;
     const gc=CAT_GRP[grp];
-    h+='<div class="poi-src">'+esc(gc.label)+'<span class="poi-src-s">'+esc(gc.src)+'</span></div>';
+    h+='<div class="poi-src" role="heading" aria-level="2">'+esc(gc.label)+'<span class="poi-src-s">'+esc(gc.src)+'</span></div>';
     inGrp.forEach(cat=>{
       const cfg=catCfg(cat), total=byCat[cat].length;
       let items=byCat[cat];
@@ -1910,32 +2615,37 @@ class TrailApp {
       // viewport replaces it outright rather than stacking with it.
       if(view) items=items.filter(p=>this.inMapView(p));
       else if(this.mpFrom!=null||this.mpTo!=null) items=items.filter(p=>this.inMileRange(p));
-      if(this.myMile==null){
-        // No rider to sort around, so fall back to trail order in the direction of
-        // travel. Matters most with a range set: that IS the list you asked for.
-        items=[...items].sort((a,b)=>{
-          const ma=a.mile, mb=b.mile;
-          if(ma==null||mb==null) return ma==null?1:-1;
-          return this.dir==='B2NYC' ? mb-ma : ma-mb;
-        });
-      }
-      if(this.myMile!=null){
-        // Band and sort both key off the ridden total, not the trail leg — otherwise
-        // the leading numbers run out of order and a 30-mile band lists a ~34.
-        items=items.filter(p=>this.inBand(this.rideMi(p)));
-        // Ahead first, nearest first; anything already passed sinks to the bottom.
-        items=[...items].sort((a,b)=>{
-          const da=this.rideMi(a), db=this.rideMi(b);
-          if((da>=0)!==(db>=0)) return da>=0?-1:1;
-          return da>=0 ? da-db : db-da;
-        });
-      }
-      const open=!!this.poiOpen[cat], shown=open?items:items.slice(0,CAP);
-      const ct=banded ? items.length+' of '+total : String(total);
-      h+='<div class="poi-group"><div class="poi-h">'+icon(cfg.icon,18)+'<span>'+esc(cfg.label)+'</span><span class="poi-ct">'+ct+'</span></div>';
-      if(!items.length) h+='<div class="poi-more">'+(view?'None of these on screen — zoom out or pan.':'Nothing in this mileage range.')+'</div>';
-      shown.forEach(p=>{
-        const d=this.aheadMi(p), back=(d!=null&&d<-0.3), s=this.spurMi(p), tot=this.rideMi(p);
+      // The row-level facets, through the same predicate the pager counts with — so
+      // "Next: 12 places" and the twelve rows that then render can never disagree.
+      items=items.filter(p=>this.poiPasses(p));
+      /* Decorate, then filter, then sort, then render — all off the same records. Not
+         for speed: the band, the comparator chain and the row markup each wanted the
+         ride distance, and three independent derivations are three chances to disagree
+         about which side of the rider a place is on. */
+      let rows=items.map(p=>{ const pr=this.priceOf(p);
+        return {p:p, d:this.aheadMi(p), spur:this.spurMi(p), ride:this.rideMi(p), amt:pr?pr.amt:null}; });
+      // Band and sort both key off the ridden total, not the trail leg — otherwise the
+      // leading numbers run out of order and a 30-mile band lists a ~34.
+      if(this.myMile!=null) rows=rows.filter(r=>this.inBand(r.ride));
+      /* The order this list has always had, kept as the pre-sort rather than as a
+         branch: no rider to sort around means trail order in the direction of travel,
+         a located rider means ahead first, nearest first, passed sunk. An explicit sort
+         REPLACES it rather than stacking on it — a name sort with an invisible
+         ahead/behind partition still in force comes back with a break in the alphabet
+         halfway down and nothing on screen to explain it. Tapping Distance reproduces it
+         exactly, and sortSay says so out loud whenever it is missing. */
+      if(this.myMile==null) rows.sort((a,b)=>{ const ma=a.p.mile, mb=b.p.mile;
+        if(ma==null||mb==null) return ma==null?1:-1;
+        return this.dir==='B2NYC' ? mb-ma : ma-mb; });
+      else rows.sort((a,b)=>cmpAhead(a.ride,b.ride,1));
+      rows=this.sortRows('poi', rows);
+      shownAny+=rows.length;
+      const open=!!this.poiOpen[cat], shown=open?rows:rows.slice(0,CAP);
+      const ct=banded ? rows.length+' of '+total : String(total);
+      h+='<div class="poi-group"><div class="poi-h" role="heading" aria-level="3">'+icon(cfg.icon,18)+'<span>'+esc(cfg.label)+'</span><span class="poi-ct">'+ct+'</span></div>';
+      if(!rows.length) h+='<div class="poi-more">'+(view?'None of these on screen — zoom out or pan.':'Nothing here in range.')+'</div>';
+      shown.forEach(r=>{
+        const p=r.p, d=r.d, back=(d!=null&&d<-0.3), s=r.spur, tot=r.ride;
         // Three numbers when there's a detour — trail leg, spur, and the total they
         // add to — with the total last so it shares a column with the on-trail rows,
         // where the leg IS the total and the breakdown would just repeat itself.
@@ -1944,16 +2654,30 @@ class TrailApp {
         // The milepost sits in the middle column, which on-trail rows leave empty —
         // so every row carries one whether or not it has a detour to break down.
         const mp = mpTxt(p.mile);
-        const pr = this.priceOf(p);
         h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'"><span class="poi-nm">'+esc(p.name)+'</span>'
           +(mp?'<span class="poi-mp">'+mp+'</span>':'')
-          +(pr?'<span class="poi-pr">'+esc(fmtMoney(pr.amt))+'</span>':'')+brk
+          +(r.amt!=null?'<span class="poi-pr">'+esc(fmtMoney(r.amt))+'</span>':'')+brk
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
-      if(items.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+items.length)+'</button>';
+      if(rows.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+rows.length)+'</button>';
       h+='</div>';
     });
     });
+    /* Seven headings each repeating the same sentence is not an empty state, it is a
+       wall. When nothing matched anywhere, say it once, name the facet most likely to be
+       the surprise — the last one, which is the one set on another screen rather than the
+       one whose box is six inches away — and say plainly that the name, detour and rate
+       filters narrow the list and not the pins, because on the map screen the rider is
+       looking at both at once. The pager stays: it is the control that steps out of an
+       empty window. */
+    if(!shownAny){
+      const w=this.narrowing('poi').filter(x=>!x.inert && x.scope!=='group');
+      h=(view?'':this.pagerHTML())+'<div class="up-empty">'
+        +(view?'Nothing on screen matches':'Nothing matches')
+        +(w.length?' — '+esc(w[w.length-1].lbl)+' is on. Clear is at the top.':'.')
+        +(this._nameKey||this.offMax!=null||this.priced ? ' The name, detour and rate filters narrow this list only — the pins are all still on the map.' : '')
+        +'</div>';
+    }
     list.innerHTML=h;
   }
 
@@ -3264,6 +3988,26 @@ class TrailApp {
       const tog=lcEl.querySelector('.leaflet-control-layers-toggle');
       if(tog){ tog.innerHTML=icon('layers',22); tog.title='Map layers'; }
       fabs.appendChild(lcEl);
+      /* Leaflet opens this card on mouseenter as well as on a tap. Alone in its own corner
+         that is a convenience; in a rail that scrolls it is a trap. Scroll the rail and the
+         control slides up under the pointer the last touch left sitting there — a touch
+         screen never sends the mouseleave that would undo it — so the card opens unasked,
+         and the rule that stands the other buttons down while it is open leaves the map
+         with no controls at all. The tap, the Enter key and the tap on the map that closes
+         it again are all bound separately and all keep working. */
+      L.DomEvent.off(lcEl,'mouseenter mouseleave');
+      /* It opens upward into whatever map is left above the sheet, so at a snap that leaves
+         less room than an empty card there is nowhere for it to go but off the top of the
+         screen — where it would sit, unreadable and undismissable, with the rest of the rail
+         hidden behind it. Refuse, and let the bar say what to do about it: a button that
+         does nothing at all reads as a broken one. Wrapped around expand rather than around
+         the toggle's own handler so the Enter key and any later caller are covered too. */
+      const expand=this.layersCtl.expand.bind(this.layersCtl);
+      this.layersCtl.expand=()=>{
+        if(this.cardFits()) return expand();
+        this.setBarHint('Lower the sheet to see the layers', 2400);
+        return this.layersCtl;
+      };
     }
     /* A scale bar, imperial to match the mile units everywhere else. Moved onto the
        panel's own top-left the way the layers control rides the FAB stack, so the
@@ -3365,7 +4109,7 @@ class TrailApp {
       // State POIs are already in this.POIS from fetchAllPOIs; fold the bundled corridor
       // in behind them and reindex once, then build every category's layer in one pass.
       const nb = bundled.status==='fulfilled' ? bundled.value : [];
-      if(nb.length){ this.POIS.push(...nb); this.POIS.forEach((p,i)=>{ p.i=i; }); }
+      if(nb.length){ this.POIS.push(...nb); this.POIS.forEach((p,i)=>{ p.i=i; }); this._byCat=null; }
       this.buildPOILayers();
       if(stat){
         const pmsg = poi.status==='fulfilled' ? poi.value+' live facilities loaded' : 'live facilities offline (lists still work)';
@@ -3463,7 +4207,7 @@ class TrailApp {
     }));
     this.POIS = res.flatMap(r=> r.status==='fulfilled'? r.value : []);
     // Index doubles as the handle a list row hands back to open the right popup.
-    this.POIS.forEach((p,i)=>{ p.i=i; });
+    this.POIS.forEach((p,i)=>{ p.i=i; }); this._byCat=null;
     return this.POIS.length;
   }
   /* The bundled corridor: OpenStreetMap within 5 mi of the whole route, pulled once by
@@ -3554,10 +4298,19 @@ class TrailApp {
     if(this.grpShut.has(grp)) this.grpShut.delete(grp); else this.grpShut.add(grp);
     this.savePrefs(); this.renderCategories();
   }
+  /* Every mount, not one. The chip tree used to live only on Nearby; the map sheet now
+     carries a second copy, and a rider who hides Campgrounds from the sheet has to find
+     the box unticked when they next open Nearby — one state, however many places show it.
+     The whole body is inside the walk rather than built once and cloned, because every
+     listener below is bound per element: cloneNode would copy the markup and leave the
+     second tree's chips dead. Repainting is cheap and rare — this runs on a category
+     toggle, a drag or a fetch, never on the position or pan paths. */
   renderCategories(){
-    const el=this.$('features'); if(!el) return;
+    const mounts=document.querySelectorAll('.feat-tree');
+    if(!mounts.length) return;
     const byCat=this.poisByCat();
     const ordered=this.orderedCats(Object.keys(byCat)).filter(c=>byCat[c] && byCat[c].length);
+    mounts.forEach(el=>{
     el.innerHTML='';
     GRP_ORDER.forEach(grp=>{
       if(grp==='bundled') return;   // OSM POIs are controlled from the map's layers control, not here
@@ -3603,6 +4356,7 @@ class TrailApp {
       });
       el.appendChild(box);
     });
+    });
   }
 
   /* Pointer Events rather than HTML5 drag-and-drop — the latter never fires on
@@ -3642,9 +4396,14 @@ class TrailApp {
   // construction, and render intersects by group anyway.
   wireCatDrag(chip, list){
     this.wireDrag(chip, list, '.feat', '.feat-grip', 'x', ()=>{
-      const el=this.$('features'); if(!el) return;
-      this.catOrder=[...el.querySelectorAll('.feat')].map(c=>c.dataset.cat);
-      this.savePrefs(); this.renderNearby();
+      /* Read the order back out of the tree the chip was actually dragged in, not out of
+         a lookup — there is a second tree in the map sheet with the same chips in it, and
+         a lookup would answer with whichever one comes first in the document and commit
+         the order the rider did not touch. renderCategories after, so the other tree
+         catches up: it is the one surface that cannot repaint itself from this drag. */
+      const root=list.closest('.feat-tree'); if(!root) return;
+      this.catOrder=[...root.querySelectorAll('.feat')].map(c=>c.dataset.cat);
+      this.savePrefs(); this.renderCategories(); this.renderNearby();
     });
   }
   async fetchRouteLine(){
