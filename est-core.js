@@ -119,7 +119,7 @@ const WX_SAMPLE_MI=12;
    of these segments and half a megabyte a pan is worse than no layer at all. */
 const AADT_URL='https://gis.dot.ny.gov/hostingny/rest/services/Roadways/Traffic_Monitoring/FeatureServer/1/query';
 const AADT_SRC='https://www.dot.ny.gov/tdv';
-const AADT_MINZ=10, AADT_CAP=400;
+const AADT_MINZ=10, AADT_CAP=1200;
 /* Google as a basemap, through the Maps JS API rather than tile URLs.
    Pulling mt*.google.com into an L.tileLayer is the answer every search result gives
    and it is the wrong one twice over: the Maps Platform terms forbid Google content
@@ -181,12 +181,18 @@ const AADT_BANDS=[[500,'#2e7d32','quiet',4,'#1b5e20'],
    way", so the eye never mistakes a busy road for the route. Round caps keep the
    dashes from looking like ticks at the heavier weights. */
 const AADT_DASH='7,7';
-/* Zoomed out, the quiet streets are not what you are looking for and there is not
-   the room to draw them anyway, so the floor rises with the scale — the same idea
-   as the milepost interval. Where more is in view than will be drawn the busiest
-   survive regardless; this only decides what is worth asking for in the first
-   place, which is what keeps a rural county from being drawn as every farm lane. */
-const AADT_FLOOR=[[13,0],[12,1000],[11,2500],[10,6000]];
+/* There is a ceiling on how many segments come back and no longer a floor under the
+   count, because the two were fighting each other. The floor rose with the scale on
+   the theory that zoomed out you only want the big roads — but the service already
+   sorts by AADT descending and hands back the top CAP, so the busiest already win
+   whenever more is in view than fits. All the floor did was spend the budget before
+   the cap could: over a rural county at zoom 12 it drew 115 segments where 291 were
+   in view, and the 176 it dropped were the quiet lanes a rider is choosing between.
+   Zoomed further out it costs red, not green — a wide view of the Syracuse or
+   Lockport countryside is every bit of it over 5,000 a day, so the old floor was
+   simply drawing a quarter of the busy roads and calling it a scale rule.
+   One knob now, and it prioritises the way the rider asked: red, then yellow, then
+   green, in that order, until the cap runs out. */
 const abs = Math.abs;
 const fmtMi = m => m < 10 ? m.toFixed(1) : String(Math.round(m));
 // Window bounds are typed by hand and land on round numbers, so they read as
@@ -2996,10 +3002,6 @@ class TrailApp {
   }
 
   /* ---------- traffic counts ---------- */
-  aadtFloor(z){
-    for(let i=0;i<AADT_FLOOR.length;i++) if(z>=AADT_FLOOR[i][0]) return AADT_FLOOR[i][1];
-    return AADT_FLOOR[AADT_FLOOR.length-1][1];
-  }
   // Inclusive at the top of each band, because "over 500 is yellow" means 500 is not.
   aadtBand(v){
     for(let i=0;i<AADT_BANDS.length;i++) if(v<=AADT_BANDS[i][0]) return AADT_BANDS[i];
@@ -3027,7 +3029,9 @@ class TrailApp {
     // downloaded to be thrown away by the screen.
     const tol=2*360/(256*Math.pow(2,z));
     const q=new URLSearchParams({
-      where:'AADT>'+this.aadtFloor(z),
+      // Above zero rather than above a scale-dependent floor: this only drops the rows
+      // with no usable count. What survives a crowded view is decided by the sort below.
+      where:'AADT>0',
       geometry:JSON.stringify({xmin:b.getWest(),ymin:b.getSouth(),xmax:b.getEast(),ymax:b.getNorth(),spatialReference:{wkid:4326}}),
       geometryType:'esriGeometryEnvelope', inSR:'4326', outSR:'4326',
       spatialRel:'esriSpatialRelIntersects',
@@ -3038,13 +3042,18 @@ class TrailApp {
       orderByFields:'AADT DESC', resultRecordCount:String(AADT_CAP), f:'geojson'
     });
     this.status('Reading traffic counts from NYSDOT\u2026');
-    let feats;
+    let feats, cut;
     try{
       const r=await fetch(AADT_URL+'?'+q.toString());
       if(!r.ok) throw new Error('HTTP '+r.status);
       const j=await r.json();
       if(j.error) throw new Error(j.error.message||'service error');
       feats=j.features||[];
+      /* The service's own word for "there was more than this". Counting the rows back
+         against the cap does not work: asked for 400 it returns 311, because it stops
+         at its transfer limit before it reaches the count, so a truncated view used to
+         report itself as the whole of it. The flag is right either way. */
+      cut=!!j.exceededTransferLimit;
     }catch(e){
       if(my!==this.aadtReq) return;
       this.aadtSig='';
@@ -3053,14 +3062,20 @@ class TrailApp {
     }
     if(my!==this.aadtReq) return;
     const n=this.drawAadt(feats);
-    this.status(feats.length>=AADT_CAP
+    this.status(cut
       ? 'Traffic counts: the '+n+' busiest roads in view. Zoom in for the quieter ones.'
       : 'Traffic counts on '+n+' road segments in view.');
   }
+  /* Quietest first, so the busiest end up on top. The service hands these back busiest
+     first, which is right for deciding what to send and exactly wrong for deciding what
+     to paint: drawn in that order every green farm lane lands over the red arterial it
+     crosses, and at a junction of four roads the one you needed to see is the one
+     underneath. Reversing it puts the stack in the order the eye should read it —
+     green, then yellow, then red on top of both. */
   drawAadt(feats){
     const g=this.aadtLayer; g.clearLayers();
     const rows=[];
-    feats.forEach(f=>{
+    feats.slice().sort((a,b)=>(+((a.properties||{}).AADT)||0)-(+((b.properties||{}).AADT)||0)).forEach(f=>{
       const gm=f.geometry||{}, pr=f.properties||{}, v=+pr.AADT;
       if(!isFinite(v) || v<=0) return;
       // ArcGIS hands back a MultiLineString whenever a segment has more than one path.
@@ -4222,8 +4237,29 @@ class TrailApp {
     const rHV=ROUTE.filter(p=>p[2]<=HINGE_MI).map(p=>[p[0],p[1]]);
     const rER=ROUTE.filter(p=>p[2]>=HINGE_MI).map(p=>[p[0],p[1]]);
     const rtPane=this.lyrPane('route');
-    this.embLines=[ L.polyline(rHV,{pane:rtPane,color:accent,weight:4,opacity:.85}),
-                    L.polyline(rER,{pane:rtPane,color:accent2,weight:4,opacity:.85}) ];
+    /* A white casing under the line, which is what makes it survive the traffic layer.
+       The route used to be a 4px stroke at .85 laid straight onto the map, and against
+       a 7px red AADT dash on the very road it follows that is a thinner, paler mark
+       than the thing it is supposed to be read through — the eye picks the loudest line
+       and the loudest line was the traffic. Widening the route alone would only have
+       raised the argument; the casing ends it, because two millimetres of white either
+       side means nothing can run flush against the route and be mistaken for it. This
+       is why every road atlas ever printed cases its lines, and it costs one more
+       polyline per half.
+       Solid, too, not .85: transparency was letting the count colour bleed up through
+       the route and muddy it, and the basemap detail it was buying is detail you can
+       see either side of a 5px line. Non-interactive so the casing never eats a click
+       meant for whatever is underneath it. */
+    const cased=(pts,col)=>[
+      L.polyline(pts,{pane:rtPane,color:'#fff',weight:9,opacity:.9,
+        lineCap:'round',lineJoin:'round',interactive:false}),
+      L.polyline(pts,{pane:rtPane,color:col,weight:5,opacity:1,
+        lineCap:'round',lineJoin:'round'}) ];
+    // Both casings before both cores: one white ribbon under the whole trail, so the
+    // Hudson Valley line does not get a white bar drawn across it where the Erie half
+    // meets it at the hinge.
+    const cHV=cased(rHV,accent), cER=cased(rER,accent2);
+    this.embLines=[ cHV[0], cER[0], cHV[1], cER[1] ];
     /* The trail itself gets a row in the control like everything else, and like the
        borrowed layers it names where it comes from — the route it was drawn on, which
        is also where to grab the GPX for a GPS unit. It used to be redrawn on load from
