@@ -481,6 +481,11 @@
      leads. Shrinks before the name does when a long name meets a long breakdown. */
   .poi-mp{flex:0 1 auto;min-width:0;overflow:hidden;font-size:11px;color:var(--color-neutral-500);
     font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* Reported charging, on the row itself — the whole point is to spot it while scanning
+     a column of lock sites, without opening each one to find out. */
+  .poi-pw{flex:none;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--color-accent-2);border:1px solid var(--color-accent-2);
+    border-radius:999px;padding:1px 6px}
   .poi-more{font-size:11px;color:var(--color-neutral-500);padding:6px 2px}
   button.poi-more{display:block;width:100%;text-align:left;background:transparent;border:0;cursor:pointer;
     font-family:inherit;font-weight:600;color:var(--color-accent-700)}
@@ -742,6 +747,15 @@
     color:var(--color-neutral-600);white-space:nowrap;vertical-align:top}
   .ul-tbl td{padding:1px 0;vertical-align:top}
   .poi-src{margin-top:7px;font-size:12px;line-height:1.5;color:var(--color-neutral-600)}
+  /* A note someone wrote about this place — your own reason for the pick, or a reported
+     amenity. Ruled off on the left so it reads as somebody's remark rather than another
+     field the service returned. */
+  .poi-note{margin-top:8px;padding-left:8px;font-size:12.5px;line-height:1.5;
+    border-left:2px solid var(--color-divider);color:var(--color-neutral-700)}
+  .poi-pwr{border-left-color:var(--color-accent-2)}
+  .poi-pwr b{color:var(--color-accent-2)}
+  /* The caveat rides with the claim, never on its own line to be skipped. */
+  .poi-pwr-c{color:var(--color-neutral-500)}
   .leaflet-control-attribution{background:color-mix(in srgb,var(--color-bg) 82%,transparent);font-size:10px;color:var(--color-neutral-600)}
   .pa-lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:11px 0 6px}
   .pa-row{display:flex;flex-wrap:wrap;gap:6px}

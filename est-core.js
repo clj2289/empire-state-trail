@@ -517,6 +517,27 @@ const POI_SOURCES=[
   { url:ARC+"Attractions_Public/FeatureServer/0/query", fields:"Attraction,FullAddress,Theme,WebPage", bbox:true,
     map:p=>({asset:'Attraction',name:p.Attraction||'(attraction)',addr:p.FullAddress||'',phone:'',url:p.WebPage||'',sub:p.Theme||''}) }
 ];
+/* ---- can I charge here? ----
+   The State's campsite records say nothing about electricity, and at a canal lock that
+   is the question you actually carry into the evening: a lock site is a lawn, a pump and
+   a portable toilet, so a working outlet decides whether the phone that holds your maps
+   makes it to tomorrow.
+
+   These are rider reports off the Erie Canal Bike Trail, NOT a Canal Corporation amenity
+   listing — an outlet someone found may be dead, locked in an off-season panel, or gone.
+   So each note is worded as the report it is, the popup labels the whole thing a rider
+   report, and nothing here is promised. Ride as though there is no power and be pleased
+   when there is.
+
+   Keyed on the State feed's exact Name (verified against the live service), because lock
+   numbers repeat across canals — there is a Lock 9 on the Champlain and another at
+   Rotterdam, so matching on the number alone would hang a note on the wrong campsite. */
+const LOCK_POWER={
+  'Lock 15 Fort Plain':'Outlet / power pedestal reported for charging devices.',
+  'Lock 21 New London':'Electrical outlet reported near the water source and the portable toilet.',
+  'Lock 30 Macedon':'A camper in June 2026 reported places to charge electronics. Older reports '
+    +'conflict — both on whether there is electricity and on whether camping was allowed at the time.'
+};
 /* ---------- weather ---------- */
 /* NWS reports the direction wind comes FROM, as a compass point. Keeping that
    convention straight is the whole game: a wind "from the north" while you ride
@@ -746,6 +767,11 @@ async function fetchSource(src){
    campsites and nothing about where you buy food, OpenStreetMap knows every
    filling station and is only as current as whoever last surveyed it. */
 const CATCFG={
+  /* Hand-picked by the rider, kept in data/pois-chris.json. Its own parent so it never
+     competes with the State's list or the OSM corridor for a slot — a place you chose
+     yourself outranks both, and it is the one category that is on by default and drawn
+     as a full-size pin. */
+  'chris':{icon:'target',label:'Chris POIs',grp:'chris'},
   'Lock camping':{icon:'lock',label:'Lock camping',grp:'trail'},
   'Campground':{icon:'tent',label:'Campgrounds',grp:'trail'},
   'Lodging':{icon:'bed',label:'Lodging',grp:'trail'},
@@ -768,20 +794,23 @@ const CATCFG={
   'nb-pharmacy':{icon:'med',label:'Pharmacies',grp:'bundled'}
 };
 const CAT_GRP={
+  chris:{label:'Chris’s picks', src:'Chosen by hand', toc:'Chris POIs'},
   trail:{label:'On the trail', src:'New York State', toc:'Trail POIs'},
   bundled:{label:'Within 5 mi', src:'OpenStreetMap', toc:'OSM POIs'}
 };
-const GRP_ORDER=['trail','bundled'];
+// Picks first: a short list someone chose deliberately is worth more than either feed,
+// and it is the one that would otherwise get lost under them.
+const GRP_ORDER=['chris','trail','bundled'];
 // An asset type the service invented and we don't hardcode is trail data — that
 // is the only place unknown categories can come from.
 const catGrp=a=>(CATCFG[a]&&CATCFG[a].grp)||'trail';
 // Both of these are somewhere to sleep, so both get the chain wordmark treatment.
 const LODGE_CATS={'Lodging':1,'nb-lodging':1};
-const CAT_DEFAULT={'Lock camping':true,'Campground':true,'Lodging':true};
+const CAT_DEFAULT={'chris':true,'Lock camping':true,'Campground':true,'Lodging':true};
 /* Fallback order for the Nearby groups — a rider who hasn't dragged anything yet
    gets sleeping options first, sightseeing after, logistics last. Grouped in the
    same order the parents render in, so a fresh install reads top to bottom. */
-const CAT_ORDER=['Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area',
+const CAT_ORDER=['chris','Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area',
                  'nb-grocery','nb-convenience','nb-food','nb-lodging','nb-camp','nb-fuel','nb-water','nb-bike','nb-pharmacy'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
@@ -2340,6 +2369,9 @@ class TrailApp {
         const mp = mpTxt(p.mile);
         const pr = this.priceOf(p);
         h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'"><span class="poi-nm">'+esc(p.name)+'</span>'
+          // Reported charging, flagged on the row so a lock site with power is findable by
+          // eye down the list. The report and its caveat are in the popup.
+          +(p.power?'<span class="poi-pw" title="Charging reported here — tap for the detail">power</span>':'')
           +(mp?'<span class="poi-mp">'+mp+'</span>':'')
           +(pr?'<span class="poi-pr">'+esc(fmtMoney(pr.amt))+'</span>':'')+brk
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
@@ -4263,19 +4295,24 @@ class TrailApp {
     const stat=this.$('poiStat'); if(stat) stat.textContent='Loading live data from the NY State service…';
     Promise.allSettled([
       this.fetchAllPOIs(),
-      this.loadBundledPois()
-    ]).then(([poi,bundled])=>{
+      this.loadBundledPois(),
+      this.loadChrisPois()
+    ]).then(([poi,bundled,chris])=>{
       // State POIs are already in this.POIS from fetchAllPOIs; fold the bundled corridor
-      // in behind them and reindex once, then build every category's layer in one pass.
+      // and the hand-picked list in behind them and reindex once, then build every
+      // category's layer in one pass.
       const nb = bundled.status==='fulfilled' ? bundled.value : [];
-      if(nb.length){ this.POIS.push(...nb); this.POIS.forEach((p,i)=>{ p.i=i; }); }
+      const cp = chris.status==='fulfilled' ? chris.value : [];
+      const add = nb.concat(cp);
+      if(add.length){ this.POIS.push(...add); this.POIS.forEach((p,i)=>{ p.i=i; }); }
       this.buildPOILayers();
       if(stat){
         // The route line is no longer one of the things that can fail to arrive, so it
         // has nothing to say here — it is drawn before this promise is even made.
         const pmsg = poi.status==='fulfilled' ? poi.value+' live facilities loaded' : 'live facilities offline (lists still work)';
         const nmsg = nb.length ? ' · '+nb.length+' bundled within 5 mi' : '';
-        stat.textContent = pmsg+nmsg+'.';
+        const cmsg = cp.length ? ' · '+cp.length+' of your own' : '';
+        stat.textContent = pmsg+nmsg+cmsg+'.';
       }
       this.renderNext(); this.renderCategories(); this.renderNearby();
     });
@@ -4300,7 +4337,12 @@ class TrailApp {
   poiPopup(p){
     const mp=p.mile!=null?' · '+mpTxt(p.mile):'';
     const sub=p.sub?' · '+p.sub:'';
-    let h='<b>'+esc(p.name)+'</b><br><span style="opacity:.65">'+esc(p.asset)+esc(sub)+mp+'</span>';
+    /* The State names its own assets in English ("Campground"), so that string is the
+       caption. The other sources are keyed by slug — printing p.asset there put a literal
+       "nb-food" or "chris" at the top of the popup — so those show their category label. */
+    const cat=poiCat(p);
+    const catTxt = catGrp(cat)==='trail' ? p.asset : catCfg(cat).label;
+    let h='<b>'+esc(p.name)+'</b><br><span style="opacity:.65">'+esc(catTxt)+esc(sub)+mp+'</span>';
     /* Figures in a row, not a sentence to pick apart. Three questions get asked of a
        pin — what does this cost me, how much of that is trail, how far off the route
        does it sit — and the last one is the one you squint for, so it is a box of its
@@ -4319,6 +4361,15 @@ class TrailApp {
       h+='<div class="rd-row">'+offFig+'</div>'
         +'<div class="rd-note">Set your location for the ride to it.</div>';
     }
+    /* Why this one is on the list, in the words of whoever put it there — above the
+       booking row, because it is the thing that decides whether you care about the rest
+       of the popup at all. */
+    if(p.note) h+='<div class="poi-note">'+esc(p.note)+'</div>';
+    /* Charging, where someone has reported it. Labelled a rider report on the spot: the
+       one thing worse than not knowing is planning the evening around an outlet that
+       turns out to be dead. See LOCK_POWER. */
+    if(p.power) h+='<div class="poi-note poi-pwr"><b>Power</b> '+esc(p.power)
+      +' <span class="poi-pwr-c">Rider report, not an official amenity — don’t count on it.</span></div>';
     // Right under the rates link, because the loop is: tap out, look it up, come back.
     if(p.asset==='Lodging'||p.asset==='Campground'){
       const pr=this.priceOf(p);
@@ -4345,6 +4396,8 @@ class TrailApp {
        shower. */
     const osmNote = p.src==='bundled'
       ? 'From OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
+      : p.src==='chris'
+      ? 'One of your own picks, kept in data/pois-chris.json.'
       : '';
     return h+'<div class="pa-row poi-lk">'+lk.join('')+'</div>'
       +(osmNote?'<div class="poi-src">'+osmNote+'</div>':'');
@@ -4354,7 +4407,11 @@ class TrailApp {
       const feats=await fetchSource(src);
       return feats.map(f=>{ const p=f.properties||{}, c=(f.geometry||{}).coordinates||[null,null];
         const lat=c[1],lng=c[0], pr=lat!=null?projectRoute(lat,lng):{mile:null,off:999};
-        return {...src.map(p), lat, lng, mile:pr.mile, off:pr.off};
+        const rec={...src.map(p), lat, lng, mile:pr.mile, off:pr.off};
+        // Rider-reported charging at a canal lock, folded in here so it travels with the
+        // record into the popup and the Nearby row. See LOCK_POWER.
+        const pw=LOCK_POWER[rec.name]; if(pw) rec.power=pw;
+        return rec;
       }).filter(x=>x.lat!=null && x.off<=5);
     }));
     this.POIS = res.flatMap(r=> r.status==='fulfilled'? r.value : []);
@@ -4385,6 +4442,32 @@ class TrailApp {
       const p={asset:o.c, name:o.n||CATCFG[o.c].label, sub:'', addr:o.a||'', phone:o.p||'',
         url:o.u||'', src:'bundled', lat, lng, mile:isFinite(+o.m)?+o.m:null, off:off==null?999:off};
       out.push(p);
+    });
+    return out;
+  }
+  /* Chris's own picks, from data/pois-chris.json — a short hand-kept list, so unlike the
+     bundled corridor it carries no precomputed mile and is projected here at load. That's
+     deliberate: a dozen projections cost nothing, and it means re-anchoring the route
+     never leaves these pointing at stale mileposts the way a baked-in figure would.
+
+     No corridor filter either. Every other source is machine-swept and needs the 5-mile
+     cut to stay useful; this one was chosen a place at a time, so a pick that sits farther
+     out is a decision, not noise, and dropping it silently would be the bug. */
+  async loadChrisPois(){
+    let data;
+    try{
+      const r=await fetch('data/pois-chris.json',{cache:'no-cache'});
+      if(!r.ok) return [];
+      data=await r.json();
+    }catch(e){ return []; }
+    if(!Array.isArray(data)) return [];
+    const out=[];
+    data.forEach(o=>{
+      const lat=+o.y, lng=+o.x;
+      if(!isFinite(lat) || !isFinite(lng)) return;
+      const pr=projectRoute(lat,lng);
+      out.push({asset:'chris', name:o.n||'(pick)', sub:'', addr:o.a||'', phone:o.p||'',
+        url:o.u||'', note:o.d||'', src:'chris', lat, lng, mile:pr.mile, off:pr.off});
     });
     return out;
   }
