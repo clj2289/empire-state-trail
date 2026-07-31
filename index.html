@@ -13,6 +13,24 @@
 <meta name="apple-mobile-web-app-title" content="EST Trail">
 <link rel="apple-touch-icon" href="icon-192.png">
 
+<!-- Google basemap key. A browser key can't be a secret — the page has to send it, so
+     anyone who loads the app can read it, and that is how Google intends it. What stops
+     it being worth stealing lives in the Cloud console, not in this file:
+       · Application restriction  → HTTP referrers, this site's origins only
+       · API restriction          → Maps JavaScript API, nothing else
+       · Quota cap + budget alert → on Dynamic Maps, so a scraper can't run up a bill
+
+     ⚠ TEMPORARY. The key below is Google's prototyping demo key. It sits outside any
+     Cloud project, so it can be given NONE of the three restrictions above. It is here
+     only because nothing is billable behind it: with no billing account attached, abuse
+     costs a throttled or revoked key and a map that stops drawing — not money.
+
+     That stops being true the moment that Google project has a card attached. REPLACE
+     THIS before upgrading the account, with a key from your own project carrying all
+     three restrictions. Blank it out and the Google rows simply vanish from the layers
+     control — the app is built to run without them. -->
+<meta name="google-maps-key" content="AIzaSyABw6QyQd82_PbnnDJdp2gsfDsUoF6uFSg">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap">
@@ -111,6 +129,22 @@
   .find-r span{display:block;font-size:11px;color:var(--color-neutral-600)}
   .find-n{padding:7px 8px;font-size:11.5px;color:var(--color-neutral-600);
     border-top:1px solid var(--color-divider)}
+  /* Places on the route come first and are marked as such — on this app "walmart" is
+     nearly always a question about the trail, not about the wider world. */
+  .find-h{display:flex;align-items:baseline;gap:6px;padding:6px 8px 3px;
+    border-top:1px solid var(--color-divider);
+    font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600)}
+  .find-h span{margin-left:auto;color:var(--color-accent-2);font-weight:700}
+  .find-p{display:block;width:100%;text-align:left;cursor:pointer;font-family:inherit;
+    padding:7px 8px;background:transparent;border:0;border-left:3px solid var(--color-accent-2)}
+  .find-p:hover{background:var(--color-accent-100)}
+  .find-p b{display:block;font-size:13px;color:var(--color-text)}
+  .find-p span{display:block;font-size:11px;color:var(--color-neutral-600);
+    font-variant-numeric:tabular-nums}
+  .find-all{display:block;width:100%;text-align:left;cursor:pointer;font-family:inherit;
+    padding:7px 8px;background:transparent;border:0;font-size:11.5px;font-weight:600;
+    color:var(--color-accent-700)}
+  .find-all:hover{color:var(--color-accent-800);background:var(--color-accent-100)}
   .map-back:hover{background:var(--color-accent-100)}
   .map-back:active{background:var(--color-accent-200)}
   /* The map panel. Sits above the floating tab bar; the map runs edge to edge behind
@@ -123,11 +157,7 @@
     background:var(--color-bg);border-top:1px solid var(--color-divider);
     border-radius:var(--radius-lg) var(--radius-lg) 0 0;
     box-shadow:0 -6px 24px color-mix(in srgb,var(--color-neutral-900) 14%,transparent);
-    transition:height .24s ease, bottom .22s ease}
-  /* When the dock hides, the sheet reaches to the very bottom and reclaims its strip.
-     Its raised heights grow to match in JS, so its top stays put and the list you were
-     reading doesn't jump — it just gains the freed room at the foot. */
-  .phone-app.dock-hidden .map-panel{bottom:0}
+    transition:height .24s ease}
   .map-panel.is-dragging{transition:none}
   /* Anchored to the panel's own top edge, so they ride up and down with it and never
      end up underneath it — which a fixed offset from the viewport could not manage.
@@ -181,13 +211,9 @@
   /* At rest the panel IS this bar, so it has to be a thumb-sized target while still
      reading as a hairline over the map — the padding does the work, not the bar. */
   .map-panel[data-snap="shut"] .panel-grab{padding:10px 0}
-  /* The dock is gone from under it, so the bar pads itself clear of the home indicator
-     rather than sitting on it. Measured by shutH, so the panel height follows. */
-  .phone-app.dock-hidden .map-panel[data-snap="shut"] .panel-grab{
-    padding-bottom:calc(10px + env(safe-area-inset-bottom))}
   .panel-bar{width:38px;height:4px;border-radius:999px;background:var(--color-neutral-400)}
-  /* Empty almost always — see setBarHint. Collapsed when it is, so the gap above it
-     doesn't quietly pay rent for a line that isn't there. */
+  /* :empty is what keeps the bar a bare grip: the span costs no height until something
+     is put in it, so the resting bar is the grip and nothing else. */
   .panel-hint{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-500)}
   .panel-hint:empty{display:none}
   /* Only the list scrolls; the stats above it stay put as the panel grows. */
@@ -224,23 +250,23 @@
   .srch-pin b{font-weight:700}
   .srch-pin::after{content:"";position:absolute;left:50%;bottom:-4px;transform:translateX(-50%);
     border:5px solid transparent;border-top-color:var(--color-accent-2);border-bottom:0}
-  .srch-pop .srch-cd{font-size:11px;color:var(--color-neutral-600);margin:3px 0 6px;
+  .srch-pop .srch-cd{font-size:12px;color:var(--color-neutral-600);margin:4px 0 7px;
     font-variant-numeric:tabular-nums}
-  .srch-rm{margin-top:8px;width:100%;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;
-    padding:6px 8px;background:transparent;color:var(--color-accent-2);
+  .srch-rm{margin-top:9px;width:100%;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer;
+    padding:10px 8px;background:transparent;color:var(--color-accent-2);
     border:1px solid var(--color-accent-2);border-radius:var(--radius-md)}
   .srch-rm:hover{background:color-mix(in srgb,var(--color-accent-2) 10%,transparent)}
   /* What a pin costs you to reach, as figures rather than a sentence. */
   .rd-row{display:flex;gap:5px;margin:8px 0 2px;text-align:center;
     font-variant-numeric:tabular-nums}
-  .rd-c{flex:1;min-width:0;padding:4px 2px;background:var(--color-neutral-100);
+  .rd-c{flex:1;min-width:0;padding:6px 3px;background:var(--color-neutral-100);
     border:1px solid var(--color-divider);border-radius:var(--radius-md)}
-  .rd-c b{display:block;font-size:15px;line-height:1.15;color:var(--color-text)}
-  .rd-c>span{display:block;margin-top:1px;font-size:9px;letter-spacing:.04em;
+  .rd-c b{display:block;font-size:17px;line-height:1.15;color:var(--color-text)}
+  .rd-c>span{display:block;margin-top:2px;font-size:10px;letter-spacing:.04em;
     text-transform:uppercase;color:var(--color-neutral-600)}
   .rd-off{border-color:var(--color-accent);background:var(--color-accent-100)}
   .rd-off b{color:var(--color-accent-800)}
-  .rd-note{font-size:11px;color:var(--color-neutral-600)}
+  .rd-note{font-size:12px;color:var(--color-neutral-600)}
   /* Mileposts: a number on the line, a dot where it actually falls. */
   .leaflet-marker-icon.mp-ic{background:none;border:0;overflow:visible;pointer-events:none}
   .mp-lb{display:flex;flex-direction:column;align-items:center;gap:1px}
@@ -252,41 +278,8 @@
   .mp-dot{width:5px;height:5px;border-radius:50%;background:currentColor;
     box-shadow:0 0 0 1.5px var(--color-bg)}
   .mp-tick{opacity:.9}
-  /* The day chart: stacked panels over one time axis, an hour of riding per column. */
-  .wx-svg{display:block;width:100%;height:auto;margin-top:var(--space-2);overflow:visible}
-  .wx-ax{stroke:var(--color-neutral-400);stroke-width:1}
-  .wx-gl{stroke:var(--color-divider);stroke-width:1}
-  .wx-dash{stroke-dasharray:2 3}
-  .wx-rain{fill:var(--color-accent);opacity:.35}
-  .wx-tfill{fill:var(--color-accent-800);opacity:.08}
-  .wx-temp{fill:none;stroke:var(--color-accent-800);stroke-width:1.75;
-    stroke-linejoin:round;stroke-linecap:round}
-  .wx-dot{fill:var(--color-accent-800)}
-  .wx-tl{fill:var(--color-text);font-family:var(--font-body);font-size:10px;font-weight:700}
-  .wx-xl{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:9px}
-  .wx-gt{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:8px}
-  .wx-wl{font-family:var(--font-body);font-size:9px;font-weight:700}
-  /* Wind as a rider meets it: up in your face, down at your back, straddling
-     the line when it only pushes you sideways. */
-  .wx-b-head{fill:#b3261e}
-  .wx-b-tail{fill:#146c2e}
-  .wx-b-cross{fill:var(--color-neutral-400)}
-  .wx-g-head{fill:#b3261e}
-  .wx-g-tail{fill:#146c2e}
-  /* Towns ruled down the stack — the chart's landmarks. */
-  .wx-tn{stroke:var(--color-neutral-400);stroke-width:1;stroke-dasharray:1 3;opacity:.75}
-  .wx-tnl{fill:var(--color-neutral-600);font-family:var(--font-body);font-size:8.5px;font-weight:600}
-  text.wx-head{fill:#b3261e}
-  text.wx-tail{fill:#146c2e}
-  text.wx-cross{fill:var(--color-neutral-500)}
-  .wx-key{display:flex;flex-wrap:wrap;gap:9px;margin-top:3px;font-size:10px;color:var(--color-neutral-500)}
-  .wx-key span::before{content:"";display:inline-block;width:8px;height:8px;margin-right:4px;
-    border-radius:2px;vertical-align:-1px}
-  .wx-k-t::before{background:var(--color-accent-800)}
-  .wx-k-r::before{background:var(--color-accent);opacity:.4}
-  .wx-k-h::before{background:#b3261e}
-  .wx-k-l::before{background:#146c2e}
-  .wx-k-c::before{background:var(--color-neutral-400)}
+  /* The multi-day chart is now the meteogram Outlook (styles under .pd-root, further
+     down). What remains here is the map's own forecast pins. */
   /* The map's forecast: one dial per riding-hour, readable without a tap. */
   .wx-ic{background:none;border:0;overflow:visible}
   .wx-pin{display:flex;flex-direction:column;align-items:center;gap:1px;
@@ -320,54 +313,64 @@
     font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .sheet-line b{color:var(--color-text);font-size:13px}
   .sheet-dot{color:var(--color-neutral-400)}
-  /* Outlook */
-  .wx-out{display:flex;flex-direction:column;gap:var(--space-3);margin-top:var(--space-3)}
-  .wx-day{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
-  .wx-day-h{display:flex;align-items:baseline;gap:7px}
-  .wx-day-n{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:15px}
-  .wx-day-d{font-size:12px;color:var(--color-neutral-600)}
-  .wx-day-m{margin-left:auto;font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
-  .wx-day-tw{font-size:13px;font-weight:600;color:var(--color-neutral-800);margin-top:2px}
-  .wx-day-tm{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums;margin-top:1px}
-  .wx-night{margin-top:5px;padding:5px 8px;font-size:12px;color:var(--color-neutral-700);
-    background:var(--color-neutral-100);border-radius:var(--radius-md)}
-  .wx-night b{color:var(--color-text)}
-  /* Sky, temperature and rain are what you decide a day on; wind is a detail you
-     read after. It used to be the other way round on the page. */
-  .wx-day-w{font-size:16px;font-weight:600;color:var(--color-text);margin-top:6px;line-height:1.4}
-  .wx-none{font-size:12px;color:var(--color-neutral-500);margin-top:5px}
-  .wx-wind{display:flex;align-items:center;gap:5px;margin-top:3px;font-size:12px;font-weight:400}
-  .wx-wind .ic{flex:none}
-  .wx-asof{font-size:11px;color:var(--color-neutral-500);border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
-  /* Outlook, a town at a time — each an NWS-style hourly strip, the town linked out to
-     its own weather.gov page. */
-  .wx-town{border-top:1px solid var(--color-divider);padding-top:var(--space-2)}
-  .wx-town-h{display:flex;align-items:baseline;gap:8px}
-  .wx-town-n{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-    font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:16px;
-    color:var(--color-accent-800);text-decoration:none}
-  .wx-town-n:hover{text-decoration:underline}
-  .wx-town-ext{font-size:12px;color:var(--color-accent);font-weight:400}
-  .wx-town-d{flex:none;margin-left:auto;font-size:12px;color:var(--color-neutral-600);
-    font-variant-numeric:tabular-nums;white-space:nowrap}
-  .wx-town-sub{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums;margin:1px 0 2px}
-  /* The chart in two parts: a fixed gutter that carries the scales, and a strip that
-     scrolls under it. The scrollbar is hidden by design — the night is reached by a
-     swipe, not by chrome that eats a row of height. */
-  .wx-town-chart{display:flex;align-items:flex-start;margin-top:3px}
-  .wx-gut{flex:none;overflow:visible}
-  .wx-scroll{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;
-    -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;
-    scrollbar-width:none;-ms-overflow-style:none}
-  .wx-scroll::-webkit-scrollbar{display:none}
-  .wx-plot{display:block}
-  .wx-nite{fill:var(--color-neutral-800);opacity:.07}
-  .wx-mid{stroke:var(--color-neutral-400);stroke-width:1;opacity:.55}
-  .wx-dl{fill:var(--color-neutral-500);font-family:var(--font-body);font-size:8px;font-weight:600}
-  .wx-arr{stroke:var(--color-accent);stroke-width:1.5;stroke-dasharray:3 2}
-  .wx-arrl{fill:var(--color-accent-800);font-family:var(--font-body);font-size:8.5px;font-weight:700}
-  .wx-k-scroll{color:var(--color-neutral-500);font-style:italic}
-  .wx-k-scroll::before{display:none}
+  /* Outlook — the continuous meteogram ("Broadsheet re-cut"). One scrolled strip in the
+     app's serif: sticky y-gutter and hour readout, the towns and mileposts on the shared
+     clock, and a wind line recoloured by what the wind does to the rider. Scoped under
+     .pd-root; the custom props below mirror the Broadsheet tokens so the block is
+     self-contained. */
+  .pd-root{--pbg:var(--color-bg);--ptext:var(--color-text);--paccent:var(--color-accent);
+    --pdiv:var(--color-divider);--pn500:var(--color-neutral-500);--pn600:var(--color-neutral-600);--pn700:var(--color-neutral-700);
+    margin-top:var(--space-2);background:var(--pbg);color:var(--ptext);
+    font-family:ui-serif,Georgia,"Times New Roman",serif;font-variant-numeric:tabular-nums;line-height:1.35;color-scheme:light}
+  .pd-root *{box-sizing:border-box}
+  .pd-ctl{padding:8px 0 9px;border-bottom:1px solid var(--pdiv);display:flex;flex-direction:column;gap:6px}
+  .pd-row{display:flex;align-items:center;gap:7px;flex-wrap:nowrap}
+  .pd-lab{font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--pn600);white-space:nowrap}
+  .pd-root select,.pd-root input[type=date]{font-family:inherit;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ptext);
+    background:#fff;border:1px solid var(--pdiv);border-bottom-color:var(--paccent);border-bottom-width:1.5px;
+    border-radius:2px;padding:6px 7px;line-height:1.1;min-height:30px;-webkit-appearance:none;appearance:none}
+  .pd-root select{padding-right:20px;background-image:linear-gradient(45deg,transparent 50%,var(--pn600) 50%),linear-gradient(135deg,var(--pn600) 50%,transparent 50%);
+    background-position:calc(100% - 11px) 54%,calc(100% - 7px) 54%;background-size:4px 4px,4px 4px;background-repeat:no-repeat}
+  .pd-root select:focus,.pd-root input[type=date]:focus{outline:1.5px solid var(--paccent);outline-offset:0}
+  .pd-dash{color:var(--pn500);font-size:12px}
+  .pd-note{font-size:10.5px;color:var(--pn600);margin-left:auto;white-space:nowrap;overflow:hidden}
+  .pd-root input[type=date]{min-width:120px;max-width:150px}
+  .pd-days{display:flex;gap:0;border:1px solid var(--pdiv);border-radius:2px;overflow:hidden}
+  .pd-day{flex:1 1 0;font-family:inherit;font-size:11px;letter-spacing:.02em;color:var(--pn700);
+    background:#fff;border:0;border-right:1px solid var(--pdiv);padding:6px 0;cursor:pointer;min-height:31px;font-variant-numeric:tabular-nums}
+  .pd-day:last-child{border-right:0}
+  .pd-day.on{background:var(--ptext);color:#f8f4f4}
+  .pd-day .z{display:block;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:#a86a00;line-height:1.1}
+  .pd-day.on .z{color:#f5c518}
+  /* readout — sticky so a tapped hour stays named while the panels scroll */
+  .pd-read{position:sticky;top:0;z-index:6;padding:7px 0;background:var(--pbg);border-bottom:1px solid var(--ptext);
+    box-shadow:0 1px 2px rgba(45,43,43,.10);font-size:12px;display:flex;flex-wrap:wrap;gap:0 6px;align-items:baseline;min-height:46px}
+  .pd-read b{font-weight:600;letter-spacing:.02em}
+  .pd-read .sep{color:var(--color-neutral-400)}
+  .pd-read .tm{color:var(--paccent)}
+  .pd-read .k-head{color:#7a1410;font-weight:600}
+  .pd-read .k-cross{color:#9a6b00;font-weight:600}
+  .pd-read .k-tail{color:#279a52;font-weight:600}
+  .pd-read .off{color:var(--pn600);font-style:italic}
+  .pd-scroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;
+    border-bottom:1px solid var(--pdiv);background:var(--pbg);scrollbar-width:none;-ms-overflow-style:none}
+  .pd-scroll::-webkit-scrollbar{display:none}
+  .pd-scroll svg{display:block}
+  .pd-hint{padding:6px 0 0;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--pn500)}
+  .pd-foot{padding:9px 0 0;font-size:10px;color:var(--pn600);border-top:1px solid var(--pdiv);margin-top:9px}
+  .pd-root svg text{font-family:ui-serif,Georgia,"Times New Roman",serif;font-variant-numeric:tabular-nums}
+  .pd-root text.ax{font-size:8.5px;fill:#8f8b8b}
+  .pd-root text.ttl{font-size:9px;letter-spacing:.13em;fill:#201e1d;text-transform:uppercase}
+  .pd-root text.cap{font-size:8.5px;letter-spacing:.03em;fill:#8f8b8b;text-transform:uppercase}
+  .pd-root text.val{font-size:8.5px}
+  .pd-root text.tag{font-size:8.5px;letter-spacing:.07em;text-transform:uppercase}
+  .pd-root text.town{font-size:9px;fill:#201e1d}
+  .pd-root text.tmv{font-size:8.5px}
+  .pd-root text.val,.pd-root text.tag,.pd-root text.town,.pd-root text.tmv,
+  .pd-root text.dayl,.pd-root text.zero{paint-order:stroke;stroke:#f3f2f2;stroke-width:2.6px;stroke-linejoin:round}
+  .pd-root text.dayl{font-size:9px;letter-spacing:.1em;fill:#201e1d;text-transform:uppercase}
+  .pd-root text.zero{font-size:8.5px;letter-spacing:.14em;fill:#7d7979;text-transform:uppercase}
+  .pd-root text.lg{font-size:8.5px;fill:#201e1d}
   /* Zoom is one control in two halves, so it sits tighter than the gap between the
      independent FABs above it. */
   .fab-pair{display:flex;flex-direction:column;gap:4px}
@@ -518,6 +521,11 @@
      leads. Shrinks before the name does when a long name meets a long breakdown. */
   .poi-mp{flex:0 1 auto;min-width:0;overflow:hidden;font-size:11px;color:var(--color-neutral-500);
     font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* Reported charging, on the row itself — the whole point is to spot it while scanning
+     a column of lock sites, without opening each one to find out. */
+  .poi-pw{flex:none;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--color-accent-2);border:1px solid var(--color-accent-2);
+    border-radius:999px;padding:1px 6px}
   .poi-more{font-size:11px;color:var(--color-neutral-500);padding:6px 2px}
   button.poi-more{display:block;width:100%;text-align:left;background:transparent;border:0;cursor:pointer;
     font-family:inherit;font-weight:600;color:var(--color-accent-700)}
@@ -536,6 +544,39 @@
     background:transparent;border:1px solid var(--color-divider);border-radius:var(--radius-md);
     color:var(--color-accent-700);padding:6px var(--space-2)}
   .poi-band-view:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  /* ---- searching every place by name ----
+     One field, above the filters rather than inside them: this asks a different
+     question from the ones below it ("where is a Walmart" rather than "what is around
+     me"), and it answers across the whole route regardless of how they are set. */
+  .poi-search{display:flex;align-items:center;gap:6px;margin-bottom:var(--space-3);
+    padding:0 var(--space-2);background:var(--color-surface);
+    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  .poi-search:focus-within{border-color:var(--color-accent)}
+  .poi-search-ic{display:flex;flex:none;color:var(--color-neutral-500)}
+  .poi-search input{flex:1;min-width:0;font-family:inherit;font-size:13px;padding:9px 0;
+    background:transparent;color:var(--color-text);border:0}
+  .poi-search input:focus{outline:none}
+  .poi-search input::-webkit-search-cancel-button{display:none}
+  .poi-search-x{flex:none;width:26px;font-family:inherit;font-size:18px;line-height:1;cursor:pointer;
+    padding:4px 0;background:transparent;color:var(--color-neutral-600);border:0}
+  .poi-search-x:hover{color:var(--color-text)}
+  /* The result header restates the query, because on the map screen the box that set
+     it is a bar that has since closed — and carries the only Clear there is over there. */
+  .hit-head{display:flex;align-items:baseline;gap:8px;margin-bottom:4px;padding-bottom:4px;
+    border-bottom:1px solid var(--color-divider);
+    font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:14px}
+  .hit-ct{font-family:var(--font-body);font-weight:400;font-size:10px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--color-neutral-500);white-space:nowrap}
+  .hit-clear{margin-left:auto;flex:none;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;
+    background:transparent;border:0;color:var(--color-accent-700);padding:2px}
+  .hit-clear:hover{color:var(--color-accent-800)}
+  .hit-note{font-size:11px;color:var(--color-neutral-500);margin-bottom:var(--space-2)}
+  .hit-fine{font-size:10.5px;line-height:1.5;color:var(--color-neutral-500);margin-top:var(--space-2)}
+  /* Town is the one column allowed to wrap — the city and the trail town under it are
+     two lines by design, and everything else is a number that must stay on one. */
+  table.itin td.tw{white-space:normal;min-width:78px;font-size:12px;line-height:1.3}
+  .tw-n{display:block;font-size:10px;color:var(--color-neutral-500)}
+  table.itin td.off{color:var(--color-neutral-600)}
   /* Stepping the window, at the top of the list where the window is set. Each side
      names the stretch it would move to and how much is waiting there, so a step is
      never a guess — and a direction with nothing in it says so instead of moving. */
@@ -554,11 +595,10 @@
     color:var(--color-neutral-500);background:transparent}
   .poi-page.is-off:hover{border-color:var(--color-divider);background:transparent}
   .poi-band-note{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:var(--space-2) 0 var(--space-3)}
+  /* Zoom-in rides the popup's chip row now, so .pa carries its whole look. */
+  .pop-zoom{font-family:inherit;cursor:pointer}
   /* Collapsible filter block. Closed by default so the list starts near the top;
      the summary carries a live state line so a filter can't be silently on. */
-  .pop-zoom{font-family:inherit;font-size:inherit;font-weight:600;cursor:pointer;
-    background:transparent;border:0;padding:0;color:var(--color-accent-700);
-    text-decoration:underline;text-underline-offset:2px}
   .filters{margin-bottom:var(--space-3);border-bottom:1px solid var(--color-divider)}
   .filters-sum{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none;padding:var(--space-2) 0;
     font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);font-weight:600}
@@ -772,17 +812,14 @@
   .about a{color:var(--color-accent)}
 
   /* ---- tab bar ---- */
-  /* Floats over the screens instead of sitting in the flex column, so sliding it
-     away genuinely hands its height back to the list rather than just moving it.
-     Icon-only: five labels bought nothing that five distinct glyphs don't, and cost
-     ~19px on every screen. Translucent so the map reads continuously underneath. */
+  /* Always on screen. Icon-only: five labels bought nothing that five distinct glyphs
+     don't, and cost ~19px on every screen. Translucent so the map reads continuously
+     underneath. */
   .tabbar{position:absolute;left:0;right:0;bottom:0;z-index:900;display:flex;
     background:color-mix(in srgb,var(--color-bg) 92%,transparent);
     -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
     border-top:1px solid var(--color-divider);
-    transition:transform .22s ease;
     padding:6px calc(4px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left))}
-  .tabbar.is-hidden{transform:translateY(100%)}
   .tab{flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer;
     background:transparent;border:0;color:var(--color-neutral-600);padding:4px 2px}
   /* `hidden` alone loses to display:flex, and the Trip tab is hidden by default. */
@@ -790,25 +827,43 @@
   .tab .tab-ic{width:34px;height:26px;display:grid;place-items:center;border-radius:999px;background:transparent}
   .tab.active{color:var(--color-accent)}
   .tab.active .tab-ic{color:var(--color-accent)}
-  @media (prefers-reduced-motion:reduce){ .tabbar{transition:none} }
 
   /* ---- leaflet, themed to the system rather than left at its defaults ---- */
   .leaflet-popup-content-wrapper{background:var(--color-bg);color:var(--color-text);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);font-family:var(--font-body)}
-  .leaflet-popup-content{margin:12px 14px;font-size:12.5px;line-height:1.5}
+  .leaflet-popup-content{margin:13px 15px;font-size:14px;line-height:1.5}
+  /* The pin's action chips, held off the text above them. */
+  .poi-lk{margin-top:10px}
   .leaflet-popup-tip{background:var(--color-bg)}
   /* Move-here confirm. The mile is the headline — it's the thing you're being asked
      to judge, and the reason the tap is worth confirming at all. */
   .mv{min-width:170px;text-align:center}
-  .mv-k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600)}
-  .mv-v{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:17px;
+  .mv-k{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600)}
+  .mv-v{font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:19px;
     margin-top:2px;font-variant-numeric:tabular-nums}
-  .mv-s{font-size:11px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
-  .mv-go{margin-top:var(--space-3);width:100%;cursor:pointer;padding:9px var(--space-3);
-    font-family:var(--font-body);font-size:13px;font-weight:600;line-height:1;color:#fff;
+  .mv-s{font-size:12px;color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
+  .mv-go{margin-top:var(--space-3);width:100%;cursor:pointer;padding:12px var(--space-3);
+    font-family:var(--font-body);font-size:14px;font-weight:600;line-height:1;color:#fff;
     background:var(--color-accent);border:0;border-radius:var(--radius-md)}
   .mv-go:hover{background:var(--color-accent-700)}
   .mv-go:active{background:var(--color-accent-900)}
-  .mv-ll{margin-top:2px;font-size:10.5px;color:var(--color-neutral-500);
+  /* The spot forecast — "when would I be here, and what will it be doing then". Ruled
+     off from the milepost above it because it answers a different question, and given a
+     floor height so the block it loads into is the size it will end up. */
+  .mv-wx{display:flex;flex-direction:column;align-items:center;min-height:54px;
+    justify-content:center;margin-top:var(--space-3);padding-top:var(--space-3);
+    border-top:1px solid var(--color-divider)}
+  .mv-wx-load{font-size:12px;color:var(--color-neutral-500)}
+  .mv-wx .mv-v{font-size:17px}
+  .mv-wx-card{margin-top:7px}
+  /* The rows carry what the card can't: they read as a list, so they keep their own
+     left edge inside the dialog's centred column. */
+  .mv-wx .wxp{margin:6px 0 0}
+  .mv-wx-off{max-width:196px;line-height:1.4;text-align:center;margin-top:4px}
+  /* Capped to the room above the press, so a tall dialog scrolls inside itself. A
+     hairline is the only thing saying so — without it the content simply stops, and the
+     chips under the fold read as absent rather than as further down. */
+  .mv-pop .leaflet-popup-scrolled{border-bottom:1px solid var(--color-divider)}
+  .mv-ll{margin-top:3px;font-size:11.5px;color:var(--color-neutral-500);
     font-variant-numeric:tabular-nums}
   .mv-lk{justify-content:center;margin-top:var(--space-2)}
   /* Chips are a left-reading list, so they opt out of the dialog's centred column. */
@@ -858,6 +913,9 @@
   .leaflet-control-layers.fab-layers.leaflet-control-layers-expanded .leaflet-control-layers-toggle{
     display:block;width:0;height:0;padding:0;border:0;overflow:hidden}
   .leaflet-control-layers.fab-layers .leaflet-control-layers-toggle:hover{background:var(--color-accent-100)}
+  /* Leaflet hides the toggle once the card is open; our FAB rule out-specifies that,
+     so put the hiding back — the glyph has no business inside the list. */
+  .leaflet-control-layers.fab-layers.leaflet-control-layers-expanded .leaflet-control-layers-toggle{display:none}
   .leaflet-control-layers.fab-layers.leaflet-control-layers-expanded{
     background:var(--color-bg);border:1px solid var(--color-divider);
     border-radius:var(--radius-md);box-shadow:var(--shadow-md);
@@ -916,23 +974,23 @@
   /* Beyond the snap tolerance: left where it was tapped, drawn hollow-dashed to say so. */
   .measure-vert.measure-vert-off{border-style:dashed;border-color:#b23b2e}
   /* The pin-popup button that feeds a place into the measurement — filled accent so it
-     reads as the pin's one action, sitting above its row of external links. */
-  .measure-add{font:inherit;font-size:11px;font-weight:600;cursor:pointer;
+     leads the popup's chip row, the one action among a row of external links. */
+  .measure-add{font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;line-height:1.15;
     background:var(--color-accent);color:var(--color-bg);border:0;border-radius:999px;
-    padding:4px 11px;display:inline-flex;align-items:center;gap:5px}
+    min-height:34px;padding:7px 13px;display:inline-flex;align-items:center;gap:5px}
   .measure-add:hover{background:var(--color-accent-700)}
   .mv-measure{margin-top:var(--space-2)}
   /* Readout rides the top-center, above the map and clear of the sheet and FABs. */
   .measure-bar{position:absolute;z-index:650;top:calc(env(safe-area-inset-top) + var(--space-2));
     left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;
-    max-width:calc(100vw - 20px);padding:6px 8px 6px 10px;background:var(--color-bg);
-    border:1px solid var(--color-divider);border-radius:999px;box-shadow:var(--shadow-md);font-size:12px}
+    max-width:calc(100vw - 20px);padding:7px 9px 7px 12px;background:var(--color-bg);
+    border:1px solid var(--color-divider);border-radius:999px;box-shadow:var(--shadow-md);font-size:13.5px}
   /* display:flex above outranks the UA [hidden] rule, so say it here: no band over the
-     map, and no "tap to add points" invitation, until the ruler is actually armed. */
+     map, and no "tap to start" invitation, until the ruler is actually armed. */
   .measure-bar[hidden]{display:none}
   .measure-bar .measure-ic{display:inline-flex;color:var(--color-accent)}
-  .measure-val{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;min-width:92px;text-align:center}
-  .measure-btn{font:inherit;font-size:11px;padding:3px 9px;border-radius:999px;cursor:pointer;
+  .measure-val{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;min-width:88px;text-align:center}
+  .measure-btn{font:inherit;font-size:13px;min-height:32px;padding:6px 12px;border-radius:999px;cursor:pointer;
     background:var(--color-bg);color:var(--color-text);border:1px solid var(--color-divider)}
   .measure-btn:hover:not(:disabled){background:var(--color-accent-100)}
   .measure-btn:disabled{opacity:.4;cursor:default}
@@ -964,12 +1022,27 @@
   .ul-tbl th{text-align:left;padding:1px 8px 1px 0;font-weight:600;
     color:var(--color-neutral-600);white-space:nowrap;vertical-align:top}
   .ul-tbl td{padding:1px 0;vertical-align:top}
-  .poi-src{margin-top:5px;font-size:10.5px;line-height:1.45;color:var(--color-neutral-600)}
+  .poi-src{margin-top:7px;font-size:12px;line-height:1.5;color:var(--color-neutral-600)}
+  /* A note someone wrote about this place — your own reason for the pick, or a reported
+     amenity. Ruled off on the left so it reads as somebody's remark rather than another
+     field the service returned. */
+  .poi-note{margin-top:8px;padding-left:8px;font-size:12.5px;line-height:1.5;
+    border-left:2px solid var(--color-divider);color:var(--color-neutral-700)}
+  .poi-pwr{border-left-color:var(--color-accent-2)}
+  .poi-pwr b{color:var(--color-accent-2)}
+  /* The caveat rides with the claim, never on its own line to be skipped. */
+  .poi-pwr-c{color:var(--color-neutral-500)}
   .leaflet-control-attribution{background:color-mix(in srgb,var(--color-bg) 82%,transparent);font-size:10px;color:var(--color-neutral-600)}
-  .pa-lbl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:9px 0 5px}
-  .pa-row{display:flex;flex-wrap:wrap;gap:4px}
-  a.pa{display:inline-block;background:var(--color-accent-100);color:var(--color-accent-800);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:600;text-decoration:none}
-  a.pa:hover{background:var(--color-accent-200)}
+  .pa-lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:11px 0 6px}
+  .pa-row{display:flex;flex-wrap:wrap;gap:6px}
+  /* Chips are the popup's whole tap surface, so they're sized for a thumb rather than a
+     mouse: 34px tall clears the usual touch-target floor even on the shortest label, and
+     the same rule covers <button> chips so a link and an action feel identical. */
+  .pa{display:inline-flex;align-items:center;min-height:34px;background:var(--color-accent-100);
+    color:var(--color-accent-800);border:0;border-radius:999px;padding:7px 13px;
+    font-family:inherit;font-size:13.5px;font-weight:600;line-height:1.15;
+    text-decoration:none;cursor:pointer}
+  .pa:hover{background:var(--color-accent-200)}
   .poi-pin{display:grid;place-items:center;width:28px;height:28px;color:#fff;background:var(--color-accent);
     border:2px solid #fff;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.45)}
   .poi-pin .ic{color:#fff;stroke-width:2.2}
@@ -1008,6 +1081,19 @@
   .is-hi .poi-lbl{display:block;color:var(--color-bg);background:var(--color-accent-2)}
   .is-hi .poi-pin{background:var(--color-accent-2);transform:scale(1.35);
     box-shadow:0 0 0 5px color-mix(in srgb,var(--color-accent-2) 30%,transparent),0 2px 6px rgba(0,0,0,.5)}
+  /* ---- search hits ----
+     Their own layer in the app's magenta, above every overlay, because most of what a
+     search finds is switched off — the OpenStreetMap corridor is 9,000 pins and off by
+     default, so lighting only the visible markers would light nothing.
+     Labels keep the app's own zoom rule rather than forcing themselves on: a search
+     fits the map to every hit, and at 400 miles across, 35 names is a wall of text
+     over the one thing you asked to see. The ring says where, the table beneath says
+     which, and pointing at a row names its pin at any zoom — see .is-hi below. */
+  .poi-pin.is-hit{width:26px;height:26px;background:var(--color-accent-2);border-color:#fff;
+    box-shadow:0 0 0 4px color-mix(in srgb,var(--color-accent-2) 26%,transparent),0 1px 5px rgba(0,0,0,.45)}
+  .hit-ic .poi-lbl{left:32px;color:var(--color-accent-2);font-weight:700;
+    background:color-mix(in srgb,var(--color-bg) 92%,transparent)}
+  .hit-ic.is-hi .poi-lbl{color:var(--color-bg);background:var(--color-accent-2)}
   /* Lit, a borrowed pin fills like any other — the hollow mark says "which layer",
      the magenta says "this one", and the second has to win while you're pointing. */
   .is-hi .poi-pin.is-osm{border-color:var(--color-accent-2)}
@@ -1019,6 +1105,20 @@
   .poi-item:hover{background:var(--color-accent-100)}
   /* circleMarker dots: lift them off the map tiles */
   .map-dot{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))}
+  /* ---- trail town names ----
+     Sat on top of the dot, in that leg's own colour, so a name reads as belonging to
+     the stop under it rather than floating near it. Solid plate rather than the POI
+     labels' translucent one: these have to hold over satellite imagery too, and they
+     outrank every other name on the map. The two ends and Albany run a size up — the
+     stops you plan a trip around should be readable at a glance across the state.
+     Geometry here is mirrored by TOWN_LB_* in est-core.js, which does the decluttering
+     in pixels before any of this is drawn. Change one, change the other. */
+  .leaflet-marker-icon.town-ic{background:none;border:0;overflow:visible;pointer-events:none}
+  .town-lb{position:absolute;left:0;bottom:14px;transform:translateX(-50%);
+    white-space:nowrap;font-family:var(--font-body);font-size:13px;font-weight:700;
+    line-height:1.35;padding:1px 7px;border-radius:var(--radius-md);
+    background:var(--color-bg);box-shadow:var(--shadow-sm);pointer-events:none}
+  .town-maj{font-size:14.5px;letter-spacing:.005em}
   /* You: the blue dot, with the soft halo every phone map gives it. */
   .me-dot{filter:drop-shadow(0 0 4px rgba(26,115,232,.55)) drop-shadow(0 1px 3px rgba(0,0,0,.35))}
 </style>
@@ -1032,7 +1132,7 @@
            the bottom sheet and FABs. Its ruler glyph is hydrated by the [data-ic] pass. -->
       <div id="measureBar" class="measure-bar" hidden>
         <span class="measure-ic" data-ic="ruler"></span>
-        <span id="measureVal" class="measure-val">Tap the map to add points</span>
+        <span id="measureVal" class="measure-val">Tap to start</span>
         <button id="measureUndo" type="button" class="measure-btn">Undo</button>
         <button id="measureClear" type="button" class="measure-btn">Clear</button>
         <button id="measureDone" type="button" class="measure-btn measure-done">Done</button>
@@ -1236,6 +1336,16 @@
       <div class="screen-pad">
         <h1 class="screen-title">Nearby</h1>
         <div id="poiStat" class="poi-stat"></div>
+        <!-- Searches every place the app holds, the State's and the OpenStreetMap
+             corridor both — which is the only way the 9,000 bundled ones are reachable
+             as a list at all. Shares its query with the map's Find bar. -->
+        <div class="poi-search">
+          <span class="poi-search-ic" data-ic="search"></span>
+          <input id="poiQ" type="search" inputmode="search" enterkeyhint="search" autocomplete="off"
+            placeholder="Search every place — walmart, dunkin, bike…"
+            aria-label="Search every place on or near the trail by name or town">
+          <button id="poiQX" type="button" class="poi-search-x" aria-label="Clear the search" hidden>&times;</button>
+        </div>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
         <!-- Class-keyed, not id-keyed, all the way down: the map sheet carries a second
@@ -1311,8 +1421,8 @@
           <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
         </div>
         <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
-        <div id="wxOut" class="wx-out"></div>
-        <p class="poi-band-note">One hourly strip per town coming up, from the US National Weather Service (api.weather.gov). <b>Miles a day</b> sets how far ahead it looks and where each night’s stop falls; your riding speed (in More, currently <b id="wxSpeedEcho">12</b> mph) sets the hour you’d roll into each town. Each strip runs into the night — swipe it left to read the overnight. Tap a town name for its full weather.gov page.</p>
+        <div id="wxOut"></div>
+        <p class="poi-band-note">The next four days along the route ahead of you, on one NWS-style graph, from the US National Weather Service (api.weather.gov). <b>Miles a day</b> and your riding speed (in More, currently <b id="wxSpeedEcho">12</b> mph) decide where you’d be at each forecast hour; the <b>ride window</b>, <b>start date</b> and a <b>zero</b> (rest) day are set on the graph itself. Drag the strip sideways for later hours; tap an hour to read it. The wind line is coloured by what the wind does to <em>you</em> — red headwind, amber crosswind, green tailwind.</p>
       </div>
     </section>
 
@@ -1351,8 +1461,8 @@
         <p class="poi-band-note">Anything you add turns up in the map’s layers control, off until you switch it on, and can be dragged into whatever order you want it drawn in. An ArcGIS URL is a single layer’s endpoint — the one ending in a number. It’s fetched over New York, up to 2,000 features, and stored as the URL so it stays current. A GPX is stored as its points, since there’s nowhere to fetch it back from.</p>
         <div id="locStatus" class="locstat">Tap Locate on the map, tap the map itself, or pick a simulated spot to set where you are.</div>
         <div class="about">
-          Route and every trail-mile are measured along the official Empire State Trail GPX (Oct 2025). Facility pins load live from NY State's public service; confirm a specific business before relying on it.<br><br>
-          <b>Sources:</b> <a href="https://empiretrail.ny.gov/trip-planning" target="_blank" rel="noopener">EST Trip Planning</a> · <a href="https://empiretrail.ny.gov/map" target="_blank" rel="noopener">EST Map &amp; GPS</a> · <a href="https://en.wikipedia.org/wiki/Empire_State_Trail" target="_blank" rel="noopener">Wikipedia</a>. Use RideWithGPS for turn-by-turn.
+          Route and every trail-mile are measured along <a href="https://ridewithgps.com/routes/56414694" target="_blank" rel="noopener">Judd EST 2026</a> — a ridden plan, not the state's published centreline. It follows the official route for most of its 582 miles, then takes its own way through Putnam County and, past Lockport, leaves the canal for Lake Ontario and comes down the Niagara into Buffalo. Facility pins load live from NY State's public service; confirm a specific business before relying on it.<br><br>
+          <b>Sources:</b> <a href="https://ridewithgps.com/routes/56414694" target="_blank" rel="noopener">the route itself</a> · <a href="https://empiretrail.ny.gov/trip-planning" target="_blank" rel="noopener">EST Trip Planning</a> · <a href="https://empiretrail.ny.gov/map" target="_blank" rel="noopener">EST Map &amp; GPS</a> · <a href="https://en.wikipedia.org/wiki/Empire_State_Trail" target="_blank" rel="noopener">Wikipedia</a>. Use RideWithGPS for turn-by-turn.
         </div>
       </div>
     </section>
