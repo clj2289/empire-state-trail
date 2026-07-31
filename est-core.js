@@ -110,6 +110,14 @@ const POP_PANE_Z='1200';
 // is sampled for forecasts — one grid fetch per distinct sample cell.
 const WX_OUTLOOK_DAYS=4;
 const WX_SAMPLE_MI=12;
+/* The spot forecast. The Outlook stops where a forecast stops, but an arrival time costs
+   nothing to work out, so a tapped spot's own timeline runs far enough to date any point
+   on the trail — three weeks covers the whole 750 miles even at a gentle 40 a day. */
+const WX_ETA_DAYS=21;
+/* How far off the line a press can land and still be asking about the route. Beyond it
+   the tap is about somewhere else, and gets a forecast without an arrival. Same figure
+   the map layer's anchor uses, so panning and pressing agree on what counts as on-route. */
+const WX_SPOT_OFF_MI=8;
 
 /* ---- NYSDOT traffic counts -------------------------------------------------
    The AADT layer behind the state's Traffic Data Viewer: annual average daily
@@ -767,6 +775,43 @@ function outlookTowns(plan, townList, anchorMile, sgn){
   out.forEach(o=>{ o.start=(o.name===startPick); });
   out.sort((a,b)=>a.ahead-b.ahead);
   return out;
+}
+
+/* When the plan puts the rider at one arbitrary milepost. `outlookTowns` asks this of
+   every town at once; a tapped spot asks it of a single mile, and gets it the same way —
+   the first plan hour at or past the target, with the minute interpolated across the hour
+   that straddles it. Null when the timeline never gets there. Callers rule out "behind
+   you" first: a target the rider has already passed reads as reached at hour zero, which
+   would date it to the morning the plan started rather than to a real arrival. */
+function arrivalAtMile(plan, targetMi, sgn){
+  const H=plan.hours;
+  const passed=m=> sgn>0 ? m>=targetMi-1e-9 : m<=targetMi+1e-9;
+  for(let i=0;i<H.length;i++){
+    if(!passed(H[i].mile)) continue;
+    /* The timeline closes each day by setting the rider to that day's end mile whether
+       or not the hours were ridden — opening the app after the ride window leaves a day
+       with no riding hours but a full day's miles credited to it at midnight. That is a
+       jump nobody pedalled, and interpolating a minute across it dates the arrival to
+       the small hours of a day already gone. An arrival is an hour the rider is moving:
+       a crossing anywhere else means the plan carried them past in their sleep, and the
+       earliest honest answer is the next hour they are back on the bike. */
+    if(!H[i].riding){
+      for(let j=i;j<H.length;j++) if(H[j].riding) return H[j].tMs;
+      return null;
+    }
+    /* An hour record carries the mile the rider ends that hour on, stamped with the hour
+       it starts — so the ground between the previous record and this one is covered
+       during this hour, and the fraction is laid forward from this record's own clock.
+       Measuring it back from the previous stamp puts every arrival an hour early, which
+       shows up as crossings dated before the ride window has even opened. */
+    const prev=H[i-1];
+    if(prev && abs(H[i].mile-prev.mile)>1e-6){
+      const f=(targetMi-prev.mile)/(H[i].mile-prev.mile);
+      return H[i].tMs+Math.round(Math.max(0,Math.min(1,f))*60)*60000;
+    }
+    return H[i].tMs;
+  }
+  return null;
 }
 
 async function fetchSource(src){
@@ -1729,17 +1774,38 @@ class TrailApp {
     const off=pr.off>=0.1 ? '<div class="mv-s">'+fmtMi(pr.off)+' mi off the route</div>' : '';
     const delta=this.myMile==null ? '' : '<div class="mv-s">'+fmtMi(abs(pr.mile-this.myMile))+' mi from where you are now</div>';
     const a=(u,t)=>'<a href="'+u+'" target="_blank" rel="noopener" class="pa">'+t+'</a>';
-    L.popup({className:'mv-pop',autoPan:false}).setLatLng(ll).setContent(
-      '<div class="mv"><div class="mv-k">This spot</div>'
+    /* A node rather than a string, because the forecast lands in this dialog after it
+       has opened: Leaflet re-renders string content from scratch on every update(), so
+       a patched-in block would be wiped by the very re-measure that has to follow it.
+       Handed a node, update() re-attaches the same node and leaves its contents alone. */
+    const root=document.createElement('div');
+    root.className='mv';
+    root.innerHTML=
+      '<div class="mv-k">This spot</div>'
       +'<div class="mv-v">Trail mile '+fmtMp(pr.mile)+'</div>'+off+delta
+      /* Filled in by fillSpotWx once the forecast lands. It holds its own height from
+         the start so the dialog doesn't jump out from under the thumb that opened it. */
+      +'<div class="mv-wx"><div class="mv-wx-load">Reading the forecast…</div></div>'
       +'<div class="mv-ll">'+ll.lat.toFixed(5)+', '+ll.lng.toFixed(5)+'</div>'
+      // weather.gov joins the links row rather than the block above it: the forecast
+      // office's own page is there instantly and stays there even if the fetch fails.
       +'<div class="pa-row mv-lk">'+a(atLink(ll.lat,ll.lng),'Google Maps')
-      +a(panoLink(ll.lat,ll.lng),'Street View')+'</div>'
+      +a(panoLink(ll.lat,ll.lng),'Street View')+a(nwsLink(ll.lat,ll.lng),'weather.gov')+'</div>'
       +(this.tapToSet?'<button type="button" class="mv-go">Move me here</button>':'')
       // Same chips the town popups carry — a tap anywhere is often about "what's
       // around here", not "put me here", and that shouldn't need a known town.
-      +'<div class="mv-find">'+findNearbyRow(ll.lat,ll.lng)+'</div></div>'
-    ).openOn(this.map);
+      +'<div class="mv-find">'+findNearbyRow(ll.lat,ll.lng)+'</div>';
+    /* The dialog has grown a forecast, and a long press lands wherever the thumb is. A
+       popup opens upward from its anchor, so the room it actually has is the room above
+       the press — not the height of the map. Autopan would solve it by moving the map,
+       which this one deliberately doesn't do: sliding the ground out from under a press
+       also re-reads the traffic layer and the Nearby range band, so a question about a
+       spot would quietly redraw three other things. Cap it to the space it has instead,
+       and let the overflow scroll inside the dialog. */
+    const py=this.map.latLngToContainerPoint(ll).y;
+    const pop=L.popup({className:'mv-pop',autoPan:false,maxHeight:Math.max(150, Math.round(py)-56)})
+      .setLatLng(ll).setContent(root).openOn(this.map);
+    this.fillSpotWx(pop, ll, pr);
   }
   // Town buttons carry their own coordinates; a bare map tap uses the armed point.
   confirmMove(btn){
@@ -3513,12 +3579,19 @@ class TrailApp {
   wxCard(r, kind){
     const mph=r.mph==null?null:Math.round(r.mph);
     const calm=mph==null || mph<3;
-    const col=calm?'#5f6368':this.wxKindColor(kind);
+    /* No heading — a spot off the route, or an office not modelling wind direction —
+       means there is no head or tail to name. wxKind calls that 'cross', which is the
+       right default for a map pin sitting on the line but a claim this card must not
+       make about a point with no line under it: the speed still stands, so the band
+       reads as plain wind in the neutral colour instead. */
+    const bare=!calm && !r.parts;
+    const col=(calm||bare)?'#5f6368':this.wxKindColor(kind);
     return '<div class="wxc" style="border-color:'+col+'">'
       +'<div class="wxc-hd">'+icon(skyIcon(r.short),20)
         +'<b>'+(r.temp==null?'\u2014':r.temp+'\u00b0')+'</b></div>'
       +'<div class="wxc-w" style="background:'+col+'">'
         +(calm?'<span>CALM</span>'
+          :bare?'<span>WIND</span><b>'+mph+'</b>'
               :icon(this.wxKindGlyph(kind),13)+'<span>'+this.wxKindWord(kind)+'</span><b>'+mph+'</b>')
       +'</div></div>';
   }
@@ -3683,6 +3756,114 @@ class TrailApp {
     this.wxData=data;
     if(this.wxCur==null){ const f=data.hours.find(hh=>hh.riding); this.wxCur=f?data.hours.indexOf(f):0; }
     this.renderOutlook();
+  }
+
+  /* ---------- the spot forecast ----------
+     The map layer answers "what am I riding into today" and the Outlook answers "what do
+     the next four days hold", both anchored to the rider. This answers a question about a
+     place: press and hold anywhere and get the hour you'd reach it and the weather waiting
+     for you then, rather than the weather there now. It runs off the same plan the Outlook
+     draws — direction, speed, miles a day, ride window, zero day, and the same integrator
+     — so a tapped spot and the Outlook are reading one plan rather than two. */
+
+  /* The arrival at a milepost, with the reason there isn't one when there isn't one. The
+     cases are all things a rider can act on: no position to count from, a spot already
+     behind, a spot the plan never reaches. */
+  spotEta(mile){
+    if(mile==null || !isFinite(mile)) return {err:'off'};
+    const po=this.wxPlanOpts();
+    // Nothing to count from. The forecast still stands on its own, so this costs the
+    // arrival line rather than the whole block.
+    if(po.err) return {err:'anchor'};
+    const sgn=po.opts.sgn, ahead=(mile-po.anchor)*sgn;
+    // Within a third of a mile you are standing on it, whichever way you're pointed.
+    if(ahead<=0.3) return {ahead, from:po.anchor,
+      at: ahead>=-0.3 ? Date.now() : null, behind: ahead<-0.3};
+    const at=arrivalAtMile(planTimeline({...po.opts, days:WX_ETA_DAYS}), mile, sgn);
+    // An arrival is never in the past. arrivalAtMile already refuses the overnight
+    // jumps that could produce one; this is the invariant stated where it's read, so
+    // no future change to the timeline can quietly put a clock time behind the rider.
+    return at==null ? {ahead, from:po.anchor, at:null, beyond:true}
+                    : {ahead, from:po.anchor, at:Math.max(at, Date.now())};
+  }
+  /* "today", "tomorrow", then the date. A bare weekday goes ambiguous the moment a plan
+     runs past a week, and this one runs to three. */
+  wxDayWord(ms){
+    const midnight=t=>{ const x=new Date(t); x.setHours(0,0,0,0); return x.getTime(); };
+    const n=Math.round((midnight(ms)-midnight(Date.now()))/864e5);
+    if(n===0) return 'Today';
+    if(n===1) return 'Tomorrow';
+    return new Date(ms).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+  }
+  /* Fetch one point's hourly and fill the block in place. The dialog opens immediately
+     with everything that costs nothing, and this lands underneath it a moment later —
+     a long press should never wait on a network before it tells you where you tapped. */
+  async fillSpotWx(pop, ll, pr){
+    const onRoute = pr && pr.mile!=null && pr.off<=WX_SPOT_OFF_MI;
+    const eta = onRoute ? this.spotEta(pr.mile) : null;
+    // With no arrival to aim at — off the route, behind you, or nothing to count from —
+    // the question falls back to "what is it doing there now", which is still an answer.
+    const when = (eta && eta.at!=null) ? eta.at : Date.now();
+    let periods=null, failed=false;
+    try{ periods=await this.nwsHourly(ll.lat,ll.lng); }
+    catch(e){ failed=true; }
+    /* The dialog is a transient thing: a second long press closes this one, and an answer
+       about a spot nobody is looking at any more belongs nowhere. Re-finding the block
+       through the live popup rather than holding a node means a closed-and-reopened
+       dialog can't be written into by the fetch it started. */
+    const el = pop.isOpen() && pop.getElement() ? pop.getElement().querySelector('.mv-wx') : null;
+    if(!el) return;
+    /* Strictly the hour containing the arrival — never wxAt's nearest-or-first fallback.
+       An arrival three weeks out has no forecast hour, and today's weather printed under
+       "Saturday week" is worse than an honest gap. */
+    const w = periods ? periods.find(p=>{
+      const a=Date.parse(p.startTime), b=Date.parse(p.endTime);
+      return when>=a && when<b;
+    }) : null;
+    el.innerHTML=this.spotWxHtml({eta, when, w:w||null, failed, mile:onRoute?pr.mile:null});
+    // The block grew, so the popup has to re-measure or it keeps the loading line's box.
+    pop.update();
+  }
+  /* Three parts, in the order the question gets asked: when you'd be there, what it will
+     be doing then, and — through the chip in the links row — the office's own page for
+     everything a popup can't hold. */
+  spotWxHtml(o){
+    const e=o.eta, h=[];
+    const arriving = e && e.at!=null && e.ahead>0.3;
+    if(arriving){
+      // The assumptions ride with the estimate. This is a plan multiplied out, not a
+      // measurement, and the two numbers that drive it are both settings you can change.
+      const from = this.myMile==null ? 'ahead of '+mpTxt(e.from) : 'ahead of you';
+      h.push('<div class="mv-k">When you’d get here</div>'
+        +'<div class="mv-v">'+esc(this.wxDayWord(e.at))+', '+esc(this.wxClock(e.at))+'</div>'
+        +'<div class="mv-s">'+fmtMi(e.ahead)+' mi '+esc(from)+'</div>'
+        +'<div class="mv-s">'+Math.round(this.wxPerDay||60)+' mi a day at '+this.avgSpeed+' mph</div>');
+    } else {
+      const why = !e ? 'Off the route, so there’s no arrival to work out.'
+        : e.err==='anchor' ? 'Set where you are to get an arrival time.'
+        : e.behind ? 'You’ve passed here — '+fmtMi(-e.ahead)+' mi back.'
+        : e.beyond ? 'Further than this plan reaches.'
+        : 'About where you are now.';
+      h.push('<div class="mv-k">Here right now</div><div class="mv-s">'+esc(why)+'</div>');
+    }
+    if(o.failed){
+      h.push('<div class="mv-s mv-wx-off">No answer from api.weather.gov — it’s the US forecast service, and it does go down.</div>');
+    } else if(!o.w){
+      h.push('<div class="mv-s mv-wx-off">'+(arriving
+        ? 'That’s past the end of the forecast, which runs about a week out.'
+        : 'No forecast hour covers that.')+'</div>');
+    } else {
+      // Same card the map pins carry, so a spot and a pin read identically. Off the
+      // route there is no heading, and the card says plain wind rather than naming a
+      // head or a tail the rider has no direction to have.
+      const r=this.wxRead({w:o.w, hdg:o.mile==null?null:this.routeBearing(o.mile)}), kind=this.wxKind(r);
+      const rows=[['Sky', esc(r.short||'—')], ['Rain', r.pop==null?'—':r.pop+'%']];
+      if(r.parts && kind!=='cross' && r.parts.cross>=5) rows.push(['Across', Math.round(r.parts.cross)+' mph']);
+      h.push('<div class="mv-wx-card">'+this.wxCard(r,kind)+'</div>'
+        +'<table class="wxp">'
+        +rows.map(x=>'<tr><th>'+x[0]+'</th><td>'+x[1]+'</td></tr>').join('')+'</table>');
+    }
+    return h.join('');
   }
 
   /* ---------- the meteogram (concept "Broadsheet re-cut") ----------
