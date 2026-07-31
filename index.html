@@ -204,17 +204,14 @@
   /* Weather pins carry their reading in the label — a bare marker would mean tapping
      six of them to learn what the layer is for. The arrow flies the way the wind
      blows, and the colour says whether that helps you or costs you. */
-  /* A chain wordmark or a rate you looked up, in place of the generic bed. Anchored
-     at 0,0 so the chip can size itself to its text and still sit on its coordinate. */
+  /* A chain wordmark in place of the generic bed. Anchored at 0,0 so the chip can size
+     itself to its text and still sit on its coordinate. */
   .poi-chip-ic{background:none;border:0;overflow:visible}
   .poi-chip{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;gap:3px;
     padding:2px 5px;white-space:nowrap;font-family:var(--font-body);font-size:10px;font-weight:700;
     letter-spacing:.02em;line-height:1;background:var(--color-bg);color:var(--color-neutral-700);
     border:1.5px solid var(--color-neutral-400);border-radius:999px;box-shadow:var(--shadow-md)}
   .poi-chip .ic{flex:none}
-  .poi-chip .chip-p{padding-left:3px;border-left:1px solid var(--color-divider);
-    color:var(--color-text);font-variant-numeric:tabular-nums}
-  .poi-chip.has-price{border-width:2px}
   /* A pin you dropped from a Find-nearby search: magenta, the app's rare second spot
      colour, so it never reads as one of the trail's own facilities. Anchored at 0,0 and
      lifted above its point with a little tail, like a dropped marker. */
@@ -233,21 +230,6 @@
     padding:6px 8px;background:transparent;color:var(--color-accent-2);
     border:1px solid var(--color-accent-2);border-radius:var(--radius-md)}
   .srch-rm:hover{background:color-mix(in srgb,var(--color-accent-2) 10%,transparent)}
-  /* A rate you saved, in the row and in the popup. */
-  .poi-pr{flex:0 0 auto;font-size:11px;font-weight:700;color:var(--color-text);
-    font-variant-numeric:tabular-nums}
-  .pr-row{display:flex;align-items:center;gap:4px;margin-top:6px;padding-top:6px;
-    border-top:1px solid var(--color-divider)}
-  .pr-c{font-size:12px;color:var(--color-neutral-600)}
-  .pr-amt{width:52px}
-  .pr-date{width:112px}
-  .pr-row input{min-width:0;font-family:inherit;font-size:12px;padding:4px 6px;
-    background:var(--color-surface);color:var(--color-text);
-    border:1px solid var(--color-divider);border-radius:var(--radius-md)}
-  .pr-row button{font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;
-    padding:4px 7px;background:transparent;border:1px solid var(--color-divider);
-    border-radius:var(--radius-md);color:var(--color-accent-700)}
-  .pr-row button:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
   /* What a pin costs you to reach, as figures rather than a sentence. */
   .rd-row{display:flex;gap:5px;margin:8px 0 2px;text-align:center;
     font-variant-numeric:tabular-nums}
@@ -642,6 +624,74 @@
   .sort-say{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:0 0 var(--space-2)}
   .sort-say:empty{display:none}
 
+  /* ---- searching from the table itself ----
+     The name box has existed since the filters shipped, folded inside a <details> on
+     three screens. A rider looking at a list and wanting one row out of it should not
+     have to open a drawer to say so, so the box comes out and sits on the table: always
+     visible, always the same shared string — class f-nameQ IS the whole wiring, because
+     the input delegate reads the element that was typed into and fSet mirrors every copy
+     — with the live count beside it, so a short table is explained by the box that
+     shortened it rather than leaving the rider to wonder where the rest went. */
+  .searchbar{display:flex;align-items:center;gap:var(--space-2);margin:0 0 var(--space-2);
+    padding:0 var(--space-3);background:var(--color-surface);
+    border:1px solid var(--color-divider);border-radius:999px}
+  .searchbar:focus-within{border-color:var(--color-accent);
+    box-shadow:0 0 0 3px var(--color-accent-100)}
+  .searchbar-ic{flex:none;display:flex;align-items:center;color:var(--color-neutral-500)}
+  .searchbar:focus-within .searchbar-ic{color:var(--color-accent-700)}
+  /* Borderless inside the pill, because the pill is the field. min-width:0 so a long
+     query shrinks the input instead of shoving the count and the clear off the end. */
+  .searchbar-q{flex:1;min-width:0;min-height:44px;font:inherit;font-size:13.5px;
+    color:var(--color-text);background:transparent;border:0;padding:0}
+  .searchbar-q:focus{outline:none}
+  /* WebKit's own clear glyph is 12px, appears only while the field has focus, and has no
+     hit area worth aiming at from a bike. Ours is a real 44px button that is there the
+     moment there is something to clear. */
+  .searchbar-q::-webkit-search-cancel-button,
+  .searchbar-q::-webkit-search-decoration{-webkit-appearance:none;display:none}
+  .searchbar-ct{flex:none;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;
+    color:var(--color-neutral-600);white-space:nowrap}
+  .searchbar-ct:empty{display:none}
+  /* Nothing matched is the one count worth a colour: it is the answer to "is it me or is
+     it the trail", and it is the moment the chips below become the thing to reach for. */
+  .searchbar-ct.is-none{color:var(--color-accent-2)}
+  .searchbar-x{flex:none;min-width:44px;min-height:44px;padding:0;cursor:pointer;
+    font:inherit;font-size:19px;line-height:1;background:transparent;border:0;
+    color:var(--color-neutral-500)}
+  .searchbar-x:hover{color:var(--color-accent-700)}
+  .searchbar-x[hidden]{display:none}
+
+  /* ---- the query, as things you can take back off ----
+     The folded summary has always said what is narrowing the list and has never been able
+     to say it in a way you can act on: it lives inside a <summary>, so a tap on it opens
+     the block rather than doing what the tap looked like it would do. These are the same
+     facets as buttons — one tap drops one of them, from the screen the list is on, with
+     nothing opened. Only what the rider actually set: the shipped defaults are not a
+     query, and a chip you would never want to press is a chip that costs a line for
+     nothing. Named for the query rather than for the filters because the name box is in
+     here too, and on these screens the search and the filters are one thing. */
+  .qchips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 var(--space-2)}
+  .qchips:empty{display:none}
+  .qchip{display:inline-flex;align-items:center;gap:6px;max-width:100%;cursor:pointer;
+    font:inherit;font-size:11px;font-weight:600;padding:6px var(--space-2) 6px var(--space-3);
+    color:var(--color-accent-700);background:var(--color-accent-100);
+    border:1px solid var(--color-accent);border-radius:999px}
+  .qchip:hover{background:var(--color-accent-200)}
+  .qchip-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* The ✕ is drawn, not typed: it has to keep its size when the label beside it is
+     ellipsised, and a glyph inside a flex child gets no such promise. */
+  .qchip-x{flex:none;font-size:13px;line-height:1;opacity:.75}
+  .qchip:hover .qchip-x{opacity:1}
+  /* Sheet copy: one line that scrolls, never two that wrap — the same rule the sortbar
+     above it keeps, and for the same reason. A second line of chrome in the sheet is a
+     second line the map does not get back. Tighter gutters here than on the two full
+     screens for the same reason: the sheet is paying for this row out of the list. */
+  .panel-tools .qchips{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    scrollbar-width:none;-ms-overflow-style:none;margin-bottom:6px}
+  .panel-tools .qchips::-webkit-scrollbar{display:none}
+  .panel-tools .qchip{flex:none;max-width:60vw}
+  .panel-tools .searchbar{margin-bottom:6px}
+
   /* ---- filters: saying so, from every screen the filter reaches ----
      Eleven-pixel grey text was enough when a filter and the list it narrowed were on
      the same screen. The trail-mile range and the name box now reach three, so the
@@ -653,18 +703,17 @@
     margin-left:calc(var(--space-2) * -1)}
   .filters.is-on .filters-t,.filters.is-on .filters-state{color:var(--color-accent-700)}
   .filters-sum{min-height:44px}
-  /* Clear sits outside the <summary>, not in it. A <summary> is itself an activatable
-     control, and a button nested inside one is commonly folded into its accessible name
-     and unreliably reachable — iOS VoiceOver, this app's primary screen reader, worst of
-     all. Outside, it is an ordinary button, it needs no preventDefault to stop the block
-     toggling, and it stays visible open or closed — which is the point, because the
-     rider who needs it is the one who never opened the block. */
-  .filters-clear{display:flex;justify-content:flex-end;margin:0 0 var(--space-2)}
-  .filters-clear[hidden]{display:none}
-  .filters-x{font:inherit;font-size:11px;font-weight:600;letter-spacing:0;text-transform:none;
-    cursor:pointer;background:transparent;border:1px solid var(--color-accent);border-radius:999px;
-    color:var(--color-accent-700);min-height:44px;padding:0 var(--space-3)}
-  .filters-x[hidden]{display:none}
+  /* Clear still sits outside the <summary>, and for the reason it always did: a <summary>
+     is itself an activatable control, and a button nested inside one is commonly folded
+     into its accessible name and unreliably reachable — iOS VoiceOver, this app's primary
+     screen reader, worst of all. It has moved to the end of the chip row rather than
+     standing in a band of its own, because the two said the same thing in two rows: the
+     row of chips IS "here is what is on", and the last one being "take it all off" is
+     where a hand already at the chips would look. Outlined rather than filled, so it does
+     not read as a seventh facet. Same button, same data-clearf, same handler. */
+  .qchip-all{color:var(--color-accent-700);background:transparent;
+    padding-right:var(--space-3)}
+  .qchip-all:hover{background:var(--color-accent-100)}
   /* A third state on the chip is a bike-specific need — "somewhere with no campground"
      is how you rule a stop out of a day plan — so it gets its own tint rather than a
      second control the rider has to go and find. Same tap-to-cycle as the sort headers,
@@ -1060,17 +1109,26 @@
               <button type="button" class="poi-band-clear" data-clearoff>Clear</button>
             </div>
             <p class="poi-band-note">How far you are willing to leave the route. Places right on the trail always pass — a spur only counts once it is a tenth of a mile, the same threshold the list uses when it breaks a distance down.</p>
-            <label class="switch switch-sm"><input type="checkbox" class="f-priced"> Only places I’ve noted a rate for</label>
-            <p class="poi-band-note">Rates are the ones you looked up and typed into a pin yourself; nothing here fetches a price. This is how you get back to the beds you already checked.</p>
           </details>
-          <div class="filters-clear" hidden><button type="button" class="filters-x" data-clearf="poi">Clear every filter</button></div>
+          <!-- Third copy, and the one that earns the feature: this is where the rider is
+               when they are actually riding. Same shared string, same class-keyed wiring,
+               and it lives inside the sheet below the grab bar — so it goes with the list
+               and the stats at the shut snap and the resting map stays exactly as bare as
+               it was. The chip row here scrolls sideways rather than wrapping; see the CSS. -->
+          <div class="searchbar" data-sview="poi">
+            <span class="searchbar-ic" data-ic="search" aria-hidden="true"></span>
+            <input type="search" class="f-nameQ searchbar-q" inputmode="search" enterkeyhint="search"
+              autocomplete="off" placeholder="Search places" aria-label="Search places by name">
+            <span class="searchbar-ct" data-searchct></span>
+            <button type="button" class="searchbar-x" data-searchclear aria-label="Clear the search" hidden>&times;</button>
+          </div>
+          <div class="qchips" data-qview="poi"></div>
           <div class="sortbar" role="group" aria-label="Sort the list">
             <span class="sortbar-l">Sort</span>
             <button type="button" class="sh" data-sv="poi" data-sc="ride"><span class="sh-t">Distance</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
             <button type="button" class="sh" data-sv="poi" data-sc="nm"><span class="sh-t">Name</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
             <button type="button" class="sh" data-sv="poi" data-sc="mile"><span class="sh-t">TM</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
             <button type="button" class="sh" data-sv="poi" data-sc="spur"><span class="sh-t">Detour</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
-            <button type="button" class="sh" data-sv="poi" data-sc="price"><span class="sh-t">Rate</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
             <button type="button" class="sh-x" data-sortclear="poi" hidden>Clear sort</button>
           </div>
         </div>
@@ -1135,7 +1193,20 @@
                rider who never turned the tab on could not reach the filter at all. -->
           <label class="switch switch-sm"><input type="checkbox" class="f-showPassed"> Show stops I’ve already passed</label>
         </details>
-        <div class="filters-clear" hidden><button type="button" class="filters-x" data-clearf="itin">Clear every filter</button></div>
+        <!-- Search, on the table rather than in the drawer above it. The class is the
+             whole wiring: f-nameQ is the same shared string the drawer's box carries, so
+             typing here narrows Nearby and the map list too and the copies mirror each
+             other through fSet. data-sview names the view whose count the readout prints
+             — the block is otherwise id-free, because the map sheet ships a second copy
+             of the poi one and an id that exists twice answers for only one of them. -->
+        <div class="searchbar" data-sview="itin">
+          <span class="searchbar-ic" data-ic="search" aria-hidden="true"></span>
+          <input type="search" class="f-nameQ searchbar-q" inputmode="search" enterkeyhint="search"
+            autocomplete="off" placeholder="Search stops" aria-label="Search stops by name">
+          <span class="searchbar-ct" data-searchct></span>
+          <button type="button" class="searchbar-x" data-searchclear aria-label="Clear the search" hidden>&times;</button>
+        </div>
+        <div class="qchips" data-qview="itin"></div>
         <p class="sort-say" role="status" data-sv="itin"></p>
         <div class="table-wrap" data-scroller>
           <table class="itin">
@@ -1210,17 +1281,22 @@
             <button type="button" class="poi-band-clear" data-clearoff>Clear</button>
           </div>
           <p class="poi-band-note">How far you are willing to leave the route. Places right on the trail always pass — a spur only counts once it is a tenth of a mile, the same threshold the list uses when it breaks a distance down.</p>
-          <label class="switch switch-sm"><input type="checkbox" class="f-priced"> Only places I’ve noted a rate for</label>
-          <p class="poi-band-note">Rates are the ones you looked up and typed into a pin yourself; nothing here fetches a price. This is how you get back to the beds you already checked.</p>
         </details>
-        <div class="filters-clear" hidden><button type="button" class="filters-x" data-clearf="poi">Clear every filter</button></div>
+        <!-- Second home of the same shared string — see the Trip copy. -->
+        <div class="searchbar" data-sview="poi">
+          <span class="searchbar-ic" data-ic="search" aria-hidden="true"></span>
+          <input type="search" class="f-nameQ searchbar-q" inputmode="search" enterkeyhint="search"
+            autocomplete="off" placeholder="Search places" aria-label="Search places by name">
+          <span class="searchbar-ct" data-searchct></span>
+          <button type="button" class="searchbar-x" data-searchclear aria-label="Clear the search" hidden>&times;</button>
+        </div>
+        <div class="qchips" data-qview="poi"></div>
         <div class="sortbar" role="group" aria-label="Sort the list">
           <span class="sortbar-l">Sort</span>
           <button type="button" class="sh" data-sv="poi" data-sc="ride"><span class="sh-t">Distance</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
           <button type="button" class="sh" data-sv="poi" data-sc="nm"><span class="sh-t">Name</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
           <button type="button" class="sh" data-sv="poi" data-sc="mile"><span class="sh-t">TM</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
           <button type="button" class="sh" data-sv="poi" data-sc="spur"><span class="sh-t">Detour</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
-          <button type="button" class="sh" data-sv="poi" data-sc="price"><span class="sh-t">Rate</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
           <button type="button" class="sh-x" data-sortclear="poi" hidden>Clear sort</button>
         </div>
         <p class="sort-say" role="status" data-sv="poi"></p>
