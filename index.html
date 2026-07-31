@@ -160,22 +160,69 @@
     transition:height .24s ease}
   .map-panel.is-dragging{transition:none}
   /* Anchored to the panel's own top edge, so they ride up and down with it and never
-     end up underneath it — which a fixed offset from the viewport could not manage. */
-  .map-fabs{position:absolute;bottom:100%;right:calc(var(--space-3) + env(safe-area-inset-right));
-    display:flex;flex-direction:column;align-items:flex-end;gap:var(--space-2);margin-bottom:var(--space-3)}
-  .panel-grab{flex:none;width:100%;display:flex;flex-direction:column;align-items:center;
+     end up underneath it — which a fixed offset from the viewport could not manage.
+     Raised, though, the sheet leaves less map than the rail is tall, and the buttons at
+     its head walked off the top of the screen where no thumb could follow. So the rail is
+     capped to the strip of map it is actually standing in and scrolls for the rest. CSS
+     cannot name that strip: this element's containing block IS the sheet, so a percentage
+     here would measure the thing in the way rather than what is left above it. syncMapStrip
+     measures it and publishes it as --map-strip; the 100dvh below is only what stands in
+     before the first measurement lands, which is how the rail behaved when it had no cap.
+     --fab-room is the height a control may actually occupy: the strip, less the notch and
+     the same top gutter every other top-anchored thing on this screen keeps, less the
+     gutter that holds the rail clear of the sheet. The floor is one button, because a rail
+     with nothing in it means no zoom and no layers card at the full snap, and the outer min
+     is the promise that the floor can never buy that room off the top of the screen. That
+     promise has to pay for the rail's own bleed as well as the gutter it keeps off the sheet:
+     leave the bleed out of it, as this did, and any strip under 71px hands the rail ten
+     pixels it hasn't got. Where the honest arithmetic comes out at nothing, nothing is what
+     you get — as much of the layers button as there is map to put it in — and the outer max
+     is there because the honest arithmetic in landscape is less than nothing, which CSS
+     would read as no cap at all and hang the whole rail above the top of the screen.
+     Which end goes missing is decided in script rather than here. A scroller rests at its
+     flex-start, so syncMapStrip puts this one back on its foot every time the strip moves:
+     the zoom pair and the layers control, the two nearest the thumb, stay where they have
+     always been and it is find, at the far end, that scrolls away. A column-reverse would
+     buy the same resting place for free and charge for it in reading order, running Tab and
+     a VoiceOver swipe up the rail while the eye reads down it.
+     The bleed is shadow room: overflow-y clips on both axes, so without it every FAB would
+     lose --shadow-md flat against the padding box. The right offset and the bottom margin
+     each step back by exactly the bleed, so the buttons land where they always did, and the
+     cap adds it back on because box-sizing is border-box. */
+  .map-fabs{--map-strip:100dvh;--fab-bleed:var(--space-2);
+    --fab-room:max(0px, min(calc(var(--map-strip) - var(--space-3) - var(--fab-bleed)),
+      max(46px, calc(var(--map-strip) - env(safe-area-inset-top) - var(--space-3) * 2))));
+    position:absolute;bottom:100%;right:calc(var(--space-3) + env(safe-area-inset-right) - var(--fab-bleed));
+    display:flex;flex-direction:column;align-items:flex-end;gap:var(--space-2);
+    padding:var(--fab-bleed);margin-bottom:calc(var(--space-3) - var(--fab-bleed));
+    max-height:calc(var(--fab-room) + var(--fab-bleed) * 2);
+    overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;
+    scrollbar-width:none;-ms-overflow-style:none}
+  .map-fabs::-webkit-scrollbar{display:none}
+  /* A column with a ceiling shrinks its items before it will overflow, so six 46px buttons
+     would squash into slivers and never scroll at all. Nothing in the rail flexes. */
+  .map-fabs>*{flex:none}
+  /* column-reverse, so the hint sits above the grip rather than below it: Leaflet keeps
+     its attribution pinned to the bottom-right of the map and paints it over everything,
+     and the one line this bar ever shows is not the line to let it sit on. */
+  .panel-grab{flex:none;width:100%;display:flex;flex-direction:column-reverse;align-items:center;gap:3px;
     cursor:grab;touch-action:none;background:transparent;border:0;padding:9px 0 3px}
   .panel-grab:active{cursor:grabbing}
   /* At rest the panel IS this bar, so it has to be a thumb-sized target while still
      reading as a hairline over the map — the padding does the work, not the bar. */
   .map-panel[data-snap="shut"] .panel-grab{padding:10px 0}
   .panel-bar{width:38px;height:4px;border-radius:999px;background:var(--color-neutral-400)}
+  /* :empty is what keeps the bar a bare grip: the span costs no height until something
+     is put in it, so the resting bar is the grip and nothing else. */
+  .panel-hint{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-500)}
+  .panel-hint:empty{display:none}
   /* Only the list scrolls; the stats above it stay put as the panel grows. */
   .panel-list{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
     padding:0 calc(var(--space-4) + env(safe-area-inset-right)) calc(var(--space-3) + env(safe-area-inset-bottom)) calc(var(--space-4) + env(safe-area-inset-left))}
   /* Shut hands the whole screen back to the map: grab bar only, no list, no stats.
      The trail mile and the weather come back the moment you pull the sheet up. */
   .map-panel[data-snap="shut"] .panel-list,
+  .map-panel[data-snap="shut"] .panel-tools,
   .map-panel[data-snap="shut"] .map-sheet{display:none}
   .map-pick{animation:pickPulse 1.6s ease-out infinite}
   @keyframes pickPulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -387,10 +434,22 @@
   .track > label{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:6px}
 
   /* ---- itinerary ---- */
-  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  /* overflow-x quietly makes this the scroll container the sticky <thead> sticks
+     against — and an unbounded container never scrolls, so top:0 has never once fired
+     and the header rode off the top of the page with everything else. That was
+     survivable while the header was a label; it is not survivable now that it is the
+     control. A max-height is the whole fix: the section above keeps its own overflow-y
+     exactly as it ships, so the filter block, the tab-bar autohide and the Back-to-Trip
+     scroll restore are all untouched, and scrolling past the end of the table chains
+     out to the screen the way it always did. */
+  .table-wrap{overflow:auto;-webkit-overflow-scrolling:touch;max-height:62dvh}
   table.itin{width:100%;border-collapse:collapse;font-size:13px}
-  table.itin th{text-align:left;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);
-    padding:var(--space-2) 7px;border-bottom:1px solid var(--color-divider);white-space:nowrap;position:sticky;top:0;background:var(--color-bg)}
+  /* padding:0 so the button can be the whole cell — 44 in both axes without touching
+     the 38 data rows. box-shadow rather than border-bottom: under border-collapse the
+     border belongs to the table, not the cell, so it does not travel with a sticky <th>
+     and the rule would vanish the moment the header started sticking. */
+  table.itin th{text-align:left;padding:0;box-shadow:inset 0 -1px 0 var(--color-divider);
+    white-space:nowrap;position:sticky;top:0;z-index:1;background:var(--color-bg)}
   table.itin td{padding:var(--space-2) 7px;border-bottom:1px solid color-mix(in srgb,var(--color-text) 8%,transparent);white-space:nowrap;vertical-align:middle}
   table.itin td.nm{white-space:normal;min-width:130px;font-family:var(--font-heading);font-weight:var(--font-heading-weight);font-size:14px}
   table.itin td.mi{font-variant-numeric:tabular-nums;color:var(--color-neutral-700)}
@@ -494,6 +553,10 @@
   .poi-band label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)}
   .poi-band input{width:68px;font-family:inherit;font-size:12px;padding:5px 8px;background:var(--color-surface);
     color:var(--color-text);border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+  /* The name box is prose where every other box in a band is a milepost — 68px clips
+     "amsterdam" after four letters, and a filter you cannot read back is a filter you
+     will not trust. Type is the only thing that separates it, so type is what selects. */
+  .poi-band input[type="search"]{width:auto;flex:1;min-width:120px}
   .poi-band-clear{font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;background:transparent;
     border:0;color:var(--color-accent-700);padding:5px 2px}
   .poi-band-view{margin-top:var(--space-2);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;
@@ -566,6 +629,119 @@
   .filters-state{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400;
     font-size:11px;color:var(--color-neutral-500)}
   .filters[open] .filters-state{opacity:0}
+
+  /* ---- sorting: one control, three homes ----
+     A <th>'s only child on Trip, a pill in the strip on Nearby and in the map sheet.
+     The two div lists have no columns to head, so the strip is a header row in look
+     only — but the gesture has to be the same wherever a list is sorted, so it is the
+     same button, the same badge and the same handler in both places.
+     The padding lives on the button and not on the cell, so the target is a real 44
+     square while every one of the 38 data rows keeps the 10px it always had. 44 is the
+     size .fab already uses, which is this app's own thumb — and it is the size in the
+     sheet too, because that is the one of the three that gets worked while moving. */
+  .sh{display:flex;align-items:center;gap:5px;width:100%;min-height:44px;padding:0 7px;cursor:pointer;
+    font:inherit;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;
+    color:var(--color-neutral-600);background:transparent;border:0;text-align:left}
+  th.frcell .sh{justify-content:flex-end}
+  .sh-c{justify-content:center;padding:0 4px}
+  .sh:hover{color:var(--color-accent-700)}
+  .sh:active{background:var(--color-accent-100)}
+  .sh.on{color:var(--color-accent-700)}
+  /* Rank rides the seg-pill shape the Stop column already prints inline, so a second
+     small tinted rectangle in the same table reads as the same kind of thing. Drawn
+     only from the second key on: a lone "1" beside the only sorted column is noise,
+     and the caret has already said everything. */
+  .sh-rk{flex:none;font-size:8px;font-weight:700;line-height:1;padding:1px 3px;border-radius:var(--radius-sm);
+    background:var(--color-accent-100);color:var(--color-accent-800)}
+  .sh-rk:empty{display:none}
+  /* The caret is drawn in CSS like .filters-caret and .fg-fold, because P's only up
+     and down arrows are named for headwind and tailwind and belong to the weather
+     chart — borrowing them would make P lie about what its keys mean. */
+  .sh-ar{flex:none;display:none;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;
+    border-bottom:5px solid currentColor;transition:transform .15s ease}
+  .sh.on .sh-ar{display:block}
+  .sh.desc .sh-ar{transform:rotate(180deg)}
+  @media (prefers-reduced-motion:reduce){.sh-ar{transition:none}}
+  /* Scrolls sideways rather than wrapping: a strip that gains a second line as keys
+     light up moves the target the thumb was already aiming at, and on the map screen
+     a second line is a second line the map never gets back. */
+  .sortbar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none;
+    border-bottom:1px solid var(--color-divider);margin-bottom:var(--space-2)}
+  .sortbar::-webkit-scrollbar{display:none}
+  .sortbar>*{flex:none}
+  .sortbar .sh{width:auto;min-height:44px;padding:0 11px;border:1px solid transparent;border-radius:999px}
+  .sortbar .sh.on{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .sortbar-l{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-600);font-weight:600}
+  .sh-x{font:inherit;font-size:11px;font-weight:600;cursor:pointer;background:transparent;border:0;
+    color:var(--color-accent-700);min-height:44px;padding:0 var(--space-2)}
+  .sh-x[hidden]{display:none}
+  /* The one sentence that says what the order is, and the only channel every screen
+     reader honours — see sortSay. Collapses when there is no sort, so it costs nothing
+     until the rider has set one. Deliberately absent from the sheet: room there is map
+     the rider gave up, and the lit pills already carry the order. */
+  .sort-say{font-size:11px;color:var(--color-neutral-600);line-height:1.5;margin:0 0 var(--space-2)}
+  .sort-say:empty{display:none}
+
+  /* ---- filters: saying so, from every screen the filter reaches ----
+     Eleven-pixel grey text was enough when a filter and the list it narrowed were on
+     the same screen. The trail-mile range and the name box now reach three, so the
+     rule down the left carries the "something is on" half — it reads from arm's
+     length, in sun, at speed, without being read. It lights only for state the rider
+     actually set: the CAT_DEFAULT seed, followMap and hidden-passed-stops are what the
+     app looks like out of the box, and an indicator that is never off says nothing. */
+  .filters.is-on{border-left:3px solid var(--color-accent);padding-left:var(--space-2);
+    margin-left:calc(var(--space-2) * -1)}
+  .filters.is-on .filters-t,.filters.is-on .filters-state{color:var(--color-accent-700)}
+  .filters-sum{min-height:44px}
+  /* Clear sits outside the <summary>, not in it. A <summary> is itself an activatable
+     control, and a button nested inside one is commonly folded into its accessible name
+     and unreliably reachable — iOS VoiceOver, this app's primary screen reader, worst of
+     all. Outside, it is an ordinary button, it needs no preventDefault to stop the block
+     toggling, and it stays visible open or closed — which is the point, because the
+     rider who needs it is the one who never opened the block. */
+  .filters-clear{display:flex;justify-content:flex-end;margin:0 0 var(--space-2)}
+  .filters-clear[hidden]{display:none}
+  .filters-x{font:inherit;font-size:11px;font-weight:600;letter-spacing:0;text-transform:none;
+    cursor:pointer;background:transparent;border:1px solid var(--color-accent);border-radius:999px;
+    color:var(--color-accent-700);min-height:44px;padding:0 var(--space-3)}
+  .filters-x[hidden]{display:none}
+  /* A third state on the chip is a bike-specific need — "somewhere with no campground"
+     is how you rule a stop out of a day plan — so it gets its own tint rather than a
+     second control the rider has to go and find. Same tap-to-cycle as the sort headers,
+     so the idiom is learned once. */
+  .feat-tri{cursor:pointer;font:inherit;font-size:12px;min-height:44px;padding:0 11px;color:var(--color-text)}
+  .tri-m{flex:none;width:14px;height:14px;border:1px solid var(--color-neutral-400);border-radius:var(--radius-sm)}
+  .tri-v{font-size:11px;color:var(--color-neutral-500)}
+  .feat-tri.yes{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .feat-tri.yes .tri-m{background:var(--color-accent);border-color:var(--color-accent)}
+  .feat-tri.yes .tri-v{color:var(--color-accent-800);font-weight:600}
+  .feat-tri.no{border-color:var(--color-accent-2)}
+  .feat-tri.no .tri-m{background:var(--color-accent-2);border-color:var(--color-accent-2)}
+  .feat-tri.no .tri-m::after{content:"";display:block;height:1px;margin:6px 2px;background:var(--color-bg)}
+  .feat-tri.no .tri-n{text-decoration:line-through}
+  .feat-tri.no .tri-v{color:var(--color-neutral-700);font-weight:600}
+  /* Inside the sheet, below the grab bar, and gone at shut with the list and the stats
+     — so the map keeps every pixel it has at rest and the standing rule holds by
+     construction rather than by vigilance. flex:none means the list below absorbs the
+     whole of the sheet's growth and shrink on its own, so setPanelSnap's height
+     arithmetic needs no change at all. Styled here, ahead of the markup that uses it,
+     because splitting a dense block twice costs more than shipping a few inert rules —
+     nothing matches these selectors until the sheet's own tools row lands. */
+  .panel-tools{flex:none;padding:0 calc(var(--space-4) + env(safe-area-inset-right)) 0 calc(var(--space-4) + env(safe-area-inset-left))}
+  .ptools-r{display:flex;align-items:center;gap:6px}
+  .ptools-f{flex:1;min-width:0;display:flex;align-items:center;gap:7px;min-height:44px;padding:0;cursor:pointer;
+    font:inherit;font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;
+    color:var(--color-neutral-600);background:transparent;border:0;text-align:left}
+  .ptools-f .filters-state{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ptools-f.is-on{color:var(--color-accent-700)}
+  /* The sheet carries the whole filter block, and its category tree is taller than the
+     sheet. Folded it is one summary line, so at rest the map is untouched — but open, it
+     has to cap itself and scroll rather than push the list out from under it, which is the
+     one thing the "chrome stays out of the way" rule will not forgive. Measured at the
+     half snap, the shortest the sheet ever is; overscroll-behavior keeps a flick inside
+     the block from dragging the sheet itself. */
+  .panel-tools .filters[open]{max-height:34dvh;overflow-y:auto;overscroll-behavior:contain}
 
   /* ---- more / settings ---- */
   .switch{display:flex;align-items:center;gap:var(--space-2);cursor:pointer;font-size:13.5px;margin:var(--space-2) 0}
@@ -653,13 +829,13 @@
     border:1px solid var(--color-divider);border-radius:var(--radius-md);box-shadow:var(--shadow-sm)}
   .leaflet-bar a{border-radius:0}
   .leaflet-bar a:hover{background:var(--color-accent-100);color:var(--color-accent-700)}
-  /* The overlay list is long, so let the expanded card use nearly the whole screen
-     height (it opens upward from the FAB) and scroll only if it still overflows.
-     Leaflet 1.9 ALSO caps the inner list with an inline height keyed off the control's
-     offset in the FAB stack — which left ~175px of screen unused above it. Override
-     that inline height so the card itself is the single scroller and can fill the space. */
-  .leaflet-control-layers-expanded{padding:var(--space-2) var(--space-3);font-size:12px;
-    max-height:calc(100dvh - 100px);overflow-y:auto}
+  /* Leaflet 1.9 caps the inner list with an inline height keyed off the control's offset
+     inside the FAB stack — a number that says where the control sits in the rail, not how
+     much map is left above the sheet, so it reads the same at every snap. Override that
+     inline height; the card's real cap is set on the FAB-stack copy below, where the strip
+     is known. The card used to cap itself against the viewport instead, which is why a
+     raised sheet left it 744px tall and growing off the top of the screen. */
+  .leaflet-control-layers-expanded{padding:var(--space-2) var(--space-3);font-size:12px}
   .leaflet-control-layers-list{height:auto !important}
   .leaflet-control-layers-list.leaflet-control-layers-scrollbar{overflow-y:visible !important}
   .leaflet-control-layers-selector{accent-color:var(--color-accent)}
@@ -667,12 +843,27 @@
   /* The layers control, moved out of the notch and into the FAB stack: collapsed it's
      a FAB like the rest; expanded it's a card that opens into the space above the sheet
      (the stack is bottom-anchored, so growing taller pushes it up, not down over the
-     panel). Leaflet's own toggle sprite is swapped for our layers glyph. */
+     panel). Leaflet's own toggle sprite is swapped for our layers glyph.
+     The FAB costume is scoped to the collapsed state on purpose. Leaflet hides its own
+     toggle once the card is open, and this rule was simply more specific than that rule
+     (0-3-0 against 0-2-0), so the glyph stayed painted inside the card — a 46px band across
+     a 216px card, empty apart from the button at its left, which was the whole of the slab
+     of whitespace above the radios. Scoping it stops it matching when the card opens, which
+     also retires the border, the radius and the shadow rather than leaving a full costume on
+     an element nobody can see.
+     What it does not do is take Leaflet's own display:none in exchange. The toggle is the
+     element the tap or the Enter key came from, and an element that leaves the box tree
+     mid-keypress hands focus back to <body> — a keyboard or switch rider would open the card
+     and find themselves at the top of the document rather than at the first layer in it. So
+     it stays in the tree at no size: no glyph, no costume, no band of whitespace over the
+     radios, and the next Tab steps into the list. */
   .leaflet-control-layers.fab-layers{margin:0;background:transparent;border:0;box-shadow:none}
-  .leaflet-control-layers.fab-layers .leaflet-control-layers-toggle{
+  .leaflet-control-layers.fab-layers:not(.leaflet-control-layers-expanded) .leaflet-control-layers-toggle{
     width:46px;height:46px;background-image:none;display:grid;place-items:center;
     background:var(--color-bg);color:var(--color-accent);
     border:1px solid var(--color-divider);border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
+  .leaflet-control-layers.fab-layers.leaflet-control-layers-expanded .leaflet-control-layers-toggle{
+    display:block;width:0;height:0;padding:0;border:0;overflow:hidden}
   .leaflet-control-layers.fab-layers .leaflet-control-layers-toggle:hover{background:var(--color-accent-100)}
   /* Leaflet hides the toggle once the card is open; our FAB rule out-specifies that,
      so put the hiding back — the glyph has no business inside the list. */
@@ -680,7 +871,27 @@
   .leaflet-control-layers.fab-layers.leaflet-control-layers-expanded{
     background:var(--color-bg);border:1px solid var(--color-divider);
     border-radius:var(--radius-md);box-shadow:var(--shadow-md);
-    padding:var(--space-2) var(--space-3);width:max-content;max-width:78vw}
+    padding:var(--space-2) var(--space-3);width:max-content;max-width:78vw;
+    max-height:var(--fab-room);overflow-y:auto;-webkit-overflow-scrolling:touch;
+    overscroll-behavior:contain}
+  /* The card lives in the rail, so with both capped there would be a scroller inside a
+     scroller a thumb's width apart, over a map, on a moving bike. While it is open the rail
+     is not a rail: the map buttons stand down, it stops capping and stops clipping, and the
+     card is the one thing in it and the one thing that scrolls. Standing them down also
+     parks the card's foot exactly where the layers button was, so it opens upward from
+     under the thumb that tapped it instead of shoving the stack about — and those buttons
+     were unreachable behind it at any raised snap anyway. One piece of chrome over the map
+     at a time is the rule this screen is built on.
+     Standing them down is only safe because the card is never allowed to open into less room
+     than it needs — initMap refuses the expand below that, unbinds the hover that used to
+     open it on its own, and syncMapStrip closes one the sheet has grown under. Without those
+     three this rule is a way to leave the map with no controls at all.
+     Keyed off Leaflet's own class rather than one of ours: it flips that class from the
+     toggle, from Enter and from a tap on the map, and fires no event for any of them, so a
+     class of ours would be a second truth that goes quietly wrong. --fab-room is inherited
+     from the rail, so the two can never be capped to different strips. */
+  .map-fabs:has(.leaflet-control-layers-expanded){max-height:none;overflow:visible}
+  .map-fabs:has(.leaflet-control-layers-expanded)>:not(.leaflet-control-layers){display:none}
   /* A draggable row: the grip sits outside the label, so a drag can't end in a toggle. */
   .lyr-row{display:flex;align-items:center;gap:6px}
   .lyr-row.dragging{opacity:.9;background:var(--color-accent-100);border-radius:var(--radius-md)}
@@ -887,6 +1098,10 @@
       </form>
       <button id="mapBack" type="button" class="map-back" hidden></button>
       <aside id="mapPanel" class="map-panel" data-snap="shut">
+        <!-- Top-first, the order the rail reads on screen, so Tab and a VoiceOver swipe
+             follow the eye. The capped rail rests on its foot instead, put there by
+             syncMapStrip, and initMap appends the layers control so it lands below the
+             zoom pair, nearest the thumb. -->
         <div class="map-fabs">
           <button id="findBtn" type="button" class="fab" title="Find a place" aria-label="Find a place"><span data-ic="search"></span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
@@ -897,8 +1112,69 @@
             <button id="zoomOutBtn" type="button" class="fab" title="Zoom out" aria-label="Zoom out"><span data-ic="minus"></span></button>
           </div>
         </div>
-        <button id="panelGrab" type="button" class="panel-grab" aria-label="Resize the list panel"><span class="panel-bar"></span></button>
+        <button id="panelGrab" type="button" class="panel-grab" aria-label="Resize the list panel"><span class="panel-bar"></span><span id="panelHint" class="panel-hint"></span></button>
         <div id="mapSheet" class="map-sheet"></div>
+        <!-- The sheet's tools row: the FULL filter block plus the sort strip. Inside the
+             sheet and below the grab bar, so it is list furniture rather than map chrome —
+             display:none at the shut snap along with the list and the stats, so the resting
+             map is exactly as bare as it was. It is a second copy of Nearby's #poiFilters
+             block, id-free down to the last control: every input is class- or attribute-
+             keyed so both copies can live in one document, and data-fview="poi" lets
+             syncFilterState paint this summary's readout without knowing where it sits. The
+             <summary> IS the readout — the rider works the controls under their thumb
+             rather than being sent to Nearby to find them. Folded by default (the CSS caps
+             it open), so at rest it is one line. -->
+        <div id="panelTools" class="panel-tools">
+          <details class="filters" data-fview="poi">
+            <summary class="filters-sum">
+              <span class="filters-caret" aria-hidden="true"></span>
+              <span class="filters-t">Filters</span>
+              <span class="filters-state"></span>
+            </summary>
+            <div class="feat-list-lbl">Categories</div>
+            <div class="feat-tree"></div>
+            <p class="feat-hint">The State’s trail POIs. The parent box switches them all at once; the caret just folds the chips away. Drag to reorder · uncheck to hide. Hiding a category takes its pins off the map too, so what you can see is always what this list can show. The OpenStreetMap corridor (shops, fuel, food, beds within 5 mi) is a separate map layer — switch it on under “OSM POIs” in the map’s layers control.</p>
+            <div class="feat-list-lbl">Trail miles ahead</div>
+            <div class="poi-band">
+              <label>Min <input class="f-miMin" type="number" step="5" inputmode="numeric" placeholder="0"></label>
+              <label>Max <input class="f-miMax" type="number" step="5" inputmode="numeric" placeholder="any"></label>
+              <button type="button" class="poi-band-clear" data-clearband>Clear</button>
+            </div>
+            <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. A negative number looks behind you, which is where <b>Prev</b> steps. Needs your location.</p>
+            <div class="feat-list-lbl">Trail mile range</div>
+            <div class="poi-band">
+              <label>From <input class="f-mpFrom" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
+              <label>To <input class="f-mpTo" type="number" min="0" step="5" inputmode="numeric" placeholder="end"></label>
+              <button type="button" class="poi-band-clear" data-clearrange>Clear</button>
+            </div>
+            <label class="switch switch-sm"><input type="checkbox" class="f-mpFollow" checked> Follow the map view</label>
+            <button type="button" class="poi-band-view" data-rangefrommap>Use the stretch shown on the map</button>
+            <p class="poi-band-note"><b>TM</b> is trail mile — the fixed milepost a place sits at, measured along the route from the NYC end. Unlike the band above it, this is absolute rather than relative to you, so it works without your location.</p>
+            <div class="feat-list-lbl">Name</div>
+            <div class="poi-band">
+              <label>Contains <input type="search" class="f-nameQ" inputmode="search" autocomplete="off" placeholder="microtel"></label>
+            </div>
+            <p class="poi-band-note">Shared with the Trip table — the same string means the same thing to a town and to a guesthouse. Unlike the category chips above, this one narrows the list without touching the pins: the map still shows everything, so you can see what you filtered past.</p>
+            <div class="feat-list-lbl">The detour</div>
+            <div class="poi-band">
+              <label>Max off-trail <input class="f-offMax" type="number" min="0" step="1" inputmode="numeric" placeholder="any"> mi</label>
+              <button type="button" class="poi-band-clear" data-clearoff>Clear</button>
+            </div>
+            <p class="poi-band-note">How far you are willing to leave the route. Places right on the trail always pass — a spur only counts once it is a tenth of a mile, the same threshold the list uses when it breaks a distance down.</p>
+            <label class="switch switch-sm"><input type="checkbox" class="f-priced"> Only places I’ve noted a rate for</label>
+            <p class="poi-band-note">Rates are the ones you looked up and typed into a pin yourself; nothing here fetches a price. This is how you get back to the beds you already checked.</p>
+          </details>
+          <div class="filters-clear" hidden><button type="button" class="filters-x" data-clearf="poi">Clear every filter</button></div>
+          <div class="sortbar" role="group" aria-label="Sort the list">
+            <span class="sortbar-l">Sort</span>
+            <button type="button" class="sh" data-sv="poi" data-sc="ride"><span class="sh-t">Distance</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+            <button type="button" class="sh" data-sv="poi" data-sc="nm"><span class="sh-t">Name</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+            <button type="button" class="sh" data-sv="poi" data-sc="mile"><span class="sh-t">TM</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+            <button type="button" class="sh" data-sv="poi" data-sc="spur"><span class="sh-t">Detour</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+            <button type="button" class="sh" data-sv="poi" data-sc="price"><span class="sh-t">Rate</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+            <button type="button" class="sh-x" data-sortclear="poi" hidden>Clear sort</button>
+          </div>
+        </div>
         <div id="panelList" class="poi-list panel-list"></div>
       </aside>
     </section>
@@ -918,9 +1194,67 @@
     <section data-screen="itin" class="screen">
       <div class="screen-pad">
         <h1 class="screen-title">Itinerary <span id="cuDir" class="dir-note"></span></h1>
-        <div class="table-wrap">
+        <!-- Same chassis as Nearby's block — native <details> so the fold needs no JS,
+             the same summary, the same state chip — but deliberately not the same
+             contents. A town has no category and no map viewport, and the chips that
+             would say so belong to a different dataset entirely. -->
+        <details id="itinFilters" class="filters" data-fview="itin">
+          <summary class="filters-sum">
+            <span class="filters-caret" aria-hidden="true"></span>
+            <span class="filters-t">Filters</span>
+            <span class="filters-state"></span>
+          </summary>
+          <div class="feat-list-lbl">Stop name</div>
+          <div class="poi-band">
+            <label>Contains <input type="search" class="f-nameQ" inputmode="search" autocomplete="off" placeholder="amsterdam"></label>
+          </div>
+          <p class="poi-band-note">Shared with Nearby and the map list — a place you are looking for is the same place on whichever screen you land on.</p>
+          <div class="feat-list-lbl">Segment</div>
+          <div class="poi-band">
+            <select id="itSeg" class="input"><option value="">Both segments</option><option value="hv">Hudson Valley</option><option value="erie">Erie Canal</option></select>
+          </div>
+          <div class="feat-list-lbl">Trail mile range</div>
+          <div class="poi-band">
+            <label>From <input id="itMpFrom" class="f-mpFrom" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
+            <label>To <input id="itMpTo" class="f-mpTo" type="number" min="0" step="5" inputmode="numeric" placeholder="end"></label>
+            <button type="button" class="poi-band-clear" data-clearrange>Clear</button>
+          </div>
+          <button type="button" class="poi-band-view" data-stopfollow>Stop following the map view</button>
+          <p id="itMpNote" class="poi-band-note"></p>
+          <div class="feat-list-lbl">Amenities</div>
+          <div class="feat-list">
+            <button type="button" class="feat feat-tri" data-am="store"><span class="tri-m" aria-hidden="true"></span><span class="tri-n">Shop</span><span class="tri-v">any</span></button>
+            <button type="button" class="feat feat-tri" data-am="lodging"><span class="tri-m" aria-hidden="true"></span><span class="tri-n">Stay</span><span class="tri-v">any</span></button>
+            <button type="button" class="feat feat-tri" data-am="camp"><span class="tri-m" aria-hidden="true"></span><span class="tri-n">Camp</span><span class="tri-v">any</span></button>
+            <button type="button" class="feat feat-tri" data-am="rail"><span class="tri-m" aria-hidden="true"></span><span class="tri-n">Rail</span><span class="tri-v">any</span></button>
+          </div>
+          <p class="poi-band-note">Tap once for stops that have it, again for stops that don’t, a third time for any. These read the stop’s own notes rather than the map’s pins, which is a coarser claim than a campground with a lat and a long — and it is why the category chips on Nearby are a separate control that does not reach this table. Worth knowing before you lean on them: <b>Shop</b> is true of 37 of the 38 stops, so filtering on it moves exactly one row. <b>Camp</b> (7) and <b>Rail</b> (13) are the two that actually cut the list.</p>
+          <div class="feat-list-lbl">From you</div>
+          <!-- The same pref as the switch on More, not a second one. It filters this
+               table, so it belongs on this screen — but the Trip tab ships hidden and
+               applyTripTab navigates away from it, so the copy on More has to stay or a
+               rider who never turned the tab on could not reach the filter at all. -->
+          <label class="switch switch-sm"><input type="checkbox" class="f-showPassed"> Show stops I’ve already passed</label>
+        </details>
+        <div class="filters-clear" hidden><button type="button" class="filters-x" data-clearf="itin">Clear every filter</button></div>
+        <p class="sort-say" role="status" data-sv="itin"></p>
+        <div class="table-wrap" data-scroller>
           <table class="itin">
-            <thead><tr><th>TM</th><th>Stop</th><th>Shop</th><th>Stay</th><th>Camp</th><th>Rail</th><th class="frcell">From you</th></tr></thead>
+            <!-- Seven sort buttons, one per column. No data-lat/data-lng/data-town/data-z
+                 anywhere in this row: the document-wide [data-lat] delegate matches any
+                 ancestor, so a header tap would fire zoomTo(NaN). Not <a> either, for the
+                 same delegate's closest('a') escape hatch. No aria-label on the buttons —
+                 a columnheader is named from its contents, and a label here would rename
+                 the <th> and have VoiceOver repeat it on all thirty-eight cells. -->
+            <thead><tr>
+              <th aria-sort="none"><button type="button" class="sh" data-sv="itin" data-sc="mi"><span class="sh-t">TM</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button></th>
+              <th aria-sort="none"><button type="button" class="sh" data-sv="itin" data-sc="nm"><span class="sh-t">Stop</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button></th>
+              <th aria-sort="none"><button type="button" class="sh sh-c" data-sv="itin" data-sc="store"><span class="sh-t">Shop</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button></th>
+              <th aria-sort="none"><button type="button" class="sh sh-c" data-sv="itin" data-sc="lodging"><span class="sh-t">Stay</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button></th>
+              <th aria-sort="none"><button type="button" class="sh sh-c" data-sv="itin" data-sc="camp"><span class="sh-t">Camp</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button></th>
+              <th aria-sort="none"><button type="button" class="sh sh-c" data-sv="itin" data-sc="rail"><span class="sh-t">Rail</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button></th>
+              <th class="frcell" aria-sort="none"><button type="button" class="sh" data-sv="itin" data-sc="from"><span class="sh-t">From you</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button></th>
+            </tr></thead>
             <tbody id="itinBody"></tbody>
           </table>
         </div>
@@ -944,32 +1278,63 @@
         </div>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
-        <details id="poiFilters" class="filters">
+        <!-- Class-keyed, not id-keyed, all the way down: the map sheet carries a second
+             copy of this whole block, and an id that exists twice makes getElementById
+             return whichever one the parser hit first — silently, forever. data-fview
+             names which view the block filters so syncFilterState can paint every copy
+             without knowing where any of them live. -->
+        <details id="poiFilters" class="filters" data-fview="poi">
           <summary class="filters-sum">
             <span class="filters-caret" aria-hidden="true"></span>
             <span class="filters-t">Filters</span>
-            <span id="filtersState" class="filters-state"></span>
+            <span class="filters-state"></span>
           </summary>
           <div class="feat-list-lbl">Categories</div>
-          <div id="features" class="feat-tree"></div>
+          <div class="feat-tree"></div>
           <p class="feat-hint">The State’s trail POIs. The parent box switches them all at once; the caret just folds the chips away. Drag to reorder · uncheck to hide. Hiding a category takes its pins off the map too, so what you can see is always what this list can show. The OpenStreetMap corridor (shops, fuel, food, beds within 5 mi) is a separate map layer — switch it on under “OSM POIs” in the map’s layers control.</p>
           <div class="feat-list-lbl">Trail miles ahead</div>
           <div class="poi-band">
-            <label>Min <input id="miMin" type="number" step="5" inputmode="numeric" placeholder="0"></label>
-            <label>Max <input id="miMax" type="number" step="5" inputmode="numeric" placeholder="any"></label>
-            <button id="miClear" type="button" class="poi-band-clear">Clear</button>
+            <label>Min <input class="f-miMin" type="number" step="5" inputmode="numeric" placeholder="0"></label>
+            <label>Max <input class="f-miMax" type="number" step="5" inputmode="numeric" placeholder="any"></label>
+            <button type="button" class="poi-band-clear" data-clearband>Clear</button>
           </div>
           <p class="poi-band-note">Filters the lists below to what’s ahead of you in your current direction of travel — set both to plan a day’s ride. A negative number looks behind you, which is where <b>Prev</b> steps. Needs your location.</p>
           <div class="feat-list-lbl">Trail mile range</div>
           <div class="poi-band">
-            <label>From <input id="mpFrom" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
-            <label>To <input id="mpTo" type="number" min="0" step="5" inputmode="numeric" placeholder="end"></label>
-            <button id="mpClear" type="button" class="poi-band-clear">Clear</button>
+            <label>From <input class="f-mpFrom" type="number" min="0" step="5" inputmode="numeric" placeholder="0"></label>
+            <label>To <input class="f-mpTo" type="number" min="0" step="5" inputmode="numeric" placeholder="end"></label>
+            <button type="button" class="poi-band-clear" data-clearrange>Clear</button>
           </div>
-          <label class="switch switch-sm"><input type="checkbox" id="mpFollow" checked> Follow the map view</label>
-          <button id="mpFromMap" type="button" class="poi-band-view">Use the stretch shown on the map</button>
+          <label class="switch switch-sm"><input type="checkbox" class="f-mpFollow" checked> Follow the map view</label>
+          <button type="button" class="poi-band-view" data-rangefrommap>Use the stretch shown on the map</button>
           <p class="poi-band-note"><b>TM</b> is trail mile — the fixed milepost a place sits at, measured along the route from the NYC end. Unlike the band above it, this is absolute rather than relative to you, so it works without your location.</p>
+          <!-- The three row-level facets. Class-keyed, no ids: the map sheet ships a second
+               copy of this whole block, and the delegated handlers already read the class. -->
+          <div class="feat-list-lbl">Name</div>
+          <div class="poi-band">
+            <label>Contains <input type="search" class="f-nameQ" inputmode="search" autocomplete="off" placeholder="microtel"></label>
+          </div>
+          <p class="poi-band-note">Shared with the Trip table — the same string means the same thing to a town and to a guesthouse. Unlike the category chips above, this one narrows the list without touching the pins: the map still shows everything, so you can see what you filtered past.</p>
+          <div class="feat-list-lbl">The detour</div>
+          <div class="poi-band">
+            <label>Max off-trail <input class="f-offMax" type="number" min="0" step="1" inputmode="numeric" placeholder="any"> mi</label>
+            <button type="button" class="poi-band-clear" data-clearoff>Clear</button>
+          </div>
+          <p class="poi-band-note">How far you are willing to leave the route. Places right on the trail always pass — a spur only counts once it is a tenth of a mile, the same threshold the list uses when it breaks a distance down.</p>
+          <label class="switch switch-sm"><input type="checkbox" class="f-priced"> Only places I’ve noted a rate for</label>
+          <p class="poi-band-note">Rates are the ones you looked up and typed into a pin yourself; nothing here fetches a price. This is how you get back to the beds you already checked.</p>
         </details>
+        <div class="filters-clear" hidden><button type="button" class="filters-x" data-clearf="poi">Clear every filter</button></div>
+        <div class="sortbar" role="group" aria-label="Sort the list">
+          <span class="sortbar-l">Sort</span>
+          <button type="button" class="sh" data-sv="poi" data-sc="ride"><span class="sh-t">Distance</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+          <button type="button" class="sh" data-sv="poi" data-sc="nm"><span class="sh-t">Name</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+          <button type="button" class="sh" data-sv="poi" data-sc="mile"><span class="sh-t">TM</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+          <button type="button" class="sh" data-sv="poi" data-sc="spur"><span class="sh-t">Detour</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+          <button type="button" class="sh" data-sv="poi" data-sc="price"><span class="sh-t">Rate</span><span class="sh-rk" aria-hidden="true"></span><span class="sh-ar" aria-hidden="true"></span></button>
+          <button type="button" class="sh-x" data-sortclear="poi" hidden>Clear sort</button>
+        </div>
+        <p class="sort-say" role="status" data-sv="poi"></p>
         <div id="poiList" class="poi-list"></div>
       </div>
     </section>
@@ -989,7 +1354,7 @@
     <section data-screen="settings" class="screen">
       <div class="screen-pad">
         <h1 class="screen-title">More</h1>
-        <label class="switch"><input type="checkbox" id="showPassed"> Show stops I’ve already passed</label>
+        <label class="switch"><input type="checkbox" id="showPassed" class="f-showPassed"> Show stops I’ve already passed</label>
         <label class="switch"><input type="checkbox" id="tapToSet" checked> Let the map spot dialog move my location</label>
         <p class="poi-band-note" style="margin-top:2px">Long-press the map (or right-click on the web) to open a spot with its trail mile, Google Maps, Street View and a Find-nearby row. A plain tap just reads the map. This switch only controls whether that dialog can also move your location.</p>
         <label class="switch"><input type="checkbox" id="showTrip"> Show the Trip tab</label>
@@ -1041,7 +1406,10 @@
 <script src="est-core.js"></script>
 <script>
   document.querySelectorAll('[data-ic]').forEach(el=>{ el.innerHTML = window.EST_ICON(el.dataset.ic, el.closest('.tab')?22:18); });
-  new TrailApp().init();
+  // Published so the console can inspect and drive one instance — the sort and filter
+  // state lives entirely on it, and every assertion about this feature is an assertion
+  // about a field on this object. Nothing in the app reads window.app.
+  window.app = new TrailApp(); window.app.init();
 </script>
 <script>
 // PWA: register the offline service worker. Secure contexts only, which means
