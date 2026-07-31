@@ -181,6 +181,19 @@ const AADT_BANDS=[[500,'#2e7d32','quiet',4,'#1b5e20'],
    way", so the eye never mistakes a busy road for the route. Round caps keep the
    dashes from looking like ticks at the heavier weights. */
 const AADT_DASH='7,7';
+/* The two halves of the trail as the MAP draws them — the route line, the milepost
+   chips, the stop dots, the town names. Deliberately not --color-accent-2, which the
+   Erie half used to borrow: that is a UI colour with a different job, saying "this is
+   the row you tapped" in a panel, and a magenta doing that job on a map full of red
+   traffic counts is one more warm line among warm lines. Same family, near enough the
+   same value, and the eye sorts by loudness well before it sorts by hue.
+   Violet sits outside the whole quiet-moderate-heavy ramp, so there is no band it can
+   be mistaken for, and outside the basemap's water blue, which matters on a trail that
+   spends its length beside a canal and a river. It reads darker against white than the
+   magenta did (7.0:1 against 5.2:1), so the milepost numbers gained contrast rather
+   than spending it. The Hudson Valley half keeps its teal — it never had the problem.
+   Anything that means "selected" rather than "which half" stays on the UI accent. */
+const SECT_HV='#0088b0', SECT_ER='#7b2fbf';
 /* There is a ceiling on how many segments come back and no longer a floor under the
    count, because the two were fighting each other. The floor rose with the scale on
    the theory that zoomed out you only want the big roads — but the service already
@@ -1825,7 +1838,7 @@ class TrailApp {
     this.offTrail=0; this.planning=false;
     this.myMile=pr.mile; this.myLL={lat,lng};
     if(this.map){ const ll=[lat,lng];
-      // dark fill, not --color-accent: that's the Hudson Valley stop color, so
+      // dark fill, not SECT_HV: that's the Hudson Valley stop color, so
       // "you are here" used to blend into the very dots it should stand out from
       if(!this.myMarker){ this.myMarker=L.circleMarker(ll,{pane:this.map.getPane(ME_PANE)?ME_PANE:undefined,
         radius:8,weight:3,color:'#fff',fillColor:ME_BLUE,fillOpacity:1,className:'me-dot'})
@@ -3202,7 +3215,7 @@ class TrailApp {
      tap target, and a name that swallowed the tap would put the popup out of reach of
      the very thing it names. */
   townLbMarker(t, nm, rank){
-    const c=t.s==='hv' ? (this.accent||'#0088b0') : (this.accent2||'#d6006c');
+    const c=this.sectColor(t.s!=='hv');
     const html='<span class="town-lb'+(rank===0?' town-maj':'')+'" style="color:'+c+'">'
       +esc(nm)+'</span>';
     return L.marker([t.lat,t.lng],{pane:this.lyrPane('stops'), interactive:false,
@@ -3245,8 +3258,10 @@ class TrailApp {
     const a=ROUTE[lo], b=ROUTE[hi], den=b[2]-a[2], f=den>0?(mile-a[2])/den:0;
     return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f];
   }
+  // Which half of the trail this is, in the one place that decides it.
+  sectColor(erie){ return erie ? SECT_ER : SECT_HV; }
   // Matching the two route lines, so a milepost says which half of the trail it is on.
-  mileColor(mile){ return mile<=HINGE_MI ? (this.accent||'#0088b0') : (this.accent2||'#d6006c'); }
+  mileColor(mile){ return this.sectColor(mile>HINGE_MI); }
   renderMileposts(){
     const m=this.map, g=this.mileLayer;
     if(!m||!g||!m.hasLayer(g)) return;
@@ -4151,9 +4166,12 @@ class TrailApp {
     const el=this.$('map');
     if(!el) return;
     if(typeof L==="undefined"){ el.style.display="none"; this.status('Map couldn’t load here, but the lists still work.'); return; }
-    const accent=getComputedStyle(document.body).getPropertyValue('--color-accent').trim()||'#0088b0';
-    const accent2=getComputedStyle(document.body).getPropertyValue('--color-accent-2').trim()||'#d6006c';
-    this.accent=accent; this.accent2=accent2;
+    /* The UI accent, and only that. The map's own two colours are SECT_HV/SECT_ER and
+       no longer come through here: what the panels use to say "this is the one you
+       picked" and what the map uses to say "this is the Erie half" were the same value
+       by habit rather than by intent, and the two wants pulled in opposite directions
+       the moment the traffic layer went on. This is kept for the selection ring. */
+    this.accent2=getComputedStyle(document.body).getPropertyValue('--color-accent-2').trim()||'#d6006c';
     // Zoom lives in the FAB stack with Find/Locate/Recenter rather than in Leaflet's
     // top-left corner, so every map control is under one thumb.
     // Opens on the start of the trip, not a whole-state view nobody can read.
@@ -4218,7 +4236,7 @@ class TrailApp {
        marks that cover it are a dot and a chip wide. */
     this.stopLayer=L.layerGroup();
     TOWNS.forEach(t=>{
-      const mk=L.circleMarker([t.lat,t.lng],{pane:this.lyrPane('stops'),radius:8,weight:2.5,color:'#fff',fillColor:t.s==='hv'?accent:accent2,fillOpacity:1,className:'map-dot'});
+      const mk=L.circleMarker([t.lat,t.lng],{pane:this.lyrPane('stops'),radius:8,weight:2.5,color:'#fff',fillColor:this.sectColor(t.s!=='hv'),fillOpacity:1,className:'map-dot'});
       mk.bindPopup('',{maxWidth:300,minWidth:230,autoPan:false}); mk.on('popupopen',()=>mk.setPopupContent(this.popupHtml(t)));
       this.townMarker[t.n]=mk; this.stopLayer.addLayer(mk);
     });
@@ -4258,7 +4276,7 @@ class TrailApp {
     // Both casings before both cores: one white ribbon under the whole trail, so the
     // Hudson Valley line does not get a white bar drawn across it where the Erie half
     // meets it at the hinge.
-    const cHV=cased(rHV,accent), cER=cased(rER,accent2);
+    const cHV=cased(rHV,SECT_HV), cER=cased(rER,SECT_ER);
     this.embLines=[ cHV[0], cER[0], cHV[1], cER[1] ];
     /* The trail itself gets a row in the control like everything else, and like the
        borrowed layers it names where it comes from — the route it was drawn on, which
