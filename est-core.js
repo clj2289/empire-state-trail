@@ -2141,9 +2141,10 @@ class TrailApp {
     document.addEventListener('click',e=>{
       const b=e.target.closest('[data-clearf]'); if(b) this.clearFilters(b.dataset.clearf);
     });
-    /* The search bar's own two controls. Delegated like everything else on these blocks,
-       because the chips are rebuilt from state on every position fix and the whole row
-       exists three times — a bound listener would need rebinding on both counts. The ✕
+    /* The chip row's drops and the search bar's ✕. Delegated like everything else on
+       these blocks: the chips are rebuilt from state on every position fix, and the row
+       exists on all three screens while the bar exists only on Trip — a bound listener
+       would need rebinding on the first count and two lookups on the second. The ✕
        clears the string and nothing else: the chips below it take the other facets off
        one at a time, and Clear all at the end of that row takes the lot. */
     document.addEventListener('click',e=>{
@@ -3191,16 +3192,15 @@ class TrailApp {
        that threw the sheet back to the top under a thumb would read as a crash. */
     const keep=mounts.map(m=>m.scrollTop);
     const list={ set innerHTML(v){ mounts.forEach((m,i)=>{ m.innerHTML=v; m.scrollTop=keep[i]; }); } };
-    if(!this.POIS.length){ this.setSearchCount('poi',0,0); list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
+    if(!this.POIS.length){ list.innerHTML='<div class="up-empty">Live facilities load from the NY State service when the map is ready. The itinerary and map work offline meanwhile.</div>'; return; }
     // A search replaces the browse list outright rather than filtering inside it: the
     // groups, the pager and the band are all answers to "what's around me", and this
     // is a different question. Clearing the box puts every one of them back untouched.
     // The filter summary still gets written: the block is collapsed and set aside, but
     // a stale line inside it is how a rider comes back later to a filter they can't
-    // account for. The same reasoning keeps the query chips painted and blanks the
-    // filter bar's count: the chips describe filter state the rider will get back, but
-    // "16 of 311" would be describing a list that is not the one on screen.
-    if(this.qActive()){ this.setSearchCount('poi',0,0); this.syncFilterState(); list.innerHTML=this.searchHTML(); return; }
+    // account for. The query chips follow the same reasoning and stay painted: they
+    // describe filter state the rider gets back the moment the box is empty.
+    if(this.qActive()){ this.syncFilterState(); list.innerHTML=this.searchHTML(); return; }
     // The two controls are orthogonal: the chips decide which groups appear and in
     // what order, the band filters the items inside each one.
     // "X of Y" whenever anything is narrowing, so a filtered count never reads as the
@@ -3219,13 +3219,13 @@ class TrailApp {
     // OSM POIs are a map layer, toggled from the layers control — deliberately kept out
     // of this browse list, so the Nearby screen stays the State's curated trail POIs.
     const keys=this.orderedCats(Object.keys(byCat)).filter(c=>!this.catHidden.has(c) && byCat[c] && byCat[c].length && catGrp(c)!=='bundled');
-    if(!keys.length){ this.setSearchCount('poi',0,0); list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
+    if(!keys.length){ list.innerHTML='<div class="up-empty">Every category is switched off. Turn one back on above to see what’s around you.</div>'; return; }
     // No pager while the list follows the map: panning IS how you move the window,
     // and a stepper for it only repeated what the map already does, three rows deep.
     let h=view?'':this.pagerHTML();
     // Rows that survived every facet, across every group. Seven headings each repeating
     // the same sentence is a wall, not an empty state — this is what tells them apart.
-    let shownAny=0, totalAny=0;
+    let shownAny=0;
     // Same parents as the chips above, so "where did this come from" is answered
     // once per run of categories instead of never.
     GRP_ORDER.forEach(grp=>{
@@ -3235,9 +3235,6 @@ class TrailApp {
     h+='<div class="poi-src" role="heading" aria-level="2">'+esc(gc.label)+'<span class="poi-src-s">'+esc(gc.src)+'</span></div>';
     inGrp.forEach(cat=>{
       const cfg=catCfg(cat), total=byCat[cat].length;
-      // The denominator the search bar prints: every place in a category the rider can
-      // currently see, which is what the per-group "X of Y" adds up to.
-      totalAny+=total;
       let items=byCat[cat];
       // Absolute range first — it's the one filter that doesn't need a location, so
       // it has to bite even when nothing below it can. Following the map, the
@@ -3301,7 +3298,6 @@ class TrailApp {
        narrow the list and not the pins, because on the map screen the rider is looking at
        both at once. The pager stays: it is the control that steps out of an empty
        window. */
-    this.setSearchCount('poi', shownAny, totalAny);
     if(!shownAny){
       const w=this.narrowing('poi').filter(x=>!x.inert && x.scope!=='group');
       h=(view?'':this.pagerHTML())+'<div class="up-empty">'

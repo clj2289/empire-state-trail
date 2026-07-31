@@ -667,11 +667,16 @@
   /* ---- searching from the table itself ----
      The name box has existed since the filters shipped, folded inside a <details> on
      three screens. A rider looking at a list and wanting one row out of it should not
-     have to open a drawer to say so, so the box comes out and sits on the table: always
-     visible, always the same shared string — class f-nameQ IS the whole wiring, because
-     the input delegate reads the element that was typed into and fSet mirrors every copy
-     — with the live count beside it, so a short table is explained by the box that
-     shortened it rather than leaving the rider to wonder where the rest went. */
+     have to open a drawer to say so, so on Trip the box comes out and sits on the table:
+     always visible, always the same shared string — class f-nameQ IS the whole wiring,
+     because the input delegate reads the element that was typed into and fSet mirrors
+     every copy — with the live count beside it, so a short table is explained by the box
+     that shortened it rather than leaving the rider to wonder where the rest went.
+     Trip only, and the constraint is one search-shaped pill per screen: the two POI views
+     already have #poiQ at the top, which searches every place the app holds instead of
+     filtering the list in front of you. Two pills that look identical and answer
+     different questions is worse than one pill and a drawer. Trip has no #poiQ — that
+     search never looks at towns — so nothing is competing for the shape here. */
   .searchbar{display:flex;align-items:center;gap:var(--space-2);margin:0 0 var(--space-2);
     padding:0 var(--space-3);background:var(--color-surface);
     border:1px solid var(--color-divider);border-radius:999px}
@@ -730,7 +735,6 @@
     scrollbar-width:none;-ms-overflow-style:none;margin-bottom:6px}
   .panel-tools .qchips::-webkit-scrollbar{display:none}
   .panel-tools .qchip{flex:none;max-width:60vw}
-  .panel-tools .searchbar{margin-bottom:6px}
 
   /* ---- filters: saying so, from every screen the filter reaches ----
      Eleven-pixel grey text was enough when a filter and the list it narrowed were on
@@ -1210,18 +1214,13 @@
             </div>
             <p class="poi-band-note">How far you are willing to leave the route. Places right on the trail always pass — a spur only counts once it is a tenth of a mile, the same threshold the list uses when it breaks a distance down.</p>
           </details>
-          <!-- Third copy, and the one that earns the feature: this is where the rider is
-               when they are actually riding. Same shared string, same class-keyed wiring,
-               and it lives inside the sheet below the grab bar — so it goes with the list
-               and the stats at the shut snap and the resting map stays exactly as bare as
-               it was. The chip row here scrolls sideways rather than wrapping; see the CSS. -->
-          <div class="searchbar" data-sview="poi">
-            <span class="searchbar-ic" data-ic="search" aria-hidden="true"></span>
-            <input type="search" class="f-nameQ searchbar-q" inputmode="search" enterkeyhint="search"
-              autocomplete="off" placeholder="Search places" aria-label="Search places by name">
-            <span class="searchbar-ct" data-searchct></span>
-            <button type="button" class="searchbar-x" data-searchclear aria-label="Clear the search" hidden>&times;</button>
-          </div>
+          <!-- Chips but no search box, and that is the whole of the difference between
+               this view and Trip: #poiQ at the top of Nearby already searches every place
+               the app holds, and a second pill under the drawer asking a narrower question
+               in the same shape reads as the same control until it doesn't. So the name
+               filter stays where it was — in the drawer above — and only the chips come
+               out, which is where the sheet needed them anyway. They scroll sideways here
+               rather than wrapping; see the CSS. -->
           <div class="qchips" data-qview="poi"></div>
           <div class="sortbar" role="group" aria-label="Sort the list">
             <span class="sortbar-l">Sort</span>
@@ -1293,12 +1292,14 @@
                rider who never turned the tab on could not reach the filter at all. -->
           <label class="switch switch-sm"><input type="checkbox" class="f-showPassed"> Show stops I’ve already passed</label>
         </details>
-        <!-- Search, on the table rather than in the drawer above it. The class is the
-             whole wiring: f-nameQ is the same shared string the drawer's box carries, so
-             typing here narrows Nearby and the map list too and the copies mirror each
-             other through fSet. data-sview names the view whose count the readout prints
-             — the block is otherwise id-free, because the map sheet ships a second copy
-             of the poi one and an id that exists twice answers for only one of them. -->
+        <!-- Search, on the table rather than in the drawer above it, and only here: the
+             two POI views have #poiQ, which searches every place the app holds rather
+             than filtering the list, and one search-shaped pill per screen is the limit.
+             Trip has no #poiQ — that search never looks at towns — so this is the only
+             box a rider can reach the stop names from without opening the drawer.
+             The class is the whole wiring: f-nameQ is the same shared string the drawer's
+             box carries, so typing here narrows Nearby and the map list too and every
+             copy mirrors through fSet. data-sview names the view whose count it prints. -->
         <div class="searchbar" data-sview="itin">
           <span class="searchbar-ic" data-ic="search" aria-hidden="true"></span>
           <input type="search" class="f-nameQ searchbar-q" inputmode="search" enterkeyhint="search"
@@ -1392,14 +1393,8 @@
           </div>
           <p class="poi-band-note">How far you are willing to leave the route. Places right on the trail always pass — a spur only counts once it is a tenth of a mile, the same threshold the list uses when it breaks a distance down.</p>
         </details>
-        <!-- Second home of the same shared string — see the Trip copy. -->
-        <div class="searchbar" data-sview="poi">
-          <span class="searchbar-ic" data-ic="search" aria-hidden="true"></span>
-          <input type="search" class="f-nameQ searchbar-q" inputmode="search" enterkeyhint="search"
-            autocomplete="off" placeholder="Search places" aria-label="Search places by name">
-          <span class="searchbar-ct" data-searchct></span>
-          <button type="button" class="searchbar-x" data-searchclear aria-label="Clear the search" hidden>&times;</button>
-        </div>
+        <!-- Chips, and deliberately no search box: #poiQ is a dozen lines above this,
+             and it asks the bigger question. See the map sheet's copy of this block. -->
         <div class="qchips" data-qview="poi"></div>
         <div class="sortbar" role="group" aria-label="Sort the list">
           <span class="sortbar-l">Sort</span>
