@@ -1974,13 +1974,8 @@ class TrailApp {
 
   /* ---------- controls ---------- */
   wireControls(){
-    const ua=this.$('ulAdd'); if(ua) ua.addEventListener('click',()=>this.addArcgisLayer((this.$('ulUrl')||{}).value));
-    const uu=this.$('ulUrl'); if(uu) uu.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); this.addArcgisLayer(uu.value); } });
-    const ug=this.$('ulGpx'); if(ug) ug.addEventListener('change',e=>{
-      const f=e.target.files && e.target.files[0];
-      this.addGpxLayer(f); e.target.value='';
-    });
-    document.addEventListener('click',e=>{ const x=e.target.closest('.ul-x'); if(x) this.removeUserLayer(x.dataset.ul); });
+    // The add-a-layer fields are built into the layers card, so they are wired where they
+    // are made (buildAddData) rather than here — wireControls runs before there is a map.
     document.addEventListener('click',e=>{ if(e.target.closest('.dir-toggle')) this.flipDir(); });
     // Any pin's "Measure from here" / "Add to measure" button hands its exact spot in.
     document.addEventListener('click',e=>{ const b=e.target.closest('.measure-add'); if(b) this.measureFromPopup(b); });
@@ -3427,10 +3422,9 @@ class TrailApp {
     const name=await this.arcgisName(base);
     const rec={id:'u'+Date.now(), kind:'arcgis', url:base, name, color:this.userColor()};
     this.userLayers.push(rec);
-    if(!this.saveUserLayers()) this.userStatus('Added, but there wasn\u2019t room to remember it past this session.');
-    else this.userStatus('Added \u201c'+name+'\u201d. Switch it on in the map\u2019s layers control.');
-    this.registerUserLayer(rec);
-    this.renderUserLayers();
+    this.registerUserLayer(rec, true);
+    if(!this.saveUserLayers()) this.userStatus('Drawn, but there wasn\u2019t room to remember it past this session.');
+    else this.userStatus('Added \u201c'+name+'\u201d, on and at the top of the list.');
     const inp=this.$('ulUrl'); if(inp) inp.value='';
   }
   async addGpxLayer(file){
@@ -3443,32 +3437,110 @@ class TrailApp {
       color:this.userColor(), lines:g.lines, wpts:g.wpts};
     this.userLayers.push(rec);
     const n=g.lines.reduce((a,l)=>a+l.length,0);
+    this.registerUserLayer(rec, true);
     if(!this.saveUserLayers()){
       // Better to draw it now and say it won't survive than to refuse the file.
       this.userStatus('Drawn, but '+file.name+' is too big to keep \u2014 it will be gone on reload.');
     } else this.userStatus('Added \u201c'+rec.name+'\u201d: '+n+' points'
-      +(g.wpts.length?' and '+g.wpts.length+' waypoints':'')+'. Switch it on in the layers control.');
-    this.registerUserLayer(rec);
-    this.renderUserLayers();
+      +(g.wpts.length?' and '+g.wpts.length+' waypoints':'')+', on and at the top of the list.');
+  }
+  /* Two taps, because the × sits a few millimetres from the checkbox that only switches
+     the layer off, and the two are not equally undoable: a GPX taken off the list is a
+     file to find and pick again, and an ArcGIS layer is a URL to go and dig out. The
+     first tap arms this one button and says so in red; the second inside three seconds
+     does it. Anything else — three seconds, or the list being rebuilt under it — disarms.
+     A confirm() would do the same job by stopping the app dead on a phone at the side of
+     a road, which is not a trade this screen makes anywhere else. */
+  armRemoveUser(btn){
+    const id=btn.getAttribute('data-ulx');
+    if(this._ulArm===id){ this.disarmRemoveUser(); this.removeUserLayer(id); return; }
+    this.disarmRemoveUser();
+    this._ulArm=id;
+    btn.classList.add('armed');
+    btn.title='Tap again to remove';
+    this._ulArmT=setTimeout(()=>this.disarmRemoveUser(), 3000);
+  }
+  disarmRemoveUser(){
+    clearTimeout(this._ulArmT);
+    this._ulArm=null;
+    const box=this.layersCtl && this.layersCtl._container;
+    if(!box) return;
+    [].slice.call(box.querySelectorAll('.lyr-x.armed')).forEach(b=>{
+      b.classList.remove('armed'); b.title='Remove this layer';
+    });
   }
   removeUserLayer(id){
     const rec=this.userLayers.find(r=>r.id===id); if(!rec) return;
     this.userLayers=this.userLayers.filter(r=>r.id!==id);
     this.saveUserLayers();
     this.unregLayer('user:'+id);
-    this.renderUserLayers();
     this.userStatus('Removed \u201c'+rec.name+'\u201d.');
   }
   userStatus(msg){ const el=this.$('ulStat'); if(el) el.textContent=msg; }
+  /* The form that brings a layer in, at the foot of the card that lists what is already
+     here. It used to live on the More screen, three taps and a screen away from the map
+     it draws on, and what it produced was a row you then had to go and switch on. Adding
+     a layer and deciding what it sits under are one job, so they are in one place now.
+     Appended to Leaflet's own form, not to either of its lists: _update empties the base
+     and overlay lists on every rebuild and leaves the rest of the form alone, so a block
+     parked here outlives the rebuilds without any restoring of its own — and a half-typed
+     URL survives switching a layer on and off, which it would not if this were rebuilt. */
+  buildAddData(){
+    const ctl=this.layersCtl;
+    const form=ctl && (ctl._form || (ctl._container && ctl._container.querySelector('.leaflet-control-layers-list')));
+    if(!form) return;
+    const box=document.createElement('div');
+    box.className='lyr-add';
+    box.innerHTML='<div class="lyr-add-h">Add your own</div>'
+      +'<div class="lyr-add-row">'
+      +'<input id="ulUrl" type="url" class="lyr-add-in" inputmode="url" autocomplete="off" '
+      +'spellcheck="false" placeholder="ArcGIS layer URL" aria-label="ArcGIS layer URL">'
+      +'<button id="ulAdd" type="button" class="lyr-add-go">Add</button></div>'
+      +'<label class="lyr-add-file">Choose a GPX file…'
+      +'<input id="ulGpx" type="file" accept=".gpx,application/gpx+xml,application/xml"></label>'
+      +'<div id="ulStat" class="ul-stat" role="status"></div>';
+    form.appendChild(box);
+    const url=box.querySelector('#ulUrl');
+    box.querySelector('#ulAdd').addEventListener('click',()=>this.addArcgisLayer(url.value));
+    url.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); this.addArcgisLayer(url.value); } });
+    box.querySelector('#ulGpx').addEventListener('change',e=>{
+      const f=e.target.files && e.target.files[0];
+      this.addGpxLayer(f); e.target.value='';
+    });
+    /* Two things the map would otherwise do with these keystrokes. Leaflet's keyboard
+       handler sits on the map container, which this card is inside, so a + in a URL would
+       zoom and the arrow keys would pan the map out from under what you are typing. And
+       the fields are in a real <form> with nowhere to go, so an Enter that got past the
+       handler above would submit it and reload the app. */
+    L.DomEvent.on(box,'keydown keypress keyup',L.DomEvent.stopPropagation);
+    L.DomEvent.on(form,'submit',L.DomEvent.stop);
+  }
   /* Registered empty and filled on first switch-on, the same bargain the traffic
-     counts make: a layer you have not asked to see costs nothing. */
-  registerUserLayer(rec){
+     counts make: a layer you have not asked to see costs nothing. That bargain is why
+     `fresh` exists rather than this always switching itself on: the same method registers
+     the layers restored from a previous session, and a rider who once added four ArcGIS
+     services should not spend four fetches every time the app opens. Something you just
+     handed over is different — you are looking at the map, waiting for it. */
+  registerUserLayer(rec, fresh){
     if(!this.layersCtl) return;
-    const g=L.layerGroup();
+    const g=L.layerGroup(), key='user:'+rec.id;
     rec._layer=g; rec._drawn=false;
-    this.regLayer('user:'+rec.id, g,
-      esc(rec.name)+' <span class="lyr-ct">'+(rec.kind==='gpx'?'GPX':'ArcGIS')+'</span>');
+    this.regLayer(key, g,
+      esc(rec.name)+' <span class="lyr-ct">'+(rec.kind==='gpx'?'GPX':'ArcGIS')+'</span>'
+      +' <button type="button" class="lyr-x" data-ulx="'+esc(rec.id)+'"'
+      +' title="Remove this layer" aria-label="Remove '+esc(rec.name)+'">×</button>');
     if(this.map) this.map.on('overlayadd', e=>{ if(e.layer===g) this.fillUserLayer(rec); });
+    if(!fresh) return;
+    /* Top of the order before it is switched on, not after: the pane z-indexes are read
+       from the order at draw time, so setting it first means the layer lands where it
+       belongs instead of being drawn under everything and lifted a frame later. Top is
+       the only sensible answer for something the rider fetched this second — under the
+       trail line it would be a layer you asked for and cannot see — and it is written
+       into lyrOrder rather than applied loose, so a later drag has something to move. */
+    this.lyrOrder=[key].concat(this.lyrOrderList().filter(k=>k!==key));
+    this.savePrefs();
+    if(this.map) this.map.addLayer(g);      // fires overlayadd, which fills it
+    this.applyLyrOrder();
   }
   async fillUserLayer(rec){
     if(rec._drawn) return;
@@ -3535,16 +3607,6 @@ class TrailApp {
     if(keys.length>12) h+='<span style="opacity:.65">and '+(keys.length-12)+' more fields</span>';
     return h;
   }
-  renderUserLayers(){
-    const el=this.$('ulList'); if(!el) return;
-    if(!this.userLayers.length){ el.innerHTML=''; return; }
-    el.innerHTML=this.userLayers.map(r=>
-      '<div class="ul-row"><span class="ul-dot" style="background:'+r.color+'"></span>'
-      +'<span class="ul-nm">'+esc(r.name)+'</span>'
-      +'<span class="ul-k">'+(r.kind==='gpx'?'GPX':'ArcGIS')+'</span>'
-      +'<button type="button" class="ul-x" data-ul="'+esc(r.id)+'">Remove</button></div>').join('');
-  }
-
   /* ---------- the layers control ---------- */
   /* Overlays are registered here rather than handed straight to Leaflet, because a
      control you can drag needs a name for each row that outlives the page: layer
@@ -3663,8 +3725,11 @@ class TrailApp {
       this.wireDrag(row, row.parentElement, '.lyr-row', '.lyr-grip', 'y', commit);
     });
     // 5. Anything on a row that carries state of its own: the rebuild restored the
-    //    markup as it was registered, which for the AADT chip is always "pressed".
+    //    markup as it was registered, which for the AADT chip is always "pressed" and
+    //    for an armed × is unarmed — so the arm is dropped rather than left true in a
+    //    field with nothing red on screen to say so.
     this.syncAadtLb();
+    if(this._ulArm) this.disarmRemoveUser();
     this.applyLyrOrder();
   }
   /* The POI rows for one source, folded under a header carrying a group on/off box
@@ -5262,6 +5327,7 @@ class TrailApp {
        so the DOM is never rewritten under a handler that is still walking it. */
     const upd=this.layersCtl._update.bind(this.layersCtl);
     this.layersCtl._update=()=>{ const r=upd(); this.scheduleDecorate(); return r; };
+    this.buildAddData();
     const lcEl=this.layersCtl.getContainer();
     /* Delegated, once, on the control itself: Leaflet throws the list away and rebuilds
        it every time a layer is added or a box is ticked, so a listener hung on the chip
@@ -5270,10 +5336,12 @@ class TrailApp {
        the row's own checkbox: a button inside a label doesn't trigger the label, but it
        does still bubble to the form handler Leaflet reads its checkboxes from. */
     if(lcEl) L.DomEvent.on(lcEl,'click',ev=>{
-      const t=ev.target, b=t && t.closest ? t.closest('[data-aadtlb]') : null;
-      if(!b) return;
-      L.DomEvent.stop(ev);
-      this.setAadtLabels(!this.aadtLb);
+      const t=ev.target;
+      if(!t || !t.closest) return;
+      const b=t.closest('[data-aadtlb]');
+      if(b){ L.DomEvent.stop(ev); this.setAadtLabels(!this.aadtLb); return; }
+      const x=t.closest('[data-ulx]');
+      if(x){ L.DomEvent.stop(ev); this.armRemoveUser(x); }
     });
     /* Leaflet drops this in the top-right corner, under the notch and out of a thumb's
        reach. Move it down into the FAB stack, where the rest of the map controls live —
@@ -5416,7 +5484,6 @@ class TrailApp {
     map.on('overlayadd', e=>{ if(e.layer===this.aadtLayer){ this.aadtSig=''; this.loadAadt(); } });
     // Whatever the rider brought last time, back in the control in the same order.
     this.userLayers.forEach(rec=>this.registerUserLayer(rec));
-    this.renderUserLayers();
     map.on('overlayremove', e=>{ if(e.layer===this.aadtLayer) this.aadtLayer.clearLayers(); });
     // Off until asked for: it costs a dozen requests to a public service, so switching
     // it on is the fetch trigger rather than something that happens behind your back.
