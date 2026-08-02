@@ -201,6 +201,34 @@ const AADT_BANDS=[[500     ,'#2e7d32','quiet'   ,4  ,'#1b5e20'],
    way", so the eye never mistakes a busy road for the route. Round caps keep the
    dashes from looking like ticks at the heavier weights. */
 const AADT_DASH='7,7';
+/* ---- cycling infrastructure, as vectors ----
+   Overpass is OSM's own query service: you ask it for tags in a box and it hands back the
+   ways with their geometry inline, which is what makes this drawable as real lines you can
+   tap rather than as pixels baked into a basemap. It is why the CyclOSM row and these rows
+   are both worth having and are not the same thing — CyclOSM is a picture of this data and
+   answers "what is around here" at a glance, these are the data and answer "what exactly
+   is this, and what is it surfaced with" when you point at one.
+   Two separate switches because they are two different decisions. A traffic-free path is
+   somewhere you would route yourself onto; a painted lane on a road is a fact about a road
+   you were already going to be on, and wanting one of those on the map is no reason to
+   want the other.
+   The service is free, shared and strictly rate-limited, so this is off until asked for,
+   floored at a zoom where the answer is a town rather than a county, capped, and debounced
+   — a drag across the state must not post a query per frame. */
+const OSMCY_URL='https://overpass-api.de/api/interpreter';
+const OSMCY_MINZ=12, OSMCY_CAP=3000, OSMCY_WAIT=650;
+const OSMCY_SRC='https://wiki.openstreetmap.org/wiki/Bicycle';
+/* Green for the traffic-free ways and orange for the painted ones, and neither is a colour
+   already spoken for: the route owns cyan and purple, your own position owns the blue, the
+   dropped search pins own the magenta. It does collide with the ends of the traffic ramp,
+   which is the one clash left on this map and the cheapest to live with — traffic counts
+   and cycle ways are both road-detail layers that answer different questions, and nobody
+   reads both at once. Solid where OSM names a hard surface, dashed where it names a soft
+   one; where it names none the line stays solid rather than inventing a claim, and the
+   popup is where "not recorded" gets said out loud. */
+const CY_PATH='#00875a', CY_LANE='#e8590c';
+const CY_DASH='5,6';
+const CY_PAVED=/^(asphalt|paved|concrete|paving_stones|chipseal|sett|metal|wood|cobblestone)/;
 /* The two halves of the trail as the MAP draws them — the route line, the milepost
    chips, the stop dots, the town names. Deliberately not --color-accent-2, which the
    Erie half used to borrow: that is a UI colour with a different job, saying "this is
@@ -1146,6 +1174,8 @@ class TrailApp {
     this.userLayers=[]; this.wxAt0=null; this.wxPanT=null;
     this.routeLayer=null;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
+    // The cycling vectors. Two layers, one fetch, one signature — see loadCycle.
+    this.cyPathLayer=null; this.cyLaneLayer=null; this.cySig=''; this.cyReq=0; this._cyTimer=0;
     /* The count numbers ride in their own group inside the traffic layer and keep the
        rows they were drawn from, so switching them off and on again is a relabel of
        what is already on screen rather than another trip to NYSDOT. On by default:
@@ -4251,6 +4281,137 @@ class TrailApp {
     return h;
   }
 
+  /* ---------- cycling infrastructure ---------- */
+  /* Which of the two switches a way belongs under. The order matters: a road can carry
+     both a designated path alongside it and a painted lane on it, and the separated thing
+     is the one worth knowing about, so it wins. */
+  cyKind(t){
+    if(t.highway==='cycleway') return 'path';
+    if(t.bicycle==='designated' && /^(path|footway|track|bridleway)$/.test(t.highway||'')) return 'path';
+    return 'lane';
+  }
+  /* Hard, soft, or not recorded \u2014 three answers, not two. OSM's surface tag is optional
+     and often missing on exactly the rural stretches where it matters most, and treating a
+     missing tag as "unpaved" would draw two hundred miles of unknown towpath as a warning
+     the data never gave. Null means unknown and the line stays solid; the popup says so. */
+  cySurface(t){
+    const s=String(t.surface||'').toLowerCase();
+    if(!s) return null;
+    return CY_PAVED.test(s) ? 'paved' : 'unpaved';
+  }
+  cyOn(){
+    const m=this.map;
+    return !!m && ((this.cyPathLayer && m.hasLayer(this.cyPathLayer))
+                || (this.cyLaneLayer && m.hasLayer(this.cyLaneLayer)));
+  }
+  /* One fetch feeds both switches. They are separate rows because they are separate
+     decisions, but they come out of one Overpass query \u2014 asking twice for two halves of
+     the same box would double the load on a shared service to save nothing. */
+  queueCycle(){
+    if(!this.cyOn()) return;
+    clearTimeout(this._cyTimer);
+    this._cyTimer=setTimeout(()=>this.loadCycle(), OSMCY_WAIT);
+  }
+  async loadCycle(){
+    const m=this.map;
+    if(!m||!this.cyOn()) return;
+    const z=m.getZoom();
+    if(z<OSMCY_MINZ){
+      if(this.cyPathLayer) this.cyPathLayer.clearLayers();
+      if(this.cyLaneLayer) this.cyLaneLayer.clearLayers();
+      this.cySig='';
+      this.status('Cycle ways draw from zoom '+OSMCY_MINZ+' in \u2014 further out it is more query than any shared service should be asked for.');
+      return;
+    }
+    const b=m.getBounds();
+    const sig=z+':'+[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(v=>v.toFixed(4)).join(',');
+    if(sig===this.cySig) return;
+    this.cySig=sig;
+    const my=++this.cyReq;
+    const box=[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(v=>v.toFixed(5)).join(',');
+    /* out geom, so each way carries its own coordinates and there is no second pass to
+       resolve node ids. qt orders by tile, which is what lets the cap cut a coherent
+       patch rather than a scatter. */
+    const q='[out:json][timeout:25];('
+      +'way["highway"="cycleway"]('+box+');'
+      +'way["bicycle"="designated"]["highway"~"^(path|footway|track|bridleway)$"]('+box+');'
+      +'way["cycleway"~"lane|track|share_busway|shared_lane"]('+box+');'
+      +'way["cycleway:both"~"lane|track"]('+box+');'
+      +'way["cycleway:left"~"lane|track"]('+box+');'
+      +'way["cycleway:right"~"lane|track"]('+box+');'
+      +');out geom qt '+OSMCY_CAP+';';
+    this.status('Reading cycle ways from OpenStreetMap\u2026');
+    let els;
+    try{
+      const r=await fetch(OSMCY_URL,{method:'POST',body:'data='+encodeURIComponent(q),
+        headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+      // 429 and 504 are what a shared service says when it is busy, and they deserve their
+      // own sentence: "no answer" reads as broken, and this is "try again in a moment".
+      if(r.status===429||r.status===504) throw new Error('busy');
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      els=((await r.json())||{}).elements||[];
+    }catch(e){
+      if(my!==this.cyReq) return;
+      this.cySig='';
+      this.status(e && e.message==='busy'
+        ? 'The OpenStreetMap query service is busy right now. Pan or zoom to ask it again \u2014 the rest of the map is unaffected.'
+        : 'No answer from the OpenStreetMap query service. The rest of the map is unaffected.');
+      return;
+    }
+    if(my!==this.cyReq) return;
+    const n=this.drawCycle(els);
+    this.status(n.total>=OSMCY_CAP
+      ? 'Cycle ways: '+OSMCY_CAP.toLocaleString()+' in view, which is the cap \u2014 zoom in for the rest.'
+      : n.path+' traffic-free \u00b7 '+n.lane+' on-road, in view.');
+  }
+  drawCycle(els){
+    const gp=this.cyPathLayer, gl=this.cyLaneLayer;
+    if(gp) gp.clearLayers();
+    if(gl) gl.clearLayers();
+    let path=0, lane=0;
+    els.forEach(el=>{
+      const geom=el.geometry;
+      if(!geom || geom.length<2) return;
+      const t=el.tags||{};
+      const kind=this.cyKind(t), g=kind==='path'?gp:gl;
+      if(!g) return;
+      const surf=this.cySurface(t);
+      const ll=geom.map(p=>[p.lat,p.lon]);
+      const col=kind==='path'?CY_PATH:CY_LANE;
+      const ln=L.polyline(ll,{pane:this.lyrPane(kind==='path'?'cypath':'cylane'),
+        color:col, weight:kind==='path'?4:3, opacity:.9, lineCap:'round', lineJoin:'round',
+        dashArray: surf==='unpaved' ? CY_DASH : null});
+      ln.bindPopup('',{maxWidth:260,autoPan:false});
+      ln.on('popupopen',()=>ln.setPopupContent(this.cyPopup(t,kind,surf)));
+      ln.addTo(g);
+      if(kind==='path') path++; else lane++;
+    });
+    this.applyLyrOrder();
+    return {path, lane, total:path+lane};
+  }
+  cyPopup(t,kind,surf){
+    const nm=String(t.name||t.ref||'').trim()
+      || (kind==='path' ? 'Cycle path' : 'Road with a bike lane');
+    let h='<b>'+esc(nm)+'</b><br><b style="color:'+(kind==='path'?CY_PATH:CY_LANE)+'">'
+      +(kind==='path'?'Traffic-free':'On-road lane')+'</b>';
+    /* Surface first, because on a fifteen-day tour it is the tag that changes the day.
+       "Not recorded" is printed rather than left blank: a silent gap reads as paved, and
+       the whole point of showing this is to stop a rider assuming. */
+    h+='<br>Surface: <b>'+(t.surface ? esc(String(t.surface).replace(/_/g,' '))
+        +(surf==='unpaved'?' \u2014 unpaved':'') : 'not recorded')+'</b>';
+    const bits=[];
+    if(t.smoothness) bits.push('smoothness '+String(t.smoothness).replace(/_/g,' '));
+    if(t.width) bits.push(t.width+' m wide');
+    if(t.lit==='yes') bits.push('lit');
+    if(t.highway && kind==='path') bits.push(String(t.highway).replace(/_/g,' '));
+    const cw=t.cycleway||t['cycleway:both']||t['cycleway:left']||t['cycleway:right'];
+    if(cw && kind==='lane') bits.push(String(cw).replace(/_/g,' '));
+    if(t.oneway==='yes') bits.push('one way');
+    if(bits.length) h+='<br><span style="opacity:.75">'+esc(bits.join(' \u00b7 '))+'</span>';
+    h+='<br><span style="opacity:.6">OpenStreetMap</span>';
+    return h;
+  }
+
   /* ---------- trail town names ---------- */
   /* A dot says a town is here and makes you tap it to find out which one, which is a
      question the map should have answered before you asked. So every stop carries its
@@ -5823,10 +5984,12 @@ class TrailApp {
     osm.addTo(map);
     // Held onto so buildPOILayers can hang facility overlays off it once the
     // live data lands — this control is now the only place map pins get toggled.
-    // Cycle sits next to Map, not down with the topo pair: it is the same OSM data drawn
-    // for a different reader, and grouping the list by what a row is a rendering OF is
-    // what makes it answerable at a glance.
-    this.layersCtl=L.control.layers({'Map':osm,'Cycle':cycle,'Satellite':sat,'Hybrid':hybrid,'Topo':topo,'USGS Topo':usgs},
+    /* Sits next to Map, not down with the topo pair: it is the same OSM data drawn for a
+       different reader, and grouping the list by what a row is a rendering OF is what makes
+       it answerable at a glance. Named "Cycle map" rather than "Cycle" so it cannot be read
+       as a sibling of the Cycle paths and Bike lanes rows below — those are switches that
+       add lines to whatever you are already looking at, this one replaces the picture. */
+    this.layersCtl=L.control.layers({'Map':osm,'Cycle map':cycle,'Satellite':sat,'Hybrid':hybrid,'Topo':topo,'USGS Topo':usgs},
       null,{position:'topright',collapsed:true}).addTo(map);
     /* Offered only when a key is actually set. Without one Google serves a grey
        "for development purposes only" wash over everything, which is a worse map
@@ -5977,7 +6140,7 @@ class TrailApp {
       +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
     // Names first, always: the mileposts are the ones that give way, and they can only
     // do that against boxes that have already been worked out for this view.
-    map.on('moveend',()=>{ this.renderTownLabels(); this.renderMileposts(); this.loadAadt(); this.wxPanRefresh(); this.syncRangeToMap(); this.elevPanRefresh(); });
+    map.on('moveend',()=>{ this.renderTownLabels(); this.renderMileposts(); this.loadAadt(); this.queueCycle(); this.wxPanRefresh(); this.syncRangeToMap(); this.elevPanRefresh(); });
     /* The profile's other direction: point at the trail on the map and the crosshair walks
        the chart. Hung on the map rather than on the route line so it still answers a few
        hundred yards either side of the stroke — a pointer has to land on a 5px line to hit
@@ -6022,6 +6185,40 @@ class TrailApp {
       +' <button type="button" class="lyr-ct lyr-tog" data-aadtlb="1" aria-pressed="true">AADT</button>');
     this.syncAadtLb();
     map.on('overlayadd', e=>{ if(e.layer===this.aadtLayer){ this.aadtSig=''; this.loadAadt(); } });
+    /* The cycling vectors: two rows, one query, both off until asked for. The rows name
+       what they are on their face and link the OSM wiki behind it, because "Cycle" alone
+       was a word the map already used for a basemap and a row you cannot tell apart from
+       another row is a row you will not switch on.
+       Registered before the trail line so they draw underneath it — these are what the
+       route is choosing between, not the route itself, and a 4px green path over the top
+       of the 5px cyan line would read as a diversion off it. */
+    this.cyPathLayer=L.layerGroup();
+    this.regLayer('cypath', this.cyPathLayer,
+      this.lyrSrc('Cycle paths', OSMCY_SRC, 'Traffic-free: cycleways, and paths signed for bikes. From OpenStreetMap via Overpass — opens the tagging guide')
+      +' <span class="lyr-ct lyr-key" style="background:'+CY_PATH+'">traffic-free</span>');
+    this.cyLaneLayer=L.layerGroup();
+    this.regLayer('cylane', this.cyLaneLayer,
+      this.lyrSrc('Bike lanes', OSMCY_SRC, 'On-road: roads carrying a painted lane or track. From OpenStreetMap via Overpass — opens the tagging guide')
+      +' <span class="lyr-ct lyr-key" style="background:'+CY_LANE+'">on-road</span>');
+    /* Either switch turns the one fetch on; only the last one off stands it down.
+       Deliberately NOT clearing the row you just switched off, and deliberately not
+       resetting the signature when you switch one on. One query fills both groups, and a
+       group that is off the map still holds its lines — so switching the second row on is
+       free, and it used to cost a second identical query to a shared public service purely
+       because the handler reset the signature before asking. loadCycle's own guard is the
+       right judge of whether anything needs fetching; the handler's job is only to ask.
+       The full stand-down, when neither is left on, is what makes switching them both off
+       and on again refetch rather than redraw a view you have since panned away from. */
+    map.on('overlayadd', e=>{
+      if(e.layer!==this.cyPathLayer && e.layer!==this.cyLaneLayer) return;
+      this.loadCycle();
+    });
+    map.on('overlayremove', e=>{
+      if(e.layer!==this.cyPathLayer && e.layer!==this.cyLaneLayer) return;
+      if(this.cyOn()) return;
+      clearTimeout(this._cyTimer); this.cySig='';
+      this.cyPathLayer.clearLayers(); this.cyLaneLayer.clearLayers();
+    });
     // Whatever the rider brought last time, back in the control in the same order.
     this.userLayers.forEach(rec=>this.registerUserLayer(rec));
     map.on('overlayremove', e=>{ if(e.layer===this.aadtLayer) this.aadtLayer.clearLayers(); });

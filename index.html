@@ -533,6 +533,14 @@
   .feat.dragging{opacity:.9;border-color:var(--color-accent);box-shadow:0 2px 8px rgba(0,0,0,.18)}
   .feat-hint{font-size:11px;color:var(--color-neutral-500);margin:var(--space-2) 0 var(--space-4);line-height:1.5}
   .lyr-ct{color:var(--color-neutral-500);font-variant-numeric:tabular-nums;font-size:11px}
+  /* A chip that IS the legend — the colour the layer draws in, worn as the chip's own
+     background with the word inside it. The two cycling rows are the only pair on this map
+     where the row names alone leave you guessing which line on the map is which, and a
+     swatch answers that without a legend box parked over the map to hold it. Colour comes
+     from script, since the two values live there with the drawing code; everything else
+     about the chip is here. */
+  .lyr-key{padding:1px 5px;border-radius:999px;color:#fff;font-size:9.5px;font-weight:700;
+    letter-spacing:.03em;text-transform:uppercase;font-variant-numeric:normal}
   /* A chip that is also a switch — the count numbers on the traffic row. It has to look
      pressable without becoming a second button competing with the row's own checkbox, so
      it borrows the chip's size and colour and adds only a hairline box. Off, it hollows
