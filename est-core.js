@@ -4658,9 +4658,18 @@ class TrailApp {
     // end of the trail — and "TM 0.0–582" claims a tenth of a mile of precision about the
     // Battery that nothing here is measuring.
     const mi=m=>{ const r=Math.round(m*10)/10; return r===Math.round(r)?String(Math.round(r)):r.toFixed(1); };
-    el.innerHTML='<b>'+ft(s.up)+' ft</b> <span class="er-up">up</span>'
-      +sep+'<b>'+ft(s.down)+' ft</b> <span class="er-dn">down</span>'
-      +sep+'high '+ft(s.max)+' ft'
+    /* A stretch with nothing on it clearing the floor says so in a word. "0 ft up · 0 ft
+       down" is the same fact and reads as a chart that failed to load — which on four
+       miles of Erie towpath, the flattest and most common thing this trail does, would be
+       the reading a rider got most often. Saying what the floor is on the same line is
+       what keeps the claim honest: flat here means nothing over ten feet, not a spirit
+       level, and the range beside it shows the few feet there are. */
+    const flat=s.up<1 && s.down<1;
+    el.innerHTML=(flat
+        ? '<b>Flat</b> <span style="opacity:.8">nothing over '+GAIN_MIN_FT+' ft</span>'
+        : '<b>'+ft(s.up)+' ft</b> <span class="er-up">up</span>'
+          +sep+'<b>'+ft(s.down)+' ft</b> <span class="er-dn">down</span>')
+      +sep+(flat ? ft(s.min)+'–'+ft(s.max)+' ft' : 'high '+ft(s.max)+' ft')
       +sep+'<span style="opacity:.8">TM '+mi(s.lo)+'–'+mi(s.hi)+'</span>';
   }
   /* The crosshair. Drawn into a group of its own and rebuilt on every move, so tracking a
