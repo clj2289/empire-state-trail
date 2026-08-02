@@ -224,6 +224,51 @@
   .map-panel[data-snap="shut"] .panel-list,
   .map-panel[data-snap="shut"] .panel-tools,
   .map-panel[data-snap="shut"] .map-sheet{display:none}
+
+  /* ---- the elevation profile ----
+     Sized in px rather than in vh: it is a chart of a fixed number of things — three
+     gridlines, a silhouette, a row of mileposts — and a percentage of a tablet makes it
+     a poster while a percentage of a small phone in landscape makes it unreadable. 76px
+     of plot is what fits those three rows at 9px with the silhouette still legible above
+     them, and it comes to about a sixth of a portrait phone with the grip. */
+  .elev-panel{flex:none;display:flex;flex-direction:column;
+    border-bottom:1px solid var(--color-divider)}
+  .elev-panel[hidden]{display:none}
+  .elev-head{flex:none;display:flex;align-items:center;gap:var(--space-2);
+    padding:6px calc(var(--space-3) + env(safe-area-inset-right)) 3px calc(var(--space-3) + env(safe-area-inset-left))}
+  /* One line, and it takes the truncation rather than wrapping: this row is read at a
+     glance off a bar, and a readout that grows a second line moves the chart under it
+     every time the cursor crosses a four-figure elevation. */
+  .elev-read{flex:1;min-width:0;font-size:12px;line-height:1.35;color:var(--color-neutral-600);
+    font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .elev-read b{font-weight:700;color:var(--color-text)}
+  .elev-read .er-sep{opacity:.45;padding:0 2px}
+  .elev-read .er-up{color:var(--color-accent-2-700)}
+  .elev-read .er-dn{color:var(--color-accent-700)}
+  .elev-ctl{flex:none;display:flex;align-items:center;gap:4px}
+  .elev-seg{font:inherit;font-size:11px;line-height:1;cursor:pointer;min-height:26px;padding:5px 9px;
+    background:transparent;color:var(--color-neutral-700);
+    border:1px solid var(--color-divider);border-radius:999px}
+  .elev-seg:hover{border-color:var(--color-accent);background:var(--color-accent-100)}
+  .elev-seg.on{background:var(--color-accent);color:var(--color-bg);border-color:var(--color-accent)}
+  .elev-x{font:inherit;font-size:19px;line-height:1;cursor:pointer;width:28px;height:28px;padding:0;
+    background:transparent;color:var(--color-neutral-600);border:0}
+  .elev-x:hover{color:var(--color-text)}
+  /* touch-action:none, or a drag along the profile is a scroll gesture to the browser and
+     the cursor stops following the finger halfway across. Nothing here scrolls, so there
+     is no gesture being taken away. */
+  .elev-plot{flex:none;height:76px;touch-action:none;cursor:crosshair}
+  .elev-plot svg{display:block}
+  /* Chart furniture is classed and styled here rather than coloured from script, so it
+     tracks the design tokens like everything else. The two section colours are the
+     exception — they are the map's own two constants and script already holds them. */
+  .elev-plot .eg{stroke:var(--color-divider);stroke-dasharray:2 3}
+  .elev-plot .ebase{stroke:var(--color-divider)}
+  .elev-plot .elab{fill:var(--color-neutral-600);font-family:var(--font-body);font-size:9px;
+    font-variant-numeric:tabular-nums}
+  .elev-plot .ecur{stroke:var(--color-text);opacity:.75}
+  .elev-plot .ecur-d{fill:var(--color-bg);stroke:var(--color-text)}
+  .elev-plot .eme{fill:#1a73e8}
   .map-pick{animation:pickPulse 1.6s ease-out infinite}
   @keyframes pickPulse{0%,100%{opacity:1}50%{opacity:.3}}
   @media (prefers-reduced-motion:reduce){.map-pick{animation:none}}
@@ -1152,11 +1197,33 @@
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
           <button id="measureBtn" type="button" class="fab" title="Measure distance" aria-label="Measure distance"><span data-ic="ruler"></span></button>
+          <button id="elevBtn" type="button" class="fab" title="Elevation profile" aria-label="Elevation profile" aria-pressed="false"><span data-ic="elev"></span></button>
           <div class="fab-pair">
             <button id="zoomInBtn" type="button" class="fab" title="Zoom in" aria-label="Zoom in"><span data-ic="plus"></span></button>
             <button id="zoomOutBtn" type="button" class="fab" title="Zoom out" aria-label="Zoom out"><span data-ic="minus"></span></button>
           </div>
         </div>
+        <!-- The profile. A flex child of the sheet rather than a band of its own, which is
+             what makes the rest of the map screen absorb it for free: the FAB rail is
+             anchored to the sheet's top edge and so steps up over it, syncMapStrip measures
+             that edge and so caps the rail correctly, obstructedH measures it too and so
+             popups keep clear of it, and shutH adds it to the resting height so the sheet
+             at rest is the grip plus this and nothing else. A separately-positioned band
+             would have had to be taught all four of those things by hand.
+             It is NOT in the shut-snap hide list below with the list, the tools and the
+             stats: the whole point is that you can read the profile against a full-screen
+             map. Hidden until the rail's button asks for it, like everything else here. -->
+        <section id="elevPanel" class="elev-panel" hidden aria-label="Elevation profile">
+          <div class="elev-head">
+            <div id="elevRead" class="elev-read"></div>
+            <div class="elev-ctl" role="group" aria-label="What stretch the profile covers">
+              <button type="button" class="elev-seg" data-elevspan="trail">Trail</button>
+              <button type="button" class="elev-seg" data-elevspan="view">View</button>
+              <button id="elevClose" type="button" class="elev-x" aria-label="Close the elevation profile">&times;</button>
+            </div>
+          </div>
+          <div id="elevPlot" class="elev-plot"></div>
+        </section>
         <button id="panelGrab" type="button" class="panel-grab" aria-label="Resize the list panel"><span class="panel-bar"></span><span id="panelHint" class="panel-hint"></span></button>
         <div id="mapSheet" class="map-sheet"></div>
         <!-- The sheet's tools row: the FULL filter block plus the sort strip. Inside the
