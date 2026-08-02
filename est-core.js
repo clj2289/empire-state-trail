@@ -254,7 +254,6 @@ const TOWN_LB_DY=14, TOWN_LB_H=19, TOWN_LB_CH=7.5, TOWN_LB_PAD=16, TOWN_LB_GAP=4
    and in data-* attributes, so everything interpolated goes through esc() first.
    safeUrl() keeps a hostile record from smuggling a javascript: URL into an href. */
 const PREFS='est-prefs-v1';
-const PRICES='est-prices-v1';
 /* Chain pins carry a wordmark rather than a logo: brand logos are trademarks, and
    shipping them into this repo — or hotlinking them, which the offline story rules
    out anyway — is not ours to do. An abbreviation in the chain's own colour scans
@@ -284,7 +283,6 @@ function brandOf(name){
   for(let i=0;i<BRANDS.length;i++) if(BRANDS[i][0].test(n)) return {tag:BRANDS[i][1], color:BRANDS[i][2]};
   return null;
 }
-const fmtMoney = n => (n==null||!isFinite(n)) ? '' : '$'+(Math.round(n)===+n ? n : (+n).toFixed(2));
 const ESCMAP={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>ESCMAP[c]);
 const safeUrl = u => /^https?:\/\//i.test(String(u||'')) ? esc(u) : '';
@@ -428,8 +426,7 @@ const SORTCOL={
     ride: {lbl:'distance',   cmp:(a,b,s)=> cmpAhead(a.ride,b.ride,s)},
     nm:   {lbl:'name',       cmp:(a,b,s)=> s*COLL.compare(a.p.name||'',b.p.name||'')},
     mile: {lbl:'trail mile', cmp:(a,b,s,app)=> cmpNum(a.p.mile,b.p.mile,s*app.dirSign())},
-    spur: {lbl:'detour',     cmp:(a,b,s)=> s*(a.spur-b.spur)},
-    price:{lbl:'rate',       cmp:(a,b,s)=> cmpNum(a.amt,b.amt,s)}
+    spur: {lbl:'detour',     cmp:(a,b,s)=> s*(a.spur-b.spur)}
   }
 };
 /* Three keys. Seven columns of 9.5px type on a phone will not carry more badges than
@@ -1091,7 +1088,7 @@ class TrailApp {
     // window/zero controls re-plan without re-fetching). wxCur is the tapped hour.
     this.wxRideStart=8; this.wxRideEnd=17; this.wxZeroDay=-1; this.wxStartShift=0;
     this.wxData=null; this.wxGrids=null; this.wxCur=null; this.wxGridCache={};
-    this.prices={}; this.poiMarker={};
+    this.poiMarker={};
     // Planning mode: no usable trail position, so distances run from the start of the
     // trip. offTrail records how far a real fix was, for the note that explains it.
     this.planning=false; this.offTrail=0;
@@ -1132,11 +1129,11 @@ class TrailApp {
        taxonomy from the State service's asset types — cats().camp alone collapses
        Campground and Lock camping, a split poiCat() exists solely to create. */
     this.seg=''; this.am={store:0,lodging:0,camp:0,rail:0};
-    /* Nearby/panel-only. offMax is the counterpart to the Detour column, priced to the
-       Rate column; a town has neither a spur nor a saved rate. Both default to "don't
-       narrow" — every new facet has to be a thing the rider switched on, never a thing
-       that switched itself on the first time they updated. */
-    this.offMax=null; this.priced=false;
+    /* Nearby/panel-only: it is the counterpart to the Detour column, and a town has no
+       spur to be off. Defaults to "don't narrow" — every new facet has to be a thing the
+       rider switched on, never a thing that switched itself on the first time they
+       updated. */
+    this.offMax=null;
     /* poisByCat walks every POI, and this change gives it a third caller per render.
        Cached on the array length and cleared wherever POIS is rebuilt. */
     this._byCat=null; this._byCatN=-1;
@@ -1249,7 +1246,6 @@ class TrailApp {
 
   init(){
     this.loadPrefs();
-    this.loadPrices();
     this.loadUserLayers();
     this.buildDropdowns();
     this.buildTestRows();
@@ -1335,7 +1331,6 @@ class TrailApp {
     if(p.seg==='hv'||p.seg==='erie') this.seg=p.seg;
     if(p.am && typeof p.am==='object') AMKEYS.forEach(k=>{ const v=p.am[k]; if(v===1||v===-1) this.am[k]=v; });
     if(isFinite(p.offMax)&&p.offMax>=0) this.offMax=p.offMax;
-    if(typeof p.priced==='boolean') this.priced=p.priced;
     if(Array.isArray(p.searches)) this.searches=p.searches.filter(s=>s&&isFinite(s.lat)&&isFinite(s.lng)).slice(0,60);
     this.renderDirLabels();
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
@@ -1351,7 +1346,6 @@ class TrailApp {
     // Two switches, one pref — the one on More and the one in the Trip block.
     this.fSet('f-showPassed',this.showPassed);
     if(this.offMax!=null) this.fSet('f-offMax',this.offMax);
-    this.fSet('f-priced',this.priced);
     const sg=this.$('itSeg'); if(sg) sg.value=this.seg;
     if(typeof p.elevOn==='boolean') this.elevOn=p.elevOn;
     if(p.elevSpan==='trail'||p.elevSpan==='view') this.elevSpan=p.elevSpan;
@@ -1370,7 +1364,7 @@ class TrailApp {
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
       grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches,
       sort:{itin:this.sort.itin,poi:this.sort.poi},
-      nameQ:this.nameQ,seg:this.seg,am:this.am,offMax:this.offMax,priced:this.priced})); }catch(e){}
+      nameQ:this.nameQ,seg:this.seg,am:this.am,offMax:this.offMax})); }catch(e){}
   }
   /* While following, the boxes are an output, not an input — say so rather than leaving a
      rider typing into fields the next pan silently overwrites. There are two of each now
@@ -1495,7 +1489,10 @@ class TrailApp {
                 rider has touched anything is an indicator that says nothing.
        scope  — 'group' means the facet removes whole categories rather than narrowing the
                 items inside one. Excluded from `banded`, because a category the rider hid
-                does not make the surviving groups print "34 of 34". */
+                does not make the surviving groups print "34 of 34".
+       key    — what dropFacet has to undo to take this bit back off. The chip row is built
+                straight off this list, so a facet that ships without a key is a facet the
+                rider can read on three screens and unset on none of them. */
   narrowing(view){
     const b=[];
     if(view==='poi'){
@@ -1503,23 +1500,64 @@ class TrailApp {
       const all=Object.keys(byCat).filter(c=>byCat[c].length && catGrp(c)!=='bundled');
       const on=all.filter(c=>!this.catHidden.has(c)).length;
       const seeded=all.every(c=> this.catHidden.has(c) === !CAT_DEFAULT[c]);
-      if(on<all.length) b.push({lbl:on+' of '+all.length+' categories', scope:'group', dflt:seeded});
-      if(this.followMap && this.map) b.push({lbl:'map view', dflt:true});
+      if(on<all.length) b.push({key:'cats', lbl:on+' of '+all.length+' categories', scope:'group', dflt:seeded});
+      if(this.followMap && this.map) b.push({key:'follow', lbl:'map view', dflt:true});
       if(this.miMin!=null||this.miMax!=null)
-        b.push({lbl:(this.miMin!=null?this.miMin:0)+'–'+(this.miMax!=null?this.miMax:'∞')+' mi', inert:this.myMile==null});
-      if(this.offMax!=null) b.push({lbl:'≤'+this.offMax+' mi off'});
-      if(this.priced) b.push({lbl:'rate noted'});
+        b.push({key:'band', lbl:(this.miMin!=null?this.miMin:0)+'–'+(this.miMax!=null?this.miMax:'∞')+' mi', inert:this.myMile==null});
+      if(this.offMax!=null) b.push({key:'off', lbl:'≤'+this.offMax+' mi off'});
     } else {
-      if(!this.showPassed) b.push({lbl:'nothing passed', inert:this.myMile==null, dflt:true});
-      if(this.seg) b.push({lbl:this.seg==='hv'?'Hudson Valley':'Erie Canal'});
-      AMKEYS.forEach(k=>{ if(this.am[k]) b.push({lbl:(this.am[k]<0?'no ':'')+SORTCOL.itin[k].lbl}); });
+      if(!this.showPassed) b.push({key:'passed', lbl:'nothing passed', inert:this.myMile==null, dflt:true});
+      if(this.seg) b.push({key:'seg', lbl:this.seg==='hv'?'Hudson Valley':'Erie Canal'});
+      AMKEYS.forEach(k=>{ if(this.am[k]) b.push({key:'am:'+k, lbl:(this.am[k]<0?'no ':'')+SORTCOL.itin[k].lbl}); });
     }
     // Following the map, the range is a readout of the viewport rather than something the
     // rider set — so on Trip it is not narrowing anything and must not claim to be.
     if(!(view==='itin' && this.followMap) && (this.mpFrom!=null||this.mpTo!=null))
-      b.push({lbl:'TM '+(this.mpFrom!=null?this.mpFrom:0)+'–'+(this.mpTo!=null?this.mpTo:Math.round(TOTAL))});
-    if(this.nameQ) b.push({lbl:'“'+this.nameQ+'”'});
+      b.push({key:'range', lbl:'TM '+(this.mpFrom!=null?this.mpFrom:0)+'–'+(this.mpTo!=null?this.mpTo:Math.round(TOTAL))});
+    if(this.nameQ) b.push({key:'name', lbl:'“'+this.nameQ+'”'});
     return b;
+  }
+  /* Take one bit back off, from the chip that says it is on. Each arm is the same edit
+     the facet's own control would have made — the name box, the range Clear, an amenity
+     tapped back round to "any" — so a chip and the control it stands for can never drift
+     into meaning different things. Two are deliberately not simple assignments:
+       range  — following the map, the two boxes are a readout of the viewport, so
+                clearing the numbers alone would let the next pan write them straight back.
+                Dropping the chip has to take the wheel first, which is exactly what the
+                block's own Clear does.
+       cats   — restores the CAT_DEFAULT seed, not "nothing hidden". The seed is why the
+                map does not open under 700 pins; a drop that floods it is not an undo. */
+  dropFacet(key){
+    let cats=false;
+    if(key==='name'){ this.nameQ=''; this._nameKey=''; this.fSet('f-nameQ',''); }
+    else if(key==='range'){ this.stopFollowing(); this.mpFrom=null; this.mpTo=null;
+      this.fSet('f-mpFrom',null); this.fSet('f-mpTo',null); }
+    else if(key==='band'){ this.miMin=null; this.miMax=null;
+      this.fSet('f-miMin',null); this.fSet('f-miMax',null); }
+    else if(key==='off'){ this.offMax=null; this.fSet('f-offMax',null); }
+    else if(key==='passed'){ this.showPassed=true; this.fSet('f-showPassed',true); }
+    else if(key==='seg'){ this.seg=''; const sg=this.$('itSeg'); if(sg) sg.value=''; }
+    else if(key==='cats'){ cats=this.seedCats(); }
+    else if(key.indexOf('am:')===0){ this.am[key.slice(3)]=0; }
+    else return;
+    this.savePrefs();
+    if(cats){ this.renderCategories(); this.scheduleDecorate(); }
+    /* renderAll rather than the one view's renderer, because the facets are not the one
+       view's: the name and the range reach all three, and a drop on Trip that left Nearby
+       showing the old list would be the same bug the shared filters were built to end. */
+    this.renderAll();
+  }
+  /* The shipped category visibility, restored through applyCatVis so the pins come back
+     with the rows. Answers whether anything actually moved, so a caller can skip the
+     category re-render and the map decorate when nothing did. */
+  seedCats(){
+    let moved=false;
+    CAT_ORDER.forEach(c=>{
+      const want=!!CAT_DEFAULT[c];
+      if(this.catHidden.has(c)===!want) return;
+      this.applyCatVis(c,want); moved=true;
+    });
+    return moved;
   }
   // Did the rider set any of this themselves? Drives the accent rule and Clear.
   userSet(view){ return this.narrowing(view).some(x=>!x.inert && !x.dflt) || this.sort[view].length>0; }
@@ -1531,10 +1569,6 @@ class TrailApp {
      a phone and six facets will not fit in it. The rule down the left carries the "the
      rider set something" half; this line only has to carry "what". */
   syncFilterState(){
-    /* The Clear row is the block's next sibling, but only once the markup that carries it
-       has shipped — so it is matched by class rather than taken on position. Hiding
-       whatever happens to follow a <details> would, on the day the row is not there yet,
-       hide the list the block filters. */
     const paint=(box,view)=>{
       if(!box) return;
       const live=this.narrowing(view).filter(x=>!x.inert), set=this.userSet(view);
@@ -1542,8 +1576,6 @@ class TrailApp {
       this.setTxt(box.querySelector('.filters-state'), live.length
         ? live.slice(0,3).map(x=>x.lbl).join(' · ') + (live.length>3?' · +'+(live.length-3):'')
         : 'all showing');
-      const cw=box.nextElementSibling;
-      if(cw && cw.classList && cw.classList.contains('filters-clear')) cw.hidden = !set;
     };
     /* Every block that declares which view it filters, wherever it is — Nearby's, Trip's
        and the copy in the map sheet. Keyed on the attribute rather than on three ids
@@ -1558,11 +1590,66 @@ class TrailApp {
       this.setTxt(c.querySelector('.tri-v'), TRIWORD[v]);
       this.setAttr(c,'aria-label', n+': '+TRIWORD[v]);
     });
+    this.syncQueryChips();
+    this.syncSearchUi();
     // The range is shared, but not unconditionally — say which it is, on the screen where
     // the map that drives it is not visible.
     this.setTxt(this.$('itMpNote'), this.followMap
       ? 'Shared with Nearby and the map — but right now the range is following the map view, so it narrows those two and not this table. Both boxes are a readout while it does. Stop following, above, to type your own and have it apply everywhere.'
       : 'Shared with Nearby and the map list. TM is the fixed milepost measured along the route from the NYC end, so it works with no location at all.');
+  }
+  /* The query as a row of chips you can press, one per bit narrowing this view. Non-
+     default and non-inert only: the shipped seed is not something the rider asked for,
+     and a chip for a facet that is doing nothing is a chip that lies about why the list
+     is short. No cap, unlike the folded summary's three — the summary is one line inside
+     a <summary> and these wrap (or, in the sheet, scroll), so the row can afford to be
+     the whole truth. Nothing here duplicates the sort strip: sort is not narrowing, its
+     pills are already lit, and it has a Clear of its own two rows down.
+     Signature-compared before writing, because this runs inside syncFilterState and
+     syncFilterState runs on every position fix — reassigning innerHTML would drop the
+     chip out from under a thumb that was already on it, once a second, for the whole
+     ride. Not compared against innerHTML itself: the parser normalises entities, so that
+     string never equals the one we built and the guard would never fire. */
+  syncQueryChips(){
+    document.querySelectorAll('.qchips[data-qview]').forEach(box=>{
+      const view=box.dataset.qview;
+      /* No view on the drop buttons: every key names one piece of state, and the two
+         facets that appear under both views (the name and the range) ARE one piece of
+         state — dropping the range from Trip and dropping it from Nearby is the same
+         edit. Clear all is the exception and does carry one, because it clears this
+         view's sort too and the two views sort separately. */
+      let h=this.narrowing(view).filter(x=>x.key && !x.inert && !x.dflt).map(x=>
+        '<button type="button" class="qchip" data-drop="'+esc(x.key)+'"'
+        +' aria-label="Remove '+esc(x.lbl)+' from the search">'
+        +'<span class="qchip-t">'+esc(x.lbl)+'</span><span class="qchip-x" aria-hidden="true">&times;</span></button>').join('');
+      /* Clear all rides at the end of the row rather than in a band of its own. It is the
+         same button and the same handler it has always been — data-clearf, so clearFilters
+         still owns what "everything" means, sort included — moved into the row that is
+         now the whole query. Keyed off userSet, not off the chips: a rider who has only
+         set a sort has nothing to chip and still has something to clear. */
+      if(this.userSet(view)) h+='<button type="button" class="qchip qchip-all" data-clearf="'+esc(view)+'">Clear all</button>';
+      if(box._qsig===h) return;
+      box._qsig=h; box.innerHTML=h;
+    });
+  }
+  // The clear beside the box: present exactly when there is something to clear. Every
+  // copy at once — the string is shared, so an empty box on Trip and an armed ✕ on the
+  // map sheet would be two screens disagreeing about one value.
+  syncSearchUi(){
+    document.querySelectorAll('[data-searchclear]').forEach(b=>{ b.hidden = !this.nameQ; });
+  }
+  /* "12 of 38" beside the box, from the renderer that actually built the rows — never
+     re-derived here, or the readout and the list get two chances to disagree about what
+     survived. Silent at nothing-narrowed-nothing-loaded (total 0, so an offline Nearby
+     doesn't print a confident "0"), a bare total when nothing is narrowing, and tinted
+     when the answer is none — which is the moment the chips underneath become the thing
+     to reach for. */
+  setSearchCount(view, shown, total){
+    const txt = !total ? '' : (shown>=total ? String(total) : shown+' of '+total);
+    document.querySelectorAll('.searchbar[data-sview="'+view+'"] [data-searchct]').forEach(el=>{
+      this.setTxt(el, txt);
+      el.classList.toggle('is-none', !!total && !shown);
+    });
   }
   /* Clears exactly what THIS view narrowed by, sort included — a rider hitting Clear on a
      short list means "give me everything back", and leaving a three-key sort standing
@@ -1579,20 +1666,14 @@ class TrailApp {
     this.sort[view]=[];
     if(!this.followMap){ this.mpFrom=null; this.mpTo=null; }
     if(view==='poi'){
-      this.miMin=null; this.miMax=null; this.offMax=null; this.priced=false;
-      let moved=false;
-      CAT_ORDER.forEach(c=>{
-        const want=!!CAT_DEFAULT[c];
-        if(this.catHidden.has(c)===!want) return;
-        this.applyCatVis(c,want); moved=true;
-      });
-      if(moved){ this.renderCategories(); this.scheduleDecorate(); }
+      this.miMin=null; this.miMax=null; this.offMax=null;
+      if(this.seedCats()){ this.renderCategories(); this.scheduleDecorate(); }
     } else {
       this.showPassed=true; this.seg=''; AMKEYS.forEach(k=>{ this.am[k]=0; });
     }
     this.fSet('f-nameQ',''); this.fSet('f-mpFrom',this.mpFrom); this.fSet('f-mpTo',this.mpTo);
     this.fSet('f-showPassed',this.showPassed);
-    this.fSet('f-offMax',this.offMax); this.fSet('f-priced',this.priced);
+    this.fSet('f-offMax',this.offMax);
     this.fSet('f-miMin',this.miMin); this.fSet('f-miMax',this.miMax);
     const sg=this.$('itSeg'); if(sg) sg.value=this.seg;
     /* No status() here on purpose: it writes #locStatus, which lives on the More screen,
@@ -2130,8 +2211,6 @@ class TrailApp {
     document.addEventListener('click',e=>{ const r=e.target.closest('.srch-rm'); if(r){ this.removeSearch(r.dataset.sk); if(this.map) this.map.closePopup(); } });
     document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
     document.addEventListener('click',e=>{
-      const sv=e.target.closest('.pr-save'); if(sv){ this.savePriceFrom(sv); return; }
-      const cl=e.target.closest('.pr-clear'); if(cl) this.clearPriceFrom(cl);
     });
     document.addEventListener('click',e=>{
       const t=e.target.closest('.poi-toggle'); if(!t) return;
@@ -2150,6 +2229,23 @@ class TrailApp {
     // toggle the block it clears.
     document.addEventListener('click',e=>{
       const b=e.target.closest('[data-clearf]'); if(b) this.clearFilters(b.dataset.clearf);
+    });
+    /* The chip row's drops and the search bar's ✕. Delegated like everything else on
+       these blocks: the chips are rebuilt from state on every position fix, and the row
+       exists on all three screens while the bar exists only on Trip — a bound listener
+       would need rebinding on the first count and two lookups on the second. The ✕
+       clears the string and nothing else: the chips below it take the other facets off
+       one at a time, and Clear all at the end of that row takes the lot. */
+    document.addEventListener('click',e=>{
+      const d=e.target.closest('[data-drop]');
+      if(d){ this.dropFacet(d.dataset.drop); return; }
+      if(!e.target.closest('[data-searchclear]')) return;
+      this.dropFacet('name');
+      /* Back to the box, not to wherever the ✕ left it. Clearing a search is nearly
+         always the first half of typing a different one, and on a phone the keyboard
+         staying up is the difference between one tap and three. */
+      const bar=e.target.closest('.searchbar'), q=bar&&bar.querySelector('.f-nameQ');
+      if(q) q.focus();
     });
     document.addEventListener('click',e=>{
       const b=e.target.closest('.feat-tri'); if(!b) return;
@@ -2224,10 +2320,6 @@ class TrailApp {
         // hidden and applyTripTab navigates away from it, so the copy on More has to stay.
         this.showPassed=el.checked; this.fSet('f-showPassed',this.showPassed);
         this.savePrefs(); this.renderItin(); return;
-      }
-      if(el.classList.contains('f-priced')){
-        this.priced=el.checked; this.fSet('f-priced',this.priced);
-        this.savePrefs(); this.renderNearby(); return;
       }
       if(el.classList.contains('f-mpFollow')){
         this.followMap=el.checked; this.fSet('f-mpFollow',this.followMap);
@@ -2824,6 +2916,8 @@ class TrailApp {
       return '<td class="am"><a href="'+mapsLink(t,AMQ[key],this.myLL)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="'+(this.myLL?'Bike directions to ':'Find ')+key+' near '+esc(t.n)+'">'+icon(AMICON[key],17)+'</a></td>';
     };
     const rows=this.visibleStops();
+    // Off the rows this render is about to print, not off a second walk of the filters.
+    this.setSearchCount('itin', rows.length, TOWNS.length);
     if(!rows.length){
       /* This table has hidden rows since the day showPassed shipped and has never once
          said so on this screen. With a whole block of filters behind it now — some of them
@@ -2831,7 +2925,7 @@ class TrailApp {
          other empty state in this app names the control that would fix it. */
       const w=this.narrowing('itin').filter(x=>!x.inert);
       body.innerHTML='<tr><td colspan="7" class="up-empty">No stops match'
-        +(w.length ? ' — '+esc(w.map(x=>x.lbl).join(' · '))+'. Clear is just under the filters above.' : '.')+'</td></tr>';
+        +(w.length ? ' — '+esc(w.map(x=>x.lbl).join(' · '))+'. Every one of those is a chip right above this table: tap one to drop it.' : '.')+'</td></tr>';
     } else body.innerHTML = rows.map(r=>{
       const t=r.t;
       let cls='irow', from='—';
@@ -2921,7 +3015,6 @@ class TrailApp {
   poiPasses(p){
     if(this._nameKey && !this.matchName(p.name)) return false;
     if(this.offMax!=null && this.spurMi(p)>this.offMax) return false;
-    if(this.priced && !this.priceOf(p)) return false;
     return true;
   }
   /* ---------- stepping the window ---------- */
@@ -3197,7 +3290,8 @@ class TrailApp {
     // is a different question. Clearing the box puts every one of them back untouched.
     // The filter summary still gets written: the block is collapsed and set aside, but
     // a stale line inside it is how a rider comes back later to a filter they can't
-    // account for.
+    // account for. The query chips follow the same reasoning and stay painted: they
+    // describe filter state the rider gets back the moment the box is empty.
     if(this.qActive()){ this.syncFilterState(); list.innerHTML=this.searchHTML(); return; }
     // The two controls are orthogonal: the chips decide which groups appear and in
     // what order, the band filters the items inside each one.
@@ -3246,8 +3340,7 @@ class TrailApp {
          for speed: the band, the comparator chain and the row markup each wanted the
          ride distance, and three independent derivations are three chances to disagree
          about which side of the rider a place is on. */
-      let rows=items.map(p=>{ const pr=this.priceOf(p);
-        return {p:p, d:this.aheadMi(p), spur:this.spurMi(p), ride:this.rideMi(p), amt:pr?pr.amt:null}; });
+      let rows=items.map(p=>({p:p, d:this.aheadMi(p), spur:this.spurMi(p), ride:this.rideMi(p)}));
       // Band and sort both key off the ridden total, not the trail leg — otherwise the
       // leading numbers run out of order and a 30-mile band lists a ~34.
       if(this.myMile!=null) rows=rows.filter(r=>this.inBand(r.ride));
@@ -3283,7 +3376,7 @@ class TrailApp {
           // eye down the list. The report and its caveat are in the popup.
           +(p.power?'<span class="poi-pw" title="Charging reported here — tap for the detail">power</span>':'')
           +(mp?'<span class="poi-mp">'+mp+'</span>':'')
-          +(r.amt!=null?'<span class="poi-pr">'+esc(fmtMoney(r.amt))+'</span>':'')+brk
+          +brk
           +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
       });
       if(rows.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+rows.length)+'</button>';
@@ -3293,35 +3386,24 @@ class TrailApp {
     /* Seven headings each repeating the same sentence is not an empty state, it is a
        wall. When nothing matched anywhere, say it once, name the facet most likely to be
        the surprise — the last one, which is the one set on another screen rather than the
-       one whose box is six inches away — and say plainly that the name, detour and rate
-       filters narrow the list and not the pins, because on the map screen the rider is
-       looking at both at once. The pager stays: it is the control that steps out of an
-       empty window. */
+       one whose box is six inches away — and say plainly that the name and detour filters
+       narrow the list and not the pins, because on the map screen the rider is looking at
+       both at once. The pager stays: it is the control that steps out of an empty
+       window. */
     if(!shownAny){
       const w=this.narrowing('poi').filter(x=>!x.inert && x.scope!=='group');
       h=(view?'':this.pagerHTML())+'<div class="up-empty">'
         +(view?'Nothing on screen matches':'Nothing matches')
-        +(w.length?' — '+esc(w[w.length-1].lbl)+' is on. Clear is at the top.':'.')
-        +(this._nameKey||this.offMax!=null||this.priced ? ' The name, detour and rate filters narrow this list only — the pins are all still on the map.' : '')
+        +(w.length?' — '+esc(w[w.length-1].lbl)+' is on, and it is a chip just above this list: tap it to drop it.':'.')
+        +(this._nameKey||this.offMax!=null ? ' The name and detour filters narrow this list only — the pins are all still on the map.' : '')
         +'</div>';
     }
     list.innerHTML=h;
   }
 
-  /* ---------- rates you looked up ---------- */
-  /* There is no free, legitimate way to pull nightly rates: the booking APIs are
-     partner-only and scraping them from a browser is both CORS-blocked and against
-     their terms. So the app does the honest version — the popup already has a link
-     out to check rates, and this catches the number on the way back. Kept in its own
-     storage key so clearing preferences doesn't take your research with it.
-     Keyed on name and coordinates rather than list index, which shifts when the
-     upstream service reorders its rows. */
-  poiKey(p){ return [p.name, (+p.lat).toFixed(4), (+p.lng).toFixed(4)].join('|'); }
-  loadPrices(){ try{ this.prices=JSON.parse(localStorage.getItem(PRICES)||'{}')||{}; }catch(e){ this.prices={}; } }
-  savePrices(){ try{ localStorage.setItem(PRICES, JSON.stringify(this.prices)); }catch(e){} }
-  priceOf(p){ return (p && this.prices[this.poiKey(p)]) || null; }
-  /* The night you'd actually be there, at your planned daily distance — so the date
-     box opens on the date you're about to go and look up, not on today. */
+  /* ---------- the night you'd be there ---------- */
+  /* At your planned daily distance, so the rates link lands on the night you are
+     actually asking about rather than on tonight. */
   ymd(t){ return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); }
   // Anything within today's riding is tonight; past that, a day per planned day.
   dateAfterMi(d){
@@ -3341,27 +3423,8 @@ class TrailApp {
     const gap=(t.mi-this.myMile)*(this.dir==='B2NYC'?-1:1);
     return this.dateAfterMi(gap>0.3?gap:null);
   }
-  savePriceFrom(btn){
-    const row=btn.closest('.pr-row'); if(!row) return;
-    const p=this.POIS[+row.dataset.pi]; if(!p) return;
-    const amtEl=row.querySelector('.pr-amt'), dtEl=row.querySelector('.pr-date');
-    const amt=amtEl?+amtEl.value:NaN;
-    if(!isFinite(amt)||amt<=0){ this.status('Put a nightly rate in first.'); return; }
-    this.prices[this.poiKey(p)]={amt:Math.round(amt*100)/100, date:dtEl?dtEl.value:'', at:Date.now()};
-    this.savePrices(); this.refreshPin(p); this.renderNearby();
-    if(this.map) this.map.closePopup();
-    this.status(fmtMoney(amt)+' saved for '+p.name+'.');
-  }
-  clearPriceFrom(btn){
-    const row=btn.closest('.pr-row'); if(!row) return;
-    const p=this.POIS[+row.dataset.pi]; if(!p) return;
-    delete this.prices[this.poiKey(p)];
-    this.savePrices(); this.refreshPin(p); this.renderNearby();
-    if(this.map) this.map.closePopup();
-    this.status('Rate cleared for '+p.name+'.');
-  }
-  /* A chain wordmark, a rate, or both, in place of the generic bed — the point being
-     that a map of forty identical pins tells you nothing you couldn't already see. */
+  /* A chain wordmark in place of the generic bed — the point being that a map of forty
+     identical pins tells you nothing you couldn't already see. */
   /* Borrowed pins are drawn small and hollow against the State layer's filled
      circles. Shape and weight, not just colour: it survives a colourblind rider and
      a phone in sunlight, and at 900 food pins the lighter mark is what keeps the
@@ -3370,18 +3433,16 @@ class TrailApp {
     // The bundled OSM corridor draws as the small hollow pin, which is what tells it
     // from the State's solid facilities.
     const grp=catGrp(poiCat(p)), osm=grp==='bundled';
-    const pr=this.priceOf(p), br=LODGE_CATS[poiCat(p)]?brandOf(p.name):null;
+    const br=LODGE_CATS[poiCat(p)]?brandOf(p.name):null;
     // Every pin carries its name. Hidden by CSS until the map is zoomed in past
     // POI_LABEL_Z, or the pin is hovered — a field of identical dots you have to tap
     // one at a time to identify is the thing this is fixing.
     const lbl='<span class="poi-lbl">'+esc(p.name)+'</span>';
-    if(!pr && !br) return L.divIcon({html:'<span class="poi-pin'+(osm?' is-osm':'')+'">'+icon(cfg.icon,osm?14:18)+'</span>'+lbl,
+    if(!br) return L.divIcon({html:'<span class="poi-pin'+(osm?' is-osm':'')+'">'+icon(cfg.icon,osm?14:18)+'</span>'+lbl,
       className:'poi-ic'+(osm?' osm-ic':''), iconSize:osm?[22,22]:[28,28], iconAnchor:osm?[11,11]:[14,14]});
-    const col=br?br.color:'';
-    let h='<span class="poi-chip'+(pr?' has-price':'')+(osm?' is-osm':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
-      + (br ? '<span class="chip-b">'+esc(br.tag)+'</span>' : icon(cfg.icon,13))
-      + (pr ? '<span class="chip-p">'+esc(fmtMoney(pr.amt))+'</span>' : '')
-      + '</span>';
+    const col=br.color||'';
+    const h='<span class="poi-chip'+(osm?' is-osm':'')+'"'+(col?' style="border-color:'+col+';color:'+col+'"':'')+'>'
+      + '<span class="chip-b">'+esc(br.tag)+'</span></span>';
     return L.divIcon({html:h+lbl, className:'poi-chip-ic', iconSize:[0,0], iconAnchor:[0,0]});
   }
   /* Hovering a row lights its pin — the list answers "what is near me" and the map
@@ -3437,10 +3498,6 @@ class TrailApp {
   syncPoiLabels(){
     if(!this.map) return;
     this.map.getContainer().classList.toggle('is-labeled', this.map.getZoom()>=POI_LABEL_Z);
-  }
-  refreshPin(p){
-    const mk=this.poiMarker[p.i];
-    if(mk) mk.setIcon(this.poiIcon(p, catCfg(poiCat(p))));
   }
 
   /* ---------- layers the rider adds ---------- */
@@ -6061,15 +6118,6 @@ class TrailApp {
        turns out to be dead. See LOCK_POWER. */
     if(p.power) h+='<div class="poi-note poi-pwr"><b>Power</b> '+esc(p.power)
       +' <span class="poi-pwr-c">Rider report, not an official amenity — don’t count on it.</span></div>';
-    // Right under the rates link, because the loop is: tap out, look it up, come back.
-    if(p.asset==='Lodging'||p.asset==='Campground'){
-      const pr=this.priceOf(p);
-      h+='<div class="pr-row" data-pi="'+p.i+'"><span class="pr-c">$</span>'
-        +'<input class="pr-amt" type="number" min="0" step="1" inputmode="decimal" placeholder="rate" value="'+(pr?esc(pr.amt):'')+'">'
-        +'<input class="pr-date" type="date" value="'+esc(pr&&pr.date?pr.date:this.arrivalDate(p))+'">'
-        +'<button type="button" class="pr-save">Save</button>'
-        +(pr?'<button type="button" class="pr-clear">Clear</button>':'')+'</div>';
-    }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
     /* Every action is a chip on its own wrapping row rather than a middot-separated
