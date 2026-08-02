@@ -5739,10 +5739,28 @@ class TrailApp {
        attribution:'© OpenStreetMap, SRTM · © OpenTopoMap (CC-BY-SA)'});
     const usgs=L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
       {maxZoom:19,maxNativeZoom:16,attribution:'USGS The National Map'});
+    /* The cycling rendering of OSM: cycleways drawn as the primary network rather than as
+       a hairline beside the road, signed routes coloured, surface and smoothness shown,
+       and the bike shops already on the map without a POI layer switched on. On a trail
+       this long the question it answers that no other basemap here does is what the next
+       ten miles are actually surfaced with, and whether the gap between two rail trails
+       has anything cycling-specific in it at all.
+       CyclOSM rather than OpenCycleMap on purpose: the two render much the same map, and
+       OpenCycleMap is Thunderforest, which wants an API key. A basemap that needs a key
+       the app does not ship is a row in this control that serves grey tiles to everyone
+       who taps it — the same argument that keeps the Google rows out unless gmapsKey() is
+       set, except that here there is a keyless equivalent to use instead. Hosted by
+       OpenStreetMap France on the community tile servers, so it names them. */
+    const cycle=L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
+      {maxZoom:19,maxNativeZoom:18,subdomains:'abc',
+       attribution:'© OpenStreetMap · CyclOSM, hosted by OpenStreetMap France'});
     osm.addTo(map);
     // Held onto so buildPOILayers can hang facility overlays off it once the
     // live data lands — this control is now the only place map pins get toggled.
-    this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid,'Topo':topo,'USGS Topo':usgs},
+    // Cycle sits next to Map, not down with the topo pair: it is the same OSM data drawn
+    // for a different reader, and grouping the list by what a row is a rendering OF is
+    // what makes it answerable at a glance.
+    this.layersCtl=L.control.layers({'Map':osm,'Cycle':cycle,'Satellite':sat,'Hybrid':hybrid,'Topo':topo,'USGS Topo':usgs},
       null,{position:'topright',collapsed:true}).addTo(map);
     /* Offered only when a key is actually set. Without one Google serves a grey
        "for development purposes only" wash over everything, which is a worse map
