@@ -507,6 +507,23 @@
   .feat.dragging{opacity:.9;border-color:var(--color-accent);box-shadow:0 2px 8px rgba(0,0,0,.18)}
   .feat-hint{font-size:11px;color:var(--color-neutral-500);margin:var(--space-2) 0 var(--space-4);line-height:1.5}
   .lyr-ct{color:var(--color-neutral-500);font-variant-numeric:tabular-nums;font-size:11px}
+  /* A chip that is also a switch — the count numbers on the traffic row. It has to look
+     pressable without becoming a second button competing with the row's own checkbox, so
+     it borrows the chip's size and colour and adds only a hairline box. Off, it hollows
+     out and dims: the state is readable at a glance from across a bar of sunlight, which
+     a tick inside a 11px box would not be. */
+  button.lyr-ct{position:relative;padding:0 5px;border:1px solid var(--color-divider);border-radius:var(--radius-sm);
+    background:var(--color-accent-100);color:var(--color-accent-800);line-height:1.6;
+    cursor:pointer;font-family:inherit;letter-spacing:.02em}
+  /* A 20px chip is a fair target for a mouse and a poor one for a thumb on a bike, so the
+     hit area grows without the box growing — the row it sits in is only 23px tall, and a
+     chip padded to 44 would be the tallest thing in the card. Kept to 5px vertically: the
+     rows either side are that far away, and a target that reaches into them would answer
+     for taps meant for the layer above. */
+  button.lyr-ct::after{content:'';position:absolute;inset:-5px -4px}
+  button.lyr-ct:hover{border-color:var(--color-accent);background:var(--color-accent-200)}
+  button.lyr-ct.off{background:transparent;color:var(--color-neutral-500);text-decoration:line-through;
+    text-decoration-thickness:1px}
   /* A borrowed layer names its source: the link opens it, the chip beside it and the
      box still toggle the layer, because a link inside a label doesn't trip the label. */
   .lyr-src{color:var(--color-accent-700);text-decoration:underline;text-underline-offset:2px}

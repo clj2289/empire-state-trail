@@ -179,10 +179,20 @@ const MEASURE_SNAP_M=40;
    to hunt for cannot answer "which way round do I go".
    Each band carries two colours: the bright one is the line on the map, the dark
    one is for type, because yellow that reads well as a 6px stroke is unreadable
-   as 10px text on white. */
-const AADT_BANDS=[[500,'#2e7d32','quiet',4,'#1b5e20'],
-                  [1500,'#f0b400','moderate',5.5,'#8a6100'],
-                  [Infinity,'#d32f2f','heavy',7,'#b3261e']];
+   as 10px text on white.
+   The stretch between those two thresholds is the one the colours have to work
+   hardest on, and it was the one doing the least: a road at 600 and a road at
+   1400 are a different afternoon, and both came back the same yellow, so the
+   only way to tell them apart was to tap each one. Three steps now, and they
+   descend in lightness as well as sliding through hue — 0.68, 0.51, 0.29 against
+   white — so the ramp survives being read in sun, in greyscale, or by an eye that
+   doesn't separate yellow from orange by hue at all. The green and the red are
+   untouched: they are the two ends everything else is judged against. */
+const AADT_BANDS=[[500     ,'#2e7d32','quiet'   ,4  ,'#1b5e20'],
+                  [800     ,'#ffd21f','light'   ,5  ,'#8a6100'],
+                  [1100    ,'#f0b400','moderate',5.5,'#7a5200'],
+                  [1500    ,'#e2760a','busy'    ,6  ,'#a34a00'],
+                  [Infinity,'#d32f2f','heavy'   ,7  ,'#b3261e']];
 /* Traffic counts are drawn dashed, the route solid. Colour alone doesn't separate
    them — a heavy red count running beside the magenta Erie line reads as one more
    stretch of trail. A dash says "this is a reading laid over the road", not "go this
@@ -1080,6 +1090,11 @@ class TrailApp {
     this.userLayers=[]; this.wxAt0=null; this.wxPanT=null;
     this.routeLayer=null;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
+    /* The count numbers ride in their own group inside the traffic layer and keep the
+       rows they were drawn from, so switching them off and on again is a relabel of
+       what is already on screen rather than another trip to NYSDOT. On by default:
+       the colours say which road to avoid, the numbers say by how much. */
+    this.aadtLb=true; this.aadtLbLayer=null; this.aadtRows=[];
     this.POIS=[]; this.embLines=[];
     // Measure tool: tap to drop vertices, trace a road, read the running distance.
     this.measuring=false; this.measurePts=[]; this.measureLayer=null; this.measureLine=null; this.measureVerts=[];
@@ -1211,6 +1226,7 @@ class TrailApp {
     if(this.myMile==null) this.applyAnchor();
     if(isFinite(p.avgSpeed)&&p.avgSpeed>0) this.avgSpeed=p.avgSpeed;
     if(typeof p.showWx==='boolean') this.showWx=p.showWx;
+    if(typeof p.aadtLb==='boolean') this.aadtLb=p.aadtLb;
     if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
     // Clamp a stored ride window to sane bounds and keep start before end.
     if(isFinite(p.wxRideStart)) this.wxRideStart=Math.max(0,Math.min(21,p.wxRideStart|0));
@@ -1277,7 +1293,7 @@ class TrailApp {
   }
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
-      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,
+      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,aadtLb:this.aadtLb,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
       grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches,
       sort:{itin:this.sort.itin,poi:this.sort.poi},
@@ -3566,6 +3582,34 @@ class TrailApp {
     if(!m.getPane(nm)){ const p=m.createPane(nm); if(p) p.style.zIndex='600'; }
     return nm;
   }
+  /* A second pane, two above the layer's own, for the type that names it. A pane is one
+     div and Leaflet paints an SVG element into it for the vectors and a div per marker
+     beside that, so within a single pane a label and the line it belongs to are two
+     siblings whose order is settled by z-index — and a marker carrying a negative
+     zIndexOffset lands under the whole SVG. That is how the traffic counts ended up with
+     their own roads drawn through them, and the town names sat under any dot they
+     reached. Neither is fixable with a bigger offset: the marker's z-index is its
+     latitude plus that offset, so the same number reads differently at the top of the
+     screen and at the bottom, and any label is only reliably over its own layer when it
+     is in a pane of its own above it.
+     Two rather than one because applyLyrOrder spaces the layers four apart, so a label
+     pane can rise above the layer it names without reaching the layer above it. Nothing
+     in here is a tap target: the line under the number is the thing you meant to hit. */
+  lyrLbPane(key){
+    const m=this.map;
+    if(!m || !m.createPane || !m.getPane) return undefined;
+    const nm=this.lyrPaneName(key)+'_lb';
+    if(!m.getPane(nm)){
+      const p=m.createPane(nm);
+      /* Off the layer's own pane rather than off the 600 default, because the first
+         labels can be drawn long after the order was last applied — the town names are
+         placed on the first moveend, by which time the stops pane has been lifted to the
+         top of the list and a fresh pane at 602 would be under the dots it just left. */
+      const base=m.getPane(this.lyrPaneName(key)), bz=base?parseInt(base.style.zIndex,10):NaN;
+      if(p){ p.style.zIndex=String((isFinite(bz)?bz:600)+2); p.style.pointerEvents='none'; }
+    }
+    return nm;
+  }
   // Dragged order first, then anything registered since, in the order it arrived.
   lyrOrderList(){
     const seen={}, out=[];
@@ -3618,6 +3662,9 @@ class TrailApp {
     [].slice.call(box.querySelectorAll('.lyr-row')).forEach(row=>{
       this.wireDrag(row, row.parentElement, '.lyr-row', '.lyr-grip', 'y', commit);
     });
+    // 5. Anything on a row that carries state of its own: the rebuild restored the
+    //    markup as it was registered, which for the AADT chip is always "pressed".
+    this.syncAadtLb();
     this.applyLyrOrder();
   }
   /* The POI rows for one source, folded under a header carrying a group on/off box
@@ -3676,9 +3723,14 @@ class TrailApp {
   applyLyrOrder(){
     const ord=this.lyrOrderList(), m=this.map, loose=[];
     ord.forEach((k,i)=>{
+      const z=Math.max(410, 640-i*4);
       const p=(m&&m.getPane)?m.getPane(this.lyrPaneName(k)):null;
-      if(p) p.style.zIndex=String(Math.max(410, 640-i*4));
+      if(p) p.style.zIndex=String(z);
       else loose.push(k);
+      // A label pane travels with the layer it names — dragging the traffic counts under
+      // the trail has to take their numbers with them, or the fix is only true at rest.
+      const lp=(m&&m.getPane)?m.getPane(this.lyrPaneName(k)+'_lb'):null;
+      if(lp) lp.style.zIndex=String(z+2);
     });
     for(let i=loose.length-1;i>=0;i--){
       const l=this.lyrByKey[loose[i]];
@@ -3923,16 +3975,28 @@ class TrailApp {
       if(longest) rows.push({v, band, mid:longest[Math.floor(longest.length/2)],
         name:String(pr.RoadwayName||pr.RouteNumber||'').trim()});
     });
+    // Kept so the numbers can come back without a refetch — see setAadtLabels.
+    this.aadtRows=rows;
     this.labelAadt(rows);
     this.applyLyrOrder();
     return rows.length;
   }
   /* One number per road, and only where it fits. Labelling every segment stacks a
      dozen copies of the same count down one street; going busiest-first means that
-     when two labels compete, the road you most need to know about keeps its number. */
+     when two labels compete, the road you most need to know about keeps its number.
+     The numbers live in a group of their own inside the traffic layer rather than
+     loose among the lines, so hiding them is one clearLayers and not a walk of every
+     marker on the map. The group is re-added on each draw because drawAadt empties
+     its parent first, which takes the group with it. */
   labelAadt(rows){
     const m=this.map, g=this.aadtLayer, placed=[], seen={};
-    rows.slice().sort((a,b)=>b.v-a.v).forEach(r=>{
+    if(!m||!g) return;
+    if(!this.aadtLbLayer) this.aadtLbLayer=L.layerGroup();
+    const lb=this.aadtLbLayer;
+    if(!g.hasLayer(lb)) g.addLayer(lb);
+    lb.clearLayers();
+    if(!this.aadtLb) return;
+    (rows||[]).slice().sort((a,b)=>b.v-a.v).forEach(r=>{
       const nm=r.name||('#'+Math.round(r.v));
       if(seen[nm]) return;
       const pt=m.latLngToContainerPoint(r.mid);
@@ -3940,9 +4004,34 @@ class TrailApp {
       const box={l:pt.x-w/2, t:pt.y-h/2, r:pt.x+w/2, b:pt.y+h/2};
       if(placed.some(q=>!(box.r<q.l||box.l>q.r||box.b<q.t||box.t>q.b))) return;
       placed.push(box); seen[nm]=1;
-      g.addLayer(L.marker(r.mid,{pane:this.lyrPane('aadt'),interactive:false,keyboard:false,zIndexOffset:-400,
+      lb.addLayer(L.marker(r.mid,{pane:this.lyrLbPane('aadt'),interactive:false,keyboard:false,
         icon:L.divIcon({className:'aadt-ic',iconSize:[w,h],iconAnchor:[w/2,h/2],
           html:'<span class="aadt-n" style="border-color:'+r.band[1]+';color:'+r.band[4]+'">'+esc(txt)+'</span>'})}));
+    });
+  }
+  /* The numbers on and off without touching the lines under them. Nothing is fetched
+     and nothing is re-projected: the rows from the last draw are still here, so this
+     is a relabel of the view you are looking at. */
+  setAadtLabels(on){
+    this.aadtLb=!!on;
+    this.savePrefs();
+    this.labelAadt(this.aadtRows);
+    this.syncAadtLb();
+  }
+  /* Leaflet rebuilds the control's list from the label HTML it was handed at register
+     time, so the chip comes back saying whatever it said then — its state has to be
+     restated after every rebuild rather than written once. The visible text stays the
+     unit; the accessible name says what the button does, because "AADT, pressed" tells
+     a screen-reader rider nothing about what pressing it again would do. */
+  syncAadtLb(){
+    const box=this.layersCtl && this.layersCtl._container;
+    if(!box) return;
+    [].slice.call(box.querySelectorAll('[data-aadtlb]')).forEach(b=>{
+      const on=this.aadtLb;
+      b.setAttribute('aria-pressed', on?'true':'false');
+      b.classList.toggle('off', !on);
+      b.title=on ? 'Hide the count numbers' : 'Show the count numbers';
+      b.setAttribute('aria-label','Count numbers on the map');
     });
   }
   aadtPopup(p){
@@ -4027,13 +4116,15 @@ class TrailApp {
   /* Its own marker rather than the dot's icon, because the dot is a circleMarker — an
      SVG circle, with nowhere to hang text. Never interactive: the dot underneath is the
      tap target, and a name that swallowed the tap would put the popup out of reach of
-     the very thing it names. */
+     the very thing it names. In the label pane for the same reason the counts are: a name
+     is meant to sit on top of its own dot, and sharing the dots' pane put it underneath
+     any dot it reached. */
   townLbMarker(t, nm, rank){
     const c=this.sectColor(t.s!=='hv');
     const html='<span class="town-lb'+(rank===0?' town-maj':'')+'" style="color:'+c+'">'
       +esc(nm)+'</span>';
-    return L.marker([t.lat,t.lng],{pane:this.lyrPane('stops'), interactive:false,
-      keyboard:false, zIndexOffset:-200,
+    return L.marker([t.lat,t.lng],{pane:this.lyrLbPane('stops'), interactive:false,
+      keyboard:false,
       icon:L.divIcon({className:'town-ic', html, iconSize:[0,0], iconAnchor:[0,0]})});
   }
 
@@ -5120,10 +5211,26 @@ class TrailApp {
     const labels=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19});
     const roads=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19});
     const hybrid=L.layerGroup([sat,roads,labels]);
+    /* Two topo sheets, because contour is the one thing a road map cannot tell a
+       rider: which of these ten miles is the climb. OpenTopoMap is the OSM
+       rendering of it — contours, hillshade, and the trail furniture that comes
+       with OSM — and USGS is the printed quad, which is the better map for the
+       parts of the route that leave the canal and go over something.
+       Both stop short of the zoom the rest of the map draws at (17 and 16; the
+       USGS service 404s above its last level rather than serving anything), so
+       both declare maxNativeZoom under a maxZoom of 19 and let Leaflet upscale
+       the last real tile. A soft basemap under a sharp route line is a trade;
+       a blank one is not. */
+    const topo=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+      {maxZoom:19,maxNativeZoom:17,subdomains:'abc',
+       attribution:'© OpenStreetMap, SRTM · © OpenTopoMap (CC-BY-SA)'});
+    const usgs=L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
+      {maxZoom:19,maxNativeZoom:16,attribution:'USGS The National Map'});
     osm.addTo(map);
     // Held onto so buildPOILayers can hang facility overlays off it once the
     // live data lands — this control is now the only place map pins get toggled.
-    this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid},null,{position:'topright',collapsed:true}).addTo(map);
+    this.layersCtl=L.control.layers({'Map':osm,'Satellite':sat,'Hybrid':hybrid,'Topo':topo,'USGS Topo':usgs},
+      null,{position:'topright',collapsed:true}).addTo(map);
     /* Offered only when a key is actually set. Without one Google serves a grey
        "for development purposes only" wash over everything, which is a worse map
        than no Google row at all — better the option isn't there. Added before any
@@ -5132,17 +5239,48 @@ class TrailApp {
     if(gmapsKey()){
       this.layersCtl.addBaseLayer(this.gmapsBase('roadmap'),'Google');
       this.layersCtl.addBaseLayer(this.gmapsBase('hybrid'),'Google Satellite');
+      /* Google's terrain sits with the other two rather than with the topo rows
+         above: it bills and loads like its siblings, and grouping the list by who
+         serves it is what makes "am I about to spend a map load" answerable from
+         the control. It is the softest of the three topos — relief and spot
+         heights rather than a contour you can count — and the one that still has
+         road names on it, which is the reason to keep it. */
+      this.layersCtl.addBaseLayer(this.gmapsBase('terrain'),'Google Terrain');
       /* The one failure Google reports out-of-band: a referrer the key's allowlist
          doesn't cover fails here, not on the script load, and otherwise shows up
          only as a watermarked map and a console line nobody on a phone will read. */
       window.gm_authFailure=()=>this.status('Google rejected the key — this address isn’t in its referrer allowlist.');
     }
+    /* Leaflet rebuilds the whole list from its stored labels on every programmatic layer
+       add or remove, and everything this app hangs on that list — the grips, the folded
+       POI groups, the dragged order, the state of the AADT chip — is DOM it just threw
+       away. The re-decorate used to be the caller's job, which held only because a tap on
+       a checkbox is the one path Leaflet does NOT rebuild for (_handlingClick), so the
+       ones that were missed were the quiet ones: a search layer arriving, a category
+       switched from a chip on another screen. Hooking the rebuild itself means the list
+       can only ever come back decorated. Deferred by a frame like every other re-decorate,
+       so the DOM is never rewritten under a handler that is still walking it. */
+    const upd=this.layersCtl._update.bind(this.layersCtl);
+    this.layersCtl._update=()=>{ const r=upd(); this.scheduleDecorate(); return r; };
+    const lcEl=this.layersCtl.getContainer();
+    /* Delegated, once, on the control itself: Leaflet throws the list away and rebuilds
+       it every time a layer is added or a box is ticked, so a listener hung on the chip
+       would be binned with it — and re-hanging one per rebuild is how a row ends up with
+       three of them and a toggle that toggles thrice. stop() is what keeps the tap off
+       the row's own checkbox: a button inside a label doesn't trigger the label, but it
+       does still bubble to the form handler Leaflet reads its checkboxes from. */
+    if(lcEl) L.DomEvent.on(lcEl,'click',ev=>{
+      const t=ev.target, b=t && t.closest ? t.closest('[data-aadtlb]') : null;
+      if(!b) return;
+      L.DomEvent.stop(ev);
+      this.setAadtLabels(!this.aadtLb);
+    });
     /* Leaflet drops this in the top-right corner, under the notch and out of a thumb's
        reach. Move it down into the FAB stack, where the rest of the map controls live —
        it's just a div, its events ride with it, and anchored to the panel it now travels
        up and down with the sheet like every other button. It sits at the foot of the
        stack, nearest the thumb, and its list opens upward into the space above. */
-    const fabs=document.querySelector('.map-fabs'), lcEl=this.layersCtl.getContainer();
+    const fabs=document.querySelector('.map-fabs');
     if(fabs && lcEl){
       lcEl.classList.add('fab-layers');
       const tog=lcEl.querySelector('.leaflet-control-layers-toggle');
@@ -5264,9 +5402,17 @@ class TrailApp {
     // Off until asked for, and borrowed, so it names its source in the control \u2014
     // the counts cost a request per view.
     this.aadtLayer=L.layerGroup();
+    /* The chip that named the unit is now the switch for the numbers themselves. A
+       second checkbox row would have said the numbers are a layer you can have without
+       the lines, which is a set of figures floating over nothing \u2014 the same argument
+       that keeps the town names inside the stops row. So the count numbers stay part of
+       the traffic layer and get a subordinate control on its own row, where the thing it
+       belongs to is the thing it sits on. It still reads AADT, because that is still
+       what the numbers are. */
     this.regLayer('aadt', this.aadtLayer,
       this.lyrSrc('Traffic counts', AADT_SRC, 'From the NYSDOT Traffic Data Viewer \u2014 opens the source')
-      +' <span class="lyr-ct">AADT</span>');
+      +' <button type="button" class="lyr-ct lyr-tog" data-aadtlb="1" aria-pressed="true">AADT</button>');
+    this.syncAadtLb();
     map.on('overlayadd', e=>{ if(e.layer===this.aadtLayer){ this.aadtSig=''; this.loadAadt(); } });
     // Whatever the rider brought last time, back in the control in the same order.
     this.userLayers.forEach(rec=>this.registerUserLayer(rec));
