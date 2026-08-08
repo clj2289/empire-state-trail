@@ -373,9 +373,15 @@ const P = {
   bike:'c5.5 17.5 3.2|c18.5 17.5 3.2|M5.5 17.5l4-8.5h6.5l-3 8.5|M9.5 9l3.5 8.5|M13.5 9h3',
   med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z',
   ruler:'M4 15 15 4l5 5-11 11z|M7.5 11.5l1.7 1.7|M10.5 8.5l1.7 1.7|M13.5 5.5l1.7 1.7',
-  // The little man you drag onto the map. Drawn as a figure standing square-on rather
-  // than mid-stride: he is a thing you pick up and put down, not a walking direction.
-  pegman:'c12 4.4 2.5|M12 7.4v6.2|M8.3 10.1h7.4|M12 13.6 9.6 21|M12 13.6 14.4 21',
+  /* The little man you drag onto the map, and the one icon here that is a silhouette
+     rather than a line drawing. Every other glyph in this table describes a thing; this
+     one has to BE a thing, recognisable as the figure everybody already knows from
+     Google's own maps, and a stick figure at 18px reads as a hiking sign instead.
+     Six overlapping solids that union into one shape — big head, stubby limbs, the
+     cartoon proportions that survive being drawn at the size of a fingernail. Standing
+     square-on, because he is something you pick up and put down, not a direction. */
+  pegman:'!c12 4.5 3.2|r9.2 7.2 5.6 7.8 2.8|r6.8 8.6 2.3 6.2 1.15|r14.9 8.6 2.3 6.2 1.15'
+        +'|r8.8 13.4 2.5 8.8 1.25|r12.7 13.4 2.5 8.8 1.25',
   // The profile itself rather than a mountain: this button opens a chart, and a chart
   // of the ground is what it draws. The ground line under it is what stops the shape
   // reading as the zig-zag "activity" glyph it would otherwise be mistaken for.
@@ -386,14 +392,27 @@ function iconInner(spec){
     // "c<cx> <cy> <r>" — the cx rides on the 'c' with no space, so slice it off
     // rather than destructuring past it (that shifts every field and drops r).
     if(s[0]==='c'){ const t=s.split(' '); return '<circle cx="'+t[0].slice(1)+'" cy="'+t[1]+'" r="'+t[2]+'"/>'; }
+    // "r<x> <y> <w> <h> <rx>" — same trick. Only a filled icon has any use for these:
+    // they are for building a silhouette out of overlapping solids.
+    if(s[0]==='r'){ const t=s.split(' ');
+      return '<rect x="'+t[0].slice(1)+'" y="'+t[1]+'" width="'+t[2]+'" height="'+t[3]+'" rx="'+t[4]+'"/>'; }
     if(s[0]==='M'){ return '<path d="'+s+'"/>'; }
     return '';
   }).join('');
 }
+/* Stroked by default, because that is what a glyph in this app is. A spec that opens
+   with '!' is a filled silhouette instead — the whole icon, not a part of it, since an
+   icon here is one mark and mixing the two inside it is how you get a drawing that
+   reads at one size and turns to mud at another. */
 function icon(name, size){
   size = size || 20;
-  const spec = P[name]; if(!spec) return '';
-  return '<svg class="ic" viewBox="0 0 24 24" width="'+size+'" height="'+size+'" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+iconInner(spec)+'</svg>';
+  let spec = P[name]; if(!spec) return '';
+  const solid = spec[0]==='!';
+  if(solid) spec=spec.slice(1);
+  return '<svg class="ic" viewBox="0 0 24 24" width="'+size+'" height="'+size+'"'
+    +' fill="'+(solid?'currentColor':'none')+'" stroke="'+(solid?'none':'currentColor')+'"'
+    +' stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    +iconInner(spec)+'</svg>';
 }
 /* NWS writes the sky as a sentence. These are the five pictures worth drawing, and
    the order matters: "Mostly Cloudy" is cloud, "Partly Sunny" is the sun behind one,
@@ -2714,6 +2733,66 @@ class TrailApp {
     }
     return null;
   }
+  /* ---- where Street View reaches ----
+     Picking the man up paints Google's coverage over the map, the blue roads you get in
+     Google Maps, so a drop is aimed rather than guessed. There is exactly one way to draw
+     it: StreetViewCoverageLayer, attached to a google.maps.Map. It is not available as
+     tiles, and Google content over a non-Google basemap is the line this app doesn't
+     cross — the same reason the Google rows go through GoogleMutant rather than pulling
+     mt*.google.com into an L.tileLayer.
+     So the coverage brings its own basemap with it. Whatever the rider was looking at is
+     remembered and put back the moment the man is set down or stood down, and the swap
+     aims for the nearest Google equivalent — satellite for satellite, a road map for a
+     road map — so the picture changes as little as it can. The first swap buys one map
+     load; after that the mutant is kept, so arming him again is free. */
+  // Whichever base layer is currently up, as the layers control understands it.
+  curBase(){
+    const rows=(this.layersCtl && this.layersCtl._layers) || [];
+    for(const r of rows) if(!r.overlay && this.map.hasLayer(r.layer)) return r;
+    return null;
+  }
+  svCovOn(maySwitch){
+    if(!this.gBase || !this.map) return;
+    const cur=this.curBase();
+    let base=cur && cur.layer;
+    if(!base || !base.coverage){
+      // Not a Google row, so there is nothing to draw the coverage onto.
+      if(!maySwitch) return;
+      const name=(cur && cur.name) || '';
+      base = /Satellite|Hybrid/i.test(name) ? this.gBase.hybrid : this.gBase.roadmap;
+      this._svBaseWas=cur ? cur.layer : null;
+      this.svBaseSwap(this._svBaseWas, base);
+    }
+    this._svCovOn=base;
+    base.coverage(true);
+  }
+  svCovOff(){
+    if(this._svCovOn){ this._svCovOn.coverage(false); this._svCovOn=null; }
+    const back=this._svBaseWas; this._svBaseWas=null;
+    if(back && this.map){
+      const cur=this.curBase();
+      if(cur && cur.layer!==back) this.svBaseSwap(cur.layer, back);
+    }
+  }
+  /* Basemap rows come and go through Leaflet's own add/remove, which fires the same
+     baselayerchange the radio buttons do — so every swap this makes has to say it was
+     us, or the handler below reads our own restore as the rider changing their mind. */
+  svBaseSwap(off, on){
+    this._svSwapping=true;
+    if(off) this.map.removeLayer(off);
+    this.map.addLayer(on);
+    this._svSwapping=false;
+  }
+  /* The rider reaching past the pegman for the layers card while he is up. Their pick
+     stands: the basemap we borrowed is forgotten rather than put back over the top of it
+     afterwards, and the coverage follows the new row if it can be drawn there and is
+     dropped if it can't. */
+  svBaseChanged(layer){
+    if(this._svSwapping) return;
+    this._svBaseWas=null;
+    if(this._svCovOn && this._svCovOn!==layer){ this._svCovOn.coverage(false); this._svCovOn=null; }
+    if(this.svArmed && layer && layer.coverage){ this._svCovOn=layer; layer.coverage(true); }
+  }
   /* The whole flow, from a dropped man to a panorama on screen. Jobbed like the measure
      tool's router: two quick drops must not race each other into the pane. */
   async svOpen(lat,lng){
@@ -2877,9 +2956,15 @@ class TrailApp {
       if(this.measuring) this.measureExit();   // one map-tap tool at a time
       this._svClick=e=>this.svOpen(e.latlng.lat, e.latlng.lng);
       this.map.on('click', this._svClick);
-      this.setBarHint('Tap the map to drop the Street View man');
+      const cur=this.curBase();
+      const swapped=!(cur && cur.layer && cur.layer.coverage);   // told before svCovOn moves it
+      this.svCovOn(true);
+      this.setBarHint(swapped
+        ? 'Blue roads have Street View — Google’s map, while the man is up. Tap one.'
+        : 'Blue roads have Street View. Tap one to drop the man.');
     } else {
       if(this._svClick){ this.map.off('click', this._svClick); this._svClick=null; }
+      this.svCovOff();
       this.setBarHint('');
     }
   }
@@ -2893,7 +2978,7 @@ class TrailApp {
     let id=null, x0=0, y0=0, moved=false, ghost=null;
     const put=(x,y)=>{ if(ghost){ ghost.style.left=x+'px'; ghost.style.top=y+'px'; } };
     const kill=()=>{ if(ghost){ ghost.remove(); ghost=null; } id=null;
-      document.body.classList.remove('sv-dragging'); };
+      document.body.classList.remove('sv-dragging'); this.svCovOff(); };
     btn.addEventListener('pointerdown',e=>{
       if(id!=null || e.button>0 || !this.svEnabled()) return;
       id=e.pointerId; x0=e.clientX; y0=e.clientY; moved=false;
@@ -2910,6 +2995,10 @@ class TrailApp {
         document.body.appendChild(ghost);
         document.body.classList.add('sv-dragging');
         this.svArm(false);
+        /* Coverage during a drag only if it costs nothing — the rider is already on a
+           Google basemap. Swapping the picture out from under a gesture a second long
+           would land the swap after the drop, which is worse than not showing it. */
+        this.svCovOn(false);
         this.setBarHint('Let go over the map');
       }
       e.preventDefault();
@@ -6230,18 +6319,35 @@ class TrailApp {
     const app=this;
     const Lazy=L.Layer.extend({
       onAdd(map){
-        this._on=true;
+        /* _live, not _on: L.Evented keeps its own _on method on the prototype, and a
+           boolean parked on top of it turns every later once()/on() against this layer
+           into "this._on is not a function". Nothing called one until the pegman started
+           adding these rows programmatically, which is the kind of bug that waits. */
+        this._live=true;
         app.loadGmaps().then(()=>{
-          if(!this._on) return;   // switched away again while Google was still booting
+          if(!this._live) return;   // switched away again while Google was still booting
           if(!this._mut) this._mut=L.gridLayer.googleMutant({type:type, maxZoom:21});
           map.addLayer(this._mut);
+          if(this._cov) this.coverage(true);   // armed while this row was still booting
         }).catch(()=>{
           app.status('Google’s map couldn’t load. Check the key’s referrer restrictions, or pick another basemap.');
         });
       },
       onRemove(map){
-        this._on=false;
+        this._live=false;
         if(this._mut) map.removeLayer(this._mut);
+      },
+      /* Street View's coverage, drawn by Google onto the google.maps.Map that is already
+         running under Leaflet's panes here. addGoogleLayer is GoogleMutant's own hook for
+         exactly this, and it is the only honest way to show the blue roads: the layer
+         cannot be had as tiles, and Google content over a non-Google basemap is the line
+         this app doesn't cross. Remembered in _cov, because arming the man can beat the
+         mutant into existence. */
+      coverage(on){
+        this._cov=!!on;
+        if(!this._mut) return;
+        if(on) this._mut.addGoogleLayer('StreetViewCoverageLayer');
+        else this._mut.removeGoogleLayer('StreetViewCoverageLayer');
       }
     });
     return new Lazy();
@@ -6321,15 +6427,19 @@ class TrailApp {
        overlay is registered, because addBaseLayer makes Leaflet rebuild the whole
        list and decorateLayers would lose the drag grips it had already hung on it. */
     if(gmapsKey()){
-      this.layersCtl.addBaseLayer(this.gmapsBase('roadmap'),'Google');
-      this.layersCtl.addBaseLayer(this.gmapsBase('hybrid'),'Google Satellite');
+      /* Held onto as well as registered, because the pegman drives them: showing where
+         Street View reaches means putting a Google basemap up, and svCovOn has to be able
+         to pick the one nearest whatever the rider was already looking at. */
+      this.gBase={roadmap:this.gmapsBase('roadmap'), hybrid:this.gmapsBase('hybrid'), terrain:this.gmapsBase('terrain')};
+      this.layersCtl.addBaseLayer(this.gBase.roadmap,'Google');
+      this.layersCtl.addBaseLayer(this.gBase.hybrid,'Google Satellite');
       /* Google's terrain sits with the other two rather than with the topo rows
          above: it bills and loads like its siblings, and grouping the list by who
          serves it is what makes "am I about to spend a map load" answerable from
          the control. It is the softest of the three topos — relief and spot
          heights rather than a contour you can count — and the one that still has
          road names on it, which is the reason to keep it. */
-      this.layersCtl.addBaseLayer(this.gmapsBase('terrain'),'Google Terrain');
+      this.layersCtl.addBaseLayer(this.gBase.terrain,'Google Terrain');
       /* The one failure Google reports out-of-band: a referrer the key's allowlist
          doesn't cover fails here, not on the script load, and otherwise shows up
          only as a watermarked map and a console line nobody on a phone will read.
@@ -6485,6 +6595,7 @@ class TrailApp {
     map.on('mousemove',e=>this.elevFromMap(e.latlng));
     map.on('mouseout',()=>{ if(this.elevOn && !this._elevDrag) this.setElevCursor(null); });
     map.on('zoomend',()=>this.syncPoiLabels());
+    map.on('baselayerchange',e=>this.svBaseChanged(e.layer));
     this.syncPoiLabels();
     /* The other half of the coupling: a facility layer switched from Leaflet's own
        control has to move the chip and the list with it, or the two views drift apart
