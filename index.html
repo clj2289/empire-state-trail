@@ -1081,7 +1081,7 @@
   /* Armed FAB lights up like a pressed toggle so it's clear the ruler is live. */
   .fab.on{background:var(--color-accent);color:var(--color-bg);border-color:var(--color-accent)}
   .fab.on:hover{background:var(--color-accent-700)}
-  .leaflet-container.measuring{cursor:crosshair}
+  .leaflet-container.measuring,.leaflet-container.sv-aiming{cursor:crosshair}
   .measure-vert{background:var(--color-bg);border:2.5px solid #12467a;border-radius:50%;
     box-shadow:0 1px 3px rgba(0,0,0,.35);cursor:move;box-sizing:border-box}
   /* Beyond the snap tolerance: left where it was tapped, drawn hollow-dashed to say so. */
@@ -1103,12 +1103,81 @@
   .measure-bar[hidden]{display:none}
   .measure-bar .measure-ic{display:inline-flex;color:var(--color-accent)}
   .measure-val{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;min-width:88px;text-align:center}
-  .measure-btn{font:inherit;font-size:13px;min-height:32px;padding:6px 12px;border-radius:999px;cursor:pointer;
+  /* One shape for every small button that rides on a bar over the map — the ruler's row
+     and the panorama's — so the two read as the same piece of furniture. */
+  .measure-btn,.sv-btn{font:inherit;font-size:13px;min-height:32px;padding:6px 12px;border-radius:999px;cursor:pointer;
     background:var(--color-bg);color:var(--color-text);border:1px solid var(--color-divider)}
-  .measure-btn:hover:not(:disabled){background:var(--color-accent-100)}
+  .measure-btn:hover:not(:disabled),.sv-btn:hover:not(:disabled){background:var(--color-accent-100)}
   .measure-btn:disabled{opacity:.4;cursor:default}
-  .measure-btn.measure-done{background:var(--color-accent);color:var(--color-bg);border-color:var(--color-accent)}
-  .measure-btn.measure-done:hover{background:var(--color-accent-700)}
+  .measure-btn.measure-done,.sv-btn.sv-done{background:var(--color-accent);color:var(--color-bg);border-color:var(--color-accent)}
+  .measure-btn.measure-done:hover,.sv-btn.sv-done:hover{background:var(--color-accent-700)}
+  /* ---- street view ----
+     The man in the rail has to keep the gesture the rail would otherwise eat: .map-fabs
+     scrolls, so without this a drag downward out of the button scrolls the rail instead
+     of picking him up. Armed, he lights up like the ruler does (.fab.on). */
+  .fab-peg{touch-action:none;-webkit-user-select:none;user-select:none}
+  /* Dragging: the man rides a thumb's height above the finger so he isn't underneath it
+     the whole way, and the ring marks the spot that will actually be read. Fixed, because
+     the drag crosses out of the map's stacking context and every other pane in the app. */
+  .sv-ghost{position:fixed;z-index:2000;width:0;height:0;pointer-events:none}
+  .sv-ghost-peg{position:absolute;left:-19px;top:-62px;width:38px;height:38px;border-radius:50%;
+    display:grid;place-items:center;background:var(--color-neutral-900);color:#fff;
+    border:2px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,.5)}
+  .sv-ghost-ring{position:absolute;left:-12px;top:-12px;width:24px;height:24px;border-radius:50%;
+    border:2.5px solid var(--color-neutral-900);background:color-mix(in srgb,#fff 55%,transparent);
+    box-shadow:0 0 0 2px rgba(255,255,255,.85)}
+  body.sv-dragging{cursor:grabbing}
+  /* Nothing on the map should look tappable while he is in the air. */
+  body.sv-dragging .leaflet-container{cursor:grabbing}
+  /* The panorama. Down to the tab bar rather than over it: whatever the panorama does,
+     the way off this screen stays where it has always been. Above the sheet and the
+     finder, both of which stand down for it below. */
+  /* Over the popup pane too, which POP_PANE_Z puts at 1200: in the split, the map below
+     is still live, and a popup opened down there hangs upward into the panorama. */
+  .sv-pane{position:absolute;left:0;right:0;top:0;bottom:var(--tabbar-h);z-index:1300;
+    background:var(--color-neutral-900);overflow:hidden}
+  .sv-pane[hidden]{display:none}
+  /* Split: the panorama keeps the top, the map gets the rest, and svRecenter walks the
+     marker down into it. Deliberately not half — a panorama is the thing being read. */
+  .sv-pane.sv-split{bottom:auto;height:58%;
+    border-bottom:1px solid var(--color-divider);box-shadow:0 6px 20px rgba(0,0,0,.35)}
+  .sv-canvas{position:absolute;inset:0}
+  /* Same pill as the measure readout, but full width: an address is not a number, and
+     ellipsing it at the middle of the screen would cut it before it said the road name. */
+  .sv-bar{position:absolute;z-index:2;top:calc(env(safe-area-inset-top) + var(--space-2));
+    left:calc(var(--space-2) + env(safe-area-inset-left));right:calc(var(--space-2) + env(safe-area-inset-right));
+    display:flex;align-items:center;gap:7px;padding:6px 6px 6px 11px;
+    background:var(--color-bg);border:1px solid var(--color-divider);
+    border-radius:999px;box-shadow:var(--shadow-md);font-size:13px}
+  .sv-bar-ic{display:inline-flex;flex:none;color:var(--color-accent)}
+  .sv-where{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3}
+  .sv-where b{font-weight:600}
+  /* When the picture is from, and how far the nearest one was — the caveats on what you
+     are looking at, so they ride with it rather than above it. */
+  .sv-when{display:block;font-size:11px;color:var(--color-neutral-600);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* With a panorama up, the map's own chrome stands down: the rail would be behind it,
+     and the finder and the back pill sit above everything by z-index and would float on
+     top of it. All three keep their state and come back with the map. */
+  .sv-on .map-fabs,.sv-on .map-find,.sv-on .map-back,.sv-on .measure-bar{display:none}
+  /* The man left standing on the map, at the panorama's own position rather than where
+     he was dropped, so the marker never claims coverage that isn't there. Ink and white
+     rather than Google's yellow: yellow on this map is a traffic count. */
+  .leaflet-marker-icon.sv-ic{background:none;border:0;overflow:visible;pointer-events:none}
+  .sv-peg{position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;
+    display:grid;place-items:center;background:var(--color-neutral-900);color:#fff;
+    border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  /* Which way you are facing. A conic gradient starts at twelve o'clock and runs
+     clockwise, which is a compass bearing already, so svCone only has to rotate it; the
+     radial mask is what turns a wedge of a disc into a beam that fades as it goes out. */
+  /* Sized against the 28px disc rather than for its own sake: a wedge that only clears
+     the man by a few pixels reads as a glow around him, not as a direction he is facing.
+     This one puts half its own width of beam outside him. */
+  .sv-cone{position:absolute;left:-44px;top:-44px;width:88px;height:88px;border-radius:50%;
+    transform-origin:50% 50%;pointer-events:none;
+    background:conic-gradient(from -36deg,rgba(255,193,7,0),rgba(255,193,7,.88) 36deg,rgba(255,193,7,0) 72deg);
+    -webkit-mask-image:radial-gradient(circle,#000 14%,rgba(0,0,0,.62) 52%,transparent 76%);
+    mask-image:radial-gradient(circle,#000 14%,rgba(0,0,0,.62) 52%,transparent 76%)}
   /* Scale bar, moved onto the panel's top-left (mirroring the FABs on the right) so the
      bottom sheet can never cover it; Leaflet keeps updating it wherever it lives. */
   .map-scale{position:absolute;bottom:100%;left:calc(var(--space-3) + env(safe-area-inset-left));
@@ -1247,6 +1316,19 @@
         <div id="findOut" class="find-out"></div>
       </form>
       <button id="mapBack" type="button" class="map-back" hidden></button>
+      <!-- Where the dropped man ends up. Full-bleed over the map by default, down to the
+           tab bar so there is always a way off this screen that isn't Done; "Map" splits
+           it so the panorama and the marker under it can be read together. Google draws
+           the panorama into #svCanvas and keeps its own logo and terms link inside it. -->
+      <div id="svPane" class="sv-pane" hidden role="dialog" aria-label="Street View">
+        <div id="svCanvas" class="sv-canvas"></div>
+        <div class="sv-bar">
+          <span class="sv-bar-ic" data-ic="pegman"></span>
+          <span id="svWhere" class="sv-where"></span>
+          <button id="svSplitBtn" type="button" class="sv-btn" title="Show the map under it">Map</button>
+          <button id="svClose" type="button" class="sv-btn sv-done">Done</button>
+        </div>
+      </div>
       <aside id="mapPanel" class="map-panel" data-snap="shut">
         <!-- Top-first, the order the rail reads on screen, so Tab and a VoiceOver swipe
              follow the eye. The capped rail rests on its foot instead, put there by
@@ -1257,6 +1339,11 @@
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
           <button id="measureBtn" type="button" class="fab" title="Measure distance" aria-label="Measure distance"><span data-ic="ruler"></span></button>
+          <!-- The pegman. Dragged onto the map like Google's, or tapped to arm the next
+               map tap — see wireSvDrag. initMap deletes him outright when no Google key
+               is set, the same way the Google basemap rows never appear. -->
+          <button id="svBtn" type="button" class="fab fab-peg" aria-pressed="false"
+            title="Street View — drag me onto the map" aria-label="Street View: drag onto the map, or tap then tap the map"><span data-ic="pegman"></span></button>
           <button id="elevBtn" type="button" class="fab" title="Elevation profile" aria-label="Elevation profile" aria-pressed="false"><span data-ic="elev"></span></button>
           <div class="fab-pair">
             <button id="zoomInBtn" type="button" class="fab" title="Zoom in" aria-label="Zoom in"><span data-ic="plus"></span></button>

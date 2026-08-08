@@ -164,6 +164,20 @@ function gmapsKey(){
   const m=document.querySelector('meta[name="google-maps-key"]');
   return m ? (m.content||'').trim() : '';
 }
+/* How far out a dropped pegman looks for a panorama, in metres, and in what order.
+   OUTDOOR first and close in, which is the road he was dropped on rather than the lobby
+   of the motel beside it. The DEFAULT pass in the middle picks up user photospheres,
+   which on a canal towpath are often the only imagery there is. The last go is wide
+   enough to reach the nearest road from the middle of a state park and no wider: past
+   half a mile it is not this spot any more, and saying so beats showing somewhere else. */
+const SV_TRIES=[[60,'OUTDOOR'],[250,'OUTDOOR'],[250,'DEFAULT'],[800,'OUTDOOR']];
+// "2019-08" is what Street View reports, and nobody reads a date backwards.
+const SV_MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function svMonth(s){
+  const m=String(s||'').match(/^(\d{4})-(\d{2})/);
+  if(!m) return String(s||'');
+  return SV_MONTHS[+m[2]-1]+' '+m[1];
+}
 /* Road-snapping for the measure tool. FOSSGIS's public OSRM (bike profile) both snaps a
    dropped point to the nearest way (/nearest) and traces the roads between two points
    (/route), so a traced leg reads real pedalled miles rather than straight-line. A point
@@ -359,6 +373,9 @@ const P = {
   bike:'c5.5 17.5 3.2|c18.5 17.5 3.2|M5.5 17.5l4-8.5h6.5l-3 8.5|M9.5 9l3.5 8.5|M13.5 9h3',
   med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z',
   ruler:'M4 15 15 4l5 5-11 11z|M7.5 11.5l1.7 1.7|M10.5 8.5l1.7 1.7|M13.5 5.5l1.7 1.7',
+  // The little man you drag onto the map. Drawn as a figure standing square-on rather
+  // than mid-stride: he is a thing you pick up and put down, not a walking direction.
+  pegman:'c12 4.4 2.5|M12 7.4v6.2|M8.3 10.1h7.4|M12 13.6 9.6 21|M12 13.6 14.4 21',
   // The profile itself rather than a mountain: this button opens a chart, and a chart
   // of the ground is what it draws. The ground line under it is what stops the shape
   // reading as the zig-zag "activity" glyph it would otherwise be mistaken for.
@@ -1187,6 +1204,11 @@ class TrailApp {
     // Snap-and-route bookkeeping: which points landed on a road, the running total, a job
     // token so a stale async pass bows out, and caches so redraws don't re-ask the router.
     this.measureOnRoad=[]; this.measureMi=0; this._measureJob=0; this._nearCache=new Map(); this._routeCache=new Map();
+    /* Street View: whether the man is armed for the next map tap, where the panorama on
+       screen is standing, and whether it is sharing the screen with the map. Nothing is
+       saved — a panorama is a look at one spot, not a state to come back to. */
+    this.svArmed=false; this.svPos=null; this.svSplitOn=false; this._svJob=0;
+    this._pano=null; this._svSvc=null; this._svMk=null; this._svConeEl=null;
     /* The elevation profile. Off by default and saved, like the sheet's own snap: it is
        worth reopening where you left it, and it is not worth showing to someone who has
        never asked for it. elevBand is the stretch currently drawn, held because the
@@ -1829,7 +1851,7 @@ class TrailApp {
     const m=this.map; if(!m) return 0;
     const mr=m.getContainer().getBoundingClientRect();
     let bot=mr.top;
-    ['mapFind','mapBack','measureBar'].forEach(id=>{
+    ['mapFind','mapBack','measureBar','svPane'].forEach(id=>{
       const e=this.$(id); if(!e) return;
       const r=e.getBoundingClientRect(); if(r.height && r.bottom>bot) bot=r.bottom;
     });
@@ -2148,6 +2170,9 @@ class TrailApp {
       const in1=sc.querySelector('[data-scroller]'); if(in1) in1.scrollTop=r.inner||0; });
   }
   showTab(name){
+    // A panorama over the map is map-screen chrome: it cannot follow you to the Trip
+    // table, and it must not still be there in front of the map when you come back.
+    if(name!=='map' && (this.svOpenNow() || this.svArmed)){ this.svClose(); this.svArm(false); }
     this.screen=name;
     this.tabs.forEach(b=>{ const on=b.dataset.tab===name; b.classList.toggle('active',on); b.setAttribute('aria-current', on?'page':'false'); });
     this.screens.forEach(s=>{ s.classList.toggle('active', s.dataset.screen===name); });
@@ -2175,6 +2200,23 @@ class TrailApp {
     const meu=this.$('measureUndo'); if(meu) meu.addEventListener('click',()=>this.measureUndo());
     const mecl=this.$('measureClear'); if(mecl) mecl.addEventListener('click',()=>this.measureClear());
     const medn=this.$('measureDone'); if(medn) medn.addEventListener('click',()=>this.toggleMeasure());
+    // The pegman: a drag onto the map, or a tap to arm the next one. Both in wireSvDrag,
+    // because the two gestures start on the same button and have to agree which it was.
+    this.wireSvDrag();
+    const svx=this.$('svClose'); if(svx) svx.addEventListener('click',()=>this.svClose());
+    const svs=this.$('svSplitBtn'); if(svs) svs.addEventListener('click',()=>this.svSplit());
+    // Every pin's Street View chip, and the spot dialog's — all rendered as strings.
+    document.addEventListener('click',e=>{
+      const b=e.target.closest('.sv-here'); if(!b) return;
+      if(this.map) this.map.closePopup();
+      this.svOpen(+b.dataset.svlat, +b.dataset.svlng);
+    });
+    // Escape backs out of whichever pegman state you are in — the open panorama first,
+    // since that is the one covering the map.
+    document.addEventListener('keydown',e=>{
+      if(e.key!=='Escape') return;
+      if(this.svOpenNow()) this.svClose(); else if(this.svArmed) this.svArm(false);
+    });
     this.wirePoiHover();
     const zi=this.$('zoomInBtn'); if(zi) zi.addEventListener('click',()=>{ if(this.map) this.map.zoomIn(); });
     const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ if(this.map) this.map.zoomOut(); });
@@ -2642,9 +2684,282 @@ class TrailApp {
     if(u) u.disabled = n===0;
     if(c) c.disabled = n===0;
   }
+
+  /* ---------- street view ---------- */
+  /* Drag the little man out of the rail and drop him on the map, the way you would in
+     Google Maps; or tap him once and then tap where you want to stand. Both paths end
+     in svOpen, which finds the nearest panorama and draws it over the map with a marker
+     and a view cone left behind on the map underneath.
+     Google's pegman is dropped onto a blue overlay that says where the coverage is. We
+     have no honest way to draw that overlay — the coverage layer needs a google.maps.Map
+     of its own, and the tiles behind it are exactly the mt*.google.com scrape the Google
+     basemaps deliberately don't do — so the drop searches outward instead and says how
+     far it had to go. On a rail trail that is usually the road bridge you just crossed,
+     which is the answer you wanted anyway.
+     Nothing here loads a line of Google until the man is actually dropped. When he is,
+     it bills as Dynamic Street View rather than Dynamic Maps — the same key and the same
+     Maps JavaScript API restriction, but a different SKU, so a quota cap set on map loads
+     is not capping this. Looking for a panorama is free; standing in one is not. */
+  svEnabled(){ return !!gmapsKey(); }
+  async svFind(lat,lng){
+    const g=window.google && window.google.maps;
+    if(!g) return null;
+    const svc=this._svSvc || (this._svSvc=new g.StreetViewService());
+    for(const [radius,src] of SV_TRIES){
+      const data=await new Promise(res=>{
+        svc.getPanorama({location:{lat,lng}, radius, source:g.StreetViewSource[src]},
+          (d,st)=>res(st===g.StreetViewStatus.OK && d && d.location ? d : null));
+      });
+      if(data) return data;
+    }
+    return null;
+  }
+  /* The whole flow, from a dropped man to a panorama on screen. Jobbed like the measure
+     tool's router: two quick drops must not race each other into the pane. */
+  async svOpen(lat,lng){
+    if(!this.map || !this.svEnabled() || !isFinite(lat) || !isFinite(lng)) return;
+    this.svArm(false);
+    const job=++this._svJob;
+    this.setBarHint('Looking for Street View…');
+    try{ await this.loadGmapsApi(); }
+    catch(e){
+      if(job===this._svJob) this.setBarHint('Street View couldn’t load — check the key’s referrer restrictions.', 5000);
+      return;
+    }
+    if(job!==this._svJob) return;
+    const data=await this.svFind(lat,lng).catch(()=>null);
+    if(job!==this._svJob) return;
+    if(!data){ this.setBarHint('No Street View within half a mile of there.', 4000); return; }
+    this.setBarHint('');
+    const p=data.location.latLng, plat=p.lat(), plng=p.lng();
+    /* Look at what was dropped on, not at whatever bearing the car was pointing: the man
+       went down on a spot because that spot was the question. Within a few yards of the
+       panorama itself there is no bearing worth computing, so keep the car's own. */
+    const away=miBetween([plat,plng],[lat,lng]);
+    const heading = away>0.004 ? bearing(plat,plng,lat,lng)
+      : (data.tiles && data.tiles.centerHeading) || 0;
+    this.svShow(data, heading, away);
+  }
+  svShow(data, heading, away){
+    const pane=this.$('svPane'), el=this.$('svCanvas');
+    if(!pane || !el) return;
+    const g=window.google.maps;
+    this.closeFind(true);
+    if(this.map) this.map.closePopup();
+    pane.removeAttribute('hidden');
+    const sc=document.querySelector('[data-screen="map"]');
+    if(sc) sc.classList.add('sv-on');
+    /* Built once and kept. A new StreetViewPanorama per drop is a new pano load every
+       time, and the API is happy to be walked somewhere else instead.
+       motionTracking off on purpose: left on, a phone swings the view with the handset
+       and asks for the orientation permission to do it, which is not what someone
+       looking at a road surface asked for. */
+    this._svPanoId=data.location.pano;
+    if(!this._pano){
+      this._pano=new g.StreetViewPanorama(el,{
+        pano:data.location.pano, pov:{heading, pitch:0}, zoom:0,
+        addressControl:false, imageDateControl:false, fullscreenControl:false,
+        motionTracking:false, motionTrackingControl:false, enableCloseButton:false,
+        showRoadLabels:true});
+      // Walking down the road in the panorama walks the marker down the map with it,
+      // so the map underneath is never describing a place you have already left.
+      this._pano.addListener('position_changed',()=>{
+        const q=this._pano.getPosition(); if(!q) return;
+        this.svMark(q.lat(), q.lng());
+        /* Both footnotes belong to the panorama that was opened — the date to its
+           imagery, the distance to the drop — so a step down the road drops them
+           rather than carrying them onto a picture they are no longer about. The
+           open itself arrives here too, asynchronously, and must not do that. */
+        this.svLabel(this._pano.getLocation(),
+          this._pano.getPano()===this._svPanoId ? undefined : null);
+      });
+      this._pano.addListener('pov_changed',()=>{
+        const v=this._pano.getPov(); if(v) this.svCone(v.heading);
+      });
+    } else {
+      this._pano.setPano(data.location.pano);
+      this._pano.setPov({heading, pitch:0});
+      this._pano.setVisible(true);
+    }
+    const p=data.location.latLng;
+    this.svPos={lat:p.lat(), lng:p.lng()};
+    this.svMark(this.svPos.lat, this.svPos.lng);
+    this.svCone(heading);
+    this.svLabel(data.location, {away, date:data.imageDate});
+    if(this.svSplitOn) this.svRecenter();
+  }
+  // Description, imagery date, and how far the nearest panorama was from the drop —
+  // the last one only when it is far enough that the rider would otherwise wonder.
+  svLabel(loc, extra){
+    const el=this.$('svWhere'); if(!el) return;
+    // undefined keeps what is there, null clears it — the difference between a redraw
+    // and a move to a panorama the footnotes are no longer true of.
+    if(extra!==undefined) this._svExtra=extra||{};
+    const x=this._svExtra||{};
+    const bits=[];
+    if(x.date) bits.push(svMonth(x.date));
+    if(x.away>0.014) bits.push((x.away<0.095 ? Math.round(x.away*5280)+' ft' : fmtMi(x.away)+' mi')+' from the drop');
+    el.innerHTML='<b>'+esc((loc && (loc.description||loc.shortDescription))||'Street View')+'</b>'
+      +(bits.length?'<span class="sv-when">'+esc(bits.join(' · '))+'</span>':'');
+  }
+  // The man, left standing on the map where the panorama actually is.
+  svMark(lat,lng){
+    if(!this.map) return;
+    this.svPos={lat,lng};
+    const html='<span class="sv-cone"></span><span class="sv-peg">'+icon('pegman',16)+'</span>';
+    if(!this._svMk){
+      this._svMk=L.marker([lat,lng],{interactive:false,keyboard:false,zIndexOffset:2000,
+        icon:L.divIcon({className:'sv-ic',html,iconSize:[0,0],iconAnchor:[0,0]})}).addTo(this.map);
+      this._svConeEl=null;   // a fresh icon element: svCone finds the wedge inside it again
+    } else this._svMk.setLatLng([lat,lng]);   // moving one doesn't rebuild it
+  }
+  // Which way you are facing, as a wedge on the map. A conic gradient starts at twelve
+  // o'clock and runs clockwise, which is a compass heading already — so this is a rotate.
+  svCone(heading){
+    if(!this._svMk) return;
+    if(!this._svConeEl){
+      const el=this._svMk.getElement();
+      this._svConeEl=el && el.querySelector('.sv-cone');
+    }
+    if(this._svConeEl) this._svConeEl.style.transform='rotate('+(heading||0)+'deg)';
+  }
+  /* Full-bleed by default — a panorama read through a letterbox tells you nothing about
+     a road surface — with a split that gives the map back the bottom half for the times
+     the question is "and where is that". */
+  svSplit(on){
+    const pane=this.$('svPane'); if(!pane) return;
+    this.svSplitOn = on==null ? !this.svSplitOn : !!on;
+    pane.classList.toggle('sv-split', this.svSplitOn);
+    const b=this.$('svSplitBtn');
+    if(b){ b.textContent=this.svSplitOn?'Full':'Map'; b.title=this.svSplitOn?'Fill the screen with the panorama':'Show the map under it'; }
+    // The panorama has been resized under Google's feet, and so has the strip of map left.
+    if(this._pano && window.google) window.google.maps.event.trigger(this._pano,'resize');
+    if(this.map) this.map.invalidateSize({animate:false});
+    if(this.svSplitOn) this.svRecenter();
+  }
+  /* Put the man in the middle of the strip of map the split leaves, which is not the
+     middle of the map element — that runs on behind the panorama, the sheet and the tab
+     bar. Same arithmetic as centerVisible, which only ever had to allow for the bottom. */
+  svRecenter(){
+    const m=this.map, p=this.svPos;
+    if(!m || !p) return;
+    const z=m.getZoom();
+    const pt=m.project([p.lat,p.lng], z).add([0, (this.obstructedH()-this.obstructedTop())/2]);
+    m.setView(m.unproject(pt, z), z, {animate:false});
+  }
+  svClose(){
+    this._svJob++;                       // strand a lookup still in flight
+    const pane=this.$('svPane');
+    if(pane) pane.setAttribute('hidden','');
+    const sc=document.querySelector('[data-screen="map"]');
+    if(sc) sc.classList.remove('sv-on');
+    if(this._pano) this._pano.setVisible(false);
+    if(this._svMk && this.map){ this.map.removeLayer(this._svMk); this._svMk=null; this._svConeEl=null; }
+    this.setBarHint('');
+    /* The map is left exactly where it was. Panning it to wherever the panorama was
+       walked to would cost a traffic-layer refetch and a Nearby re-range to show a
+       marker that closing has just taken away — and the map you get back should be
+       the map you left. */
+    this.svPos=null;
+  }
+  svOpenNow(){ return !!(this.$('svPane') && !this.$('svPane').hasAttribute('hidden')); }
+  /* Tap the man rather than dragging him and the next tap on the map is where he lands —
+     the same arm-then-tap the ruler uses, and the only path a thumb can take one-handed
+     on a phone that is already being held over the handlebars. */
+  svArm(on){
+    const want = on==null ? !this.svArmed : !!on;
+    if(want===!!this.svArmed) return;
+    this.svArmed=want;
+    const b=this.$('svBtn'); if(b){ b.classList.toggle('on',want); b.setAttribute('aria-pressed',want?'true':'false'); }
+    if(!this.map) return;
+    this.map.getContainer().classList.toggle('sv-aiming',want);
+    if(want){
+      if(this.measuring) this.measureExit();   // one map-tap tool at a time
+      this._svClick=e=>this.svOpen(e.latlng.lat, e.latlng.lng);
+      this.map.on('click', this._svClick);
+      this.setBarHint('Tap the map to drop the Street View man');
+    } else {
+      if(this._svClick){ this.map.off('click', this._svClick); this._svClick=null; }
+      this.setBarHint('');
+    }
+  }
+  /* The drag itself. Pointer events rather than HTML5 drag-and-drop, which no touch
+     screen implements — and the rail he is dragged out of is a scroller, so the button
+     also has to take the gesture away from it (touch-action:none, in the stylesheet).
+     He is drawn a thumb's height above the finger with a ring at the point itself: on a
+     phone the man would otherwise spend the whole drag underneath the thumb holding him. */
+  wireSvDrag(){
+    const btn=this.$('svBtn'); if(!btn) return;
+    let id=null, x0=0, y0=0, moved=false, ghost=null;
+    const put=(x,y)=>{ if(ghost){ ghost.style.left=x+'px'; ghost.style.top=y+'px'; } };
+    const kill=()=>{ if(ghost){ ghost.remove(); ghost=null; } id=null;
+      document.body.classList.remove('sv-dragging'); };
+    btn.addEventListener('pointerdown',e=>{
+      if(id!=null || e.button>0 || !this.svEnabled()) return;
+      id=e.pointerId; x0=e.clientX; y0=e.clientY; moved=false;
+      try{ btn.setPointerCapture(id); }catch(err){}
+    });
+    btn.addEventListener('pointermove',e=>{
+      if(e.pointerId!==id) return;
+      if(!moved){
+        if(abs(e.clientX-x0)<7 && abs(e.clientY-y0)<7) return;
+        moved=true;
+        ghost=document.createElement('div');
+        ghost.className='sv-ghost';
+        ghost.innerHTML='<span class="sv-ghost-peg">'+icon('pegman',20)+'</span><span class="sv-ghost-ring"></span>';
+        document.body.appendChild(ghost);
+        document.body.classList.add('sv-dragging');
+        this.svArm(false);
+        this.setBarHint('Let go over the map');
+      }
+      e.preventDefault();
+      put(e.clientX, e.clientY);
+    });
+    btn.addEventListener('pointerup',e=>{
+      if(e.pointerId!==id) return;
+      const wasDrag=moved, x=e.clientX, y=e.clientY;
+      kill();
+      if(!wasDrag) return;               // a tap: the click handler below arms him instead
+      /* A drag still ends in a click on the button, which would arm him on top of the
+         drop. Consumed once, and stamped rather than flagged: pointer capture means the
+         click can be swallowed by whatever the finger came up over, and a flag nobody
+         consumes would eat the next real tap instead. */
+      this._svSkipClick=Date.now();
+      this.svDrop(x,y);
+    });
+    btn.addEventListener('pointercancel',e=>{ if(e.pointerId===id){ kill(); this.setBarHint(''); } });
+    btn.addEventListener('click',()=>{
+      if(this._svSkipClick && Date.now()-this._svSkipClick<700){ this._svSkipClick=0; return; }
+      this.svArm();
+    });
+  }
+  // Where the ring was when the finger came up. Over the sheet or the tab bar is not the
+  // map, however much of the map element is running on underneath them.
+  svDrop(x,y){
+    const m=this.map; if(!m) return;
+    const r=m.getContainer().getBoundingClientRect();
+    const over=sel=>{ const e=document.querySelector(sel); if(!e) return false;
+      const b=e.getBoundingClientRect();
+      return b.height>0 && x>=b.left && x<=b.right && y>=b.top && y<=b.bottom; };
+    if(x<r.left || x>r.right || y<r.top || y>r.bottom || over('#mapPanel') || over('.tabbar')){
+      this.setBarHint('Drop him on the map', 2400);
+      return;
+    }
+    const ll=m.containerPointToLatLng(L.point(x-r.left, y-r.top));
+    this.svOpen(ll.lat, ll.lng);
+  }
+  /* The chip every pin and the spot dialog carry. With a key set it opens the panorama
+     in the app; without one it stays what it always was, a link out to Google. */
+  svLinkHtml(lat,lng){
+    if(!this.svEnabled())
+      return '<a href="'+panoLink(lat,lng)+'" target="_blank" rel="noopener" class="pa">Street View</a>';
+    return '<button type="button" class="pa sv-here" data-svlat="'+lat+'" data-svlng="'+lng+'">Street View</button>';
+  }
+
   tapPopup(ll){
     if(!this.map) return;
     if(this.measuring) return;   // in measure mode a tap drops a vertex, not a spot dialog
+    if(this.svArmed) return;     // and in pegman mode it drops the man
     // De-dupe the long-press/contextmenu pair, and swallow a stray double-tap.
     const now=Date.now();
     if(this._lastTapPopup && now-this._lastTapPopup<600) return;
@@ -2672,7 +2987,7 @@ class TrailApp {
       // weather.gov joins the links row rather than the block above it: the forecast
       // office's own page is there instantly and stays there even if the fetch fails.
       +'<div class="pa-row mv-lk">'+a(atLink(ll.lat,ll.lng),'Google Maps')
-      +a(panoLink(ll.lat,ll.lng),'Street View')+a(nwsLink(ll.lat,ll.lng),'weather.gov')+'</div>'
+      +this.svLinkHtml(ll.lat,ll.lng)+a(nwsLink(ll.lat,ll.lng),'weather.gov')+'</div>'
       +(this.tapToSet?'<button type="button" class="mv-go">Move me here</button>':'')
       // Same chips the town popups carry — a tap anywhere is often about "what's
       // around here", not "put me here", and that shouldn't need a known town.
@@ -2729,7 +3044,7 @@ class TrailApp {
     mk.bindPopup('<div class="srch-pop"><b>'+esc(s.label||'Search')+'</b>'
       +'<div class="srch-cd">'+(+s.lat).toFixed(5)+', '+(+s.lng).toFixed(5)+'</div>'
       +'<div class="pa-row mv-lk"><a href="'+searchAt(s.q,s.lat,s.lng)+'" target="_blank" rel="noopener" class="pa">Google Maps ↗</a>'
-      +'<a href="'+panoLink(s.lat,s.lng)+'" target="_blank" rel="noopener" class="pa">Street View</a></div>'
+      +this.svLinkHtml(s.lat,s.lng)+'</div>'
       +'<button type="button" class="srch-rm" data-sk="'+esc(key)+'">Remove this pin</button></div>',
       {maxWidth:240,autoPan:false});
     mk.addTo(lyr);
@@ -5868,33 +6183,42 @@ class TrailApp {
   }
 
   /* ---------- map + live data ---------- */
-  /* Both scripts, once, on demand. Google's bootstrap resolves through a global
-     callback rather than the script's own onload — onload fires when the loader
-     lands, which is several fetches before google.maps.Map exists. GoogleMutant
-     goes second because it registers itself against an L that has to be there
-     already, and against a google.maps it reads at construction time. */
-  loadGmaps(){
-    if(this._gmaps) return this._gmaps;
+  /* Google's own bootstrap, once, on demand. It resolves through a global callback
+     rather than the script's own onload — onload fires when the loader lands, which
+     is several fetches before google.maps.Map exists.
+     Split out from loadGmaps because Street View wants this and only this: the
+     panorama is drawn by the Maps API itself, so pegman has no use for the Leaflet
+     adapter below and shouldn't pay a round-trip to unpkg to open one. */
+  loadGmapsApi(){
+    if(this._gmapsApi) return this._gmapsApi;
     const key=gmapsKey();
     if(!key) return Promise.reject(new Error('no Google Maps key configured'));
-    this._gmaps=new Promise((res,rej)=>{
+    this._gmapsApi=new Promise((res,rej)=>{
       window[GMAPS_CB]=res;
       const s=document.createElement('script');
       s.async=true; s.src=GMAPS_SRC+'&key='+encodeURIComponent(key)+'&callback='+GMAPS_CB;
       s.onerror=()=>rej(new Error('Google Maps blocked'));
       document.head.appendChild(s);
-    }).then(()=>new Promise((res,rej)=>{
+    }).catch(err=>{
+      /* Forget the failure, or the cache above hands this same rejection back forever
+         and one dead moment of signal costs the Google layers for the rest of the
+         session — on a trail app, exactly the conditions where a retry is the point. */
+      this._gmapsApi=null;
+      throw err;
+    });
+    return this._gmapsApi;
+  }
+  /* That, plus the Leaflet adapter the Google basemaps ride on. GoogleMutant goes
+     second because it registers itself against an L that has to be there already,
+     and against a google.maps it reads at construction time. */
+  loadGmaps(){
+    if(this._gmaps) return this._gmaps;
+    this._gmaps=this.loadGmapsApi().then(()=>new Promise((res,rej)=>{
       const s=document.createElement('script');
       s.async=true; s.src=GMUTANT_SRC;
       s.onload=res; s.onerror=()=>rej(new Error('GoogleMutant blocked'));
       document.head.appendChild(s);
-    })).catch(err=>{
-      /* Forget the failure, or the cache above hands this same rejection back forever
-         and one dead moment of signal costs the Google layers for the rest of the
-         session — on a trail app, exactly the conditions where a retry is the point. */
-      this._gmaps=null;
-      throw err;
-    });
+    })).catch(err=>{ this._gmaps=null; throw err; });
     return this._gmaps;
   }
   /* A placeholder that draws nothing, so the basemap list is complete on the first
@@ -6008,8 +6332,19 @@ class TrailApp {
       this.layersCtl.addBaseLayer(this.gmapsBase('terrain'),'Google Terrain');
       /* The one failure Google reports out-of-band: a referrer the key's allowlist
          doesn't cover fails here, not on the script load, and otherwise shows up
-         only as a watermarked map and a console line nobody on a phone will read. */
-      window.gm_authFailure=()=>this.status('Google rejected the key — this address isn’t in its referrer allowlist.');
+         only as a watermarked map and a console line nobody on a phone will read.
+         It reaches the map's own hint as well as the settings line, because by now
+         the thing that provoked it is as likely to have been a dropped pegman as a
+         basemap row, and nobody looking at a blank panorama is on the Settings tab. */
+      window.gm_authFailure=()=>{
+        this.status('Google rejected the key — this address isn’t in its referrer allowlist.');
+        this.setBarHint('Google rejected the key for this address.', 5000);
+      };
+    } else {
+      /* Same argument as the Google basemap rows: without a key the panorama is a grey
+         "for development purposes only" box, so the man doesn't stand in the rail at all.
+         The Street View chips in the popups fall back to a link out to Google on their own. */
+      const sv=this.$('svBtn'); if(sv) sv.remove();
     }
     /* Leaflet rebuilds the whole list from its stored labels on every programmatic layer
        add or remove, and everything this app hangs on that list — the grips, the folded
