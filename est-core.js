@@ -229,7 +229,15 @@ const AADT_DASH='7,7';
    The service is free, shared and strictly rate-limited, so this is off until asked for,
    floored at a zoom where the answer is a town rather than a county, capped, and debounced
    — a drag across the state must not post a query per frame. */
-const OSMCY_URL='https://overpass-api.de/api/interpreter';
+/* Two endpoints, tried in order. The main instance is free and shared and spends a good
+   part of the day at its limit — it answers a town-sized box in three seconds when it is
+   quiet and takes twelve, or 429s, or drops the connection outright, when it is not. That
+   is the difference between a layer that works and a layer that "does not load", and it is
+   not something a rider can do anything about, so the second address is tried before the
+   failure is reported. Both speak the same API and both send CORS headers; kumi.systems is
+   a public mirror of the same data, kept for exactly this. */
+const OSMCY_URLS=['https://overpass-api.de/api/interpreter',
+                  'https://overpass.kumi.systems/api/interpreter'];
 const OSMCY_MINZ=12, OSMCY_CAP=3000, OSMCY_WAIT=650;
 const OSMCY_SRC='https://wiki.openstreetmap.org/wiki/Bicycle';
 /* Green for the traffic-free ways and orange for the painted ones, and neither is a colour
@@ -1212,6 +1220,10 @@ class TrailApp {
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     // The cycling vectors. Two layers, one fetch, one signature — see loadCycle.
     this.cyPathLayer=null; this.cyLaneLayer=null; this.cySig=''; this.cyReq=0; this._cyTimer=0;
+    /* What the two rows are saying about themselves. Held rather than written straight to
+       the DOM because Leaflet throws the layers list away and rebuilds it on every tick,
+       so the chips have to be repaintable from a value at any moment — see syncCyChips. */
+    this.cyNote={kind:'', path:0, lane:0};
     /* The count numbers ride in their own group inside the traffic layer and keep the
        rows they were drawn from, so switching them off and on again is a relabel of
        what is already on screen rather than another trip to NYSDOT. On by default:
@@ -1233,9 +1245,9 @@ class TrailApp {
        never asked for it. elevBand is the stretch currently drawn, held because the
        pointer maths has to agree with the drawing to the pixel; elevCur is the mile under
        the cursor, or null for no cursor at all. */
-    this.elevOn=false; this.elevSpan='trail'; this.elevCur=null;
+    this.elevOn=false; this.elevCur=null;
     this.elevBand=null; this.elevGeom=null; this.elevSum=null; this.elevCurG=null;
-    this._elevMk=null; this._elevDrag=false; this._elevRaf=0;
+    this._elevMk=null; this._elevDrag=false; this._elevDownX=null; this._elevRaf=0;
     // Places you sent to Google Maps, kept as pins so you don't lose the spot. Saved.
     this.searches=[]; this.searchLayer=null; this.searchMarks={};
     /* One switch per category, driving the list AND the pins together. They were
@@ -1327,8 +1339,8 @@ class TrailApp {
     this.wirePanelDrag();
     this.watchMapStrip();
     this.initMap();
-    // After initMap: the chart's 'View' span asks the map what it is showing, and the
-    // restore at the end of wireElev is the first thing that asks.
+    // After initMap: the chart draws the stretch the map is showing, so it has to have a
+    // map to ask — and the restore at the end of wireElev is the first thing that asks.
     this.wireElev();
     this.renderAll();
     // Shut is measured off the laid-out grab bar, so it can only be set once it exists.
@@ -1419,7 +1431,6 @@ class TrailApp {
     if(this.offMax!=null) this.fSet('f-offMax',this.offMax);
     const sg=this.$('itSeg'); if(sg) sg.value=this.seg;
     if(typeof p.elevOn==='boolean') this.elevOn=p.elevOn;
-    if(p.elevSpan==='trail'||p.elevSpan==='view') this.elevSpan=p.elevSpan;
     if(typeof p.followMap==='boolean') this.followMap=p.followMap;
     this.fSet('f-mpFollow',this.followMap);
     this.syncFollowUi();
@@ -1431,7 +1442,7 @@ class TrailApp {
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,aadtLb:this.aadtLb,
-      elevOn:this.elevOn,elevSpan:this.elevSpan,
+      elevOn:this.elevOn,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
       grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches,
       sort:{itin:this.sort.itin,poi:this.sort.poi},
@@ -4301,6 +4312,7 @@ class TrailApp {
     //    for an armed × is unarmed — so the arm is dropped rather than left true in a
     //    field with nothing red on screen to say so.
     this.syncAadtLb();
+    this.syncCyChips();
     if(this._ulArm) this.disarmRemoveUser();
     this.applyLyrOrder();
   }
@@ -4708,6 +4720,45 @@ class TrailApp {
     return !!m && ((this.cyPathLayer && m.hasLayer(this.cyPathLayer))
                 || (this.cyLaneLayer && m.hasLayer(this.cyLaneLayer)));
   }
+  /* What the rows say, and where they say it. This used to go to status() alone, which
+     writes #locStatus \u2014 a line of text on the More screen. So the one message that matters
+     most, "these draw from zoom 12 in", was posted on a screen the rider is by definition
+     not looking at: they are on the map, they have just ticked Cycle paths, and the map
+     stays empty with no reason given. At the default zoom of 11, and at the 7 a first run
+     opens on, that is every first attempt \u2014 the feature reads as broken.
+     So the state rides on the row that was ticked, in a chip beside its name, where the
+     finger already is. status() still gets it: the More screen is where a rider goes to
+     ask what a layer is doing, and it costs one line to keep answering there. */
+  cySay(kind, msg){
+    this.cyNote.kind=kind;
+    this.syncCyChips();
+    if(msg) this.status(msg);
+  }
+  /* Repainted from cyNote rather than mutated in place, because decorateLayers runs after
+     every rebuild of the control and has to be able to restore this from nothing. */
+  syncCyChips(){
+    const k=this.cyNote.kind;
+    document.querySelectorAll('[data-cyst]').forEach(el=>{
+      const key=el.dataset.cyst, on=this.map&&this.lyrByKey[key]&&this.map.hasLayer(this.lyrByKey[key]);
+      // Off means silent. A row nobody has switched on has nothing to report, and a stale
+      // count under an unticked box claims lines that are not on the map.
+      let txt='', act=false;
+      if(on){
+        if(k==='zoom'){ txt='zoom in'; act=true; }
+        else if(k==='loading') txt='reading\u2026';
+        else if(k==='busy') txt='service busy';
+        else if(k==='error') txt='no answer';
+        else if(k==='ok') txt=(key==='cypath'?this.cyNote.path:this.cyNote.lane).toLocaleString('en-US');
+      }
+      el.textContent=txt;
+      el.hidden=!txt;
+      el.disabled=!act;
+      // The zoom chip is the only one you can press, and it says what it will do: below
+      // the cutoff the honest instruction is not "wait" but "come closer", and the chip
+      // that carries the message is the shortest route to acting on it.
+      el.title=act?('Zoom the map in to '+OSMCY_MINZ+', where these draw'):'';
+    });
+  }
   /* One fetch feeds both switches. They are separate rows because they are separate
      decisions, but they come out of one Overpass query \u2014 asking twice for two halves of
      the same box would double the load on a shared service to save nothing. */
@@ -4724,7 +4775,7 @@ class TrailApp {
       if(this.cyPathLayer) this.cyPathLayer.clearLayers();
       if(this.cyLaneLayer) this.cyLaneLayer.clearLayers();
       this.cySig='';
-      this.status('Cycle ways draw from zoom '+OSMCY_MINZ+' in \u2014 further out it is more query than any shared service should be asked for.');
+      this.cySay('zoom','Cycle ways draw from zoom '+OSMCY_MINZ+' in \u2014 further out it is more query than any shared service should be asked for.');
       return;
     }
     const b=m.getBounds();
@@ -4744,27 +4795,38 @@ class TrailApp {
       +'way["cycleway:left"~"lane|track"]('+box+');'
       +'way["cycleway:right"~"lane|track"]('+box+');'
       +');out geom qt '+OSMCY_CAP+';';
-    this.status('Reading cycle ways from OpenStreetMap\u2026');
-    let els;
-    try{
-      const r=await fetch(OSMCY_URL,{method:'POST',body:'data='+encodeURIComponent(q),
-        headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-      // 429 and 504 are what a shared service says when it is busy, and they deserve their
-      // own sentence: "no answer" reads as broken, and this is "try again in a moment".
-      if(r.status===429||r.status===504) throw new Error('busy');
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      els=((await r.json())||{}).elements||[];
-    }catch(e){
+    this.cySay('loading','Reading cycle ways from OpenStreetMap\u2026');
+    let els=null, err=null;
+    for(let i=0;i<OSMCY_URLS.length && !els;i++){
+      try{
+        const r=await fetch(OSMCY_URLS[i],{method:'POST',body:'data='+encodeURIComponent(q),
+          headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+        // 429 and 504 are what a shared service says when it is busy, and they deserve their
+        // own sentence: "no answer" reads as broken, and this is "try again in a moment".
+        if(r.status===429||r.status===504) throw new Error('busy');
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        els=((await r.json())||{}).elements||[];
+      }catch(e){ err=e; }
+      // A pan that landed while the first address was thinking has already asked again;
+      // the mirror should not be woken to answer a question nobody is waiting on.
       if(my!==this.cyReq) return;
+    }
+    if(!els){
       this.cySig='';
-      this.status(e && e.message==='busy'
-        ? 'The OpenStreetMap query service is busy right now. Pan or zoom to ask it again \u2014 the rest of the map is unaffected.'
-        : 'No answer from the OpenStreetMap query service. The rest of the map is unaffected.');
+      const busy=err && err.message==='busy';
+      /* The reason is worth printing even though the chip has no room for it: "busy" and
+         "HTTP 400" want different things from the reader, and the whole point of the More
+         screen's line is that it is where you go when the short answer is not enough. */
+      const why=err && err.message && err.message!=='busy' ? ' ('+err.message+')' : '';
+      this.cySay(busy?'busy':'error', busy
+        ? 'The OpenStreetMap query service is busy on both addresses right now. Pan or zoom to ask it again \u2014 the rest of the map is unaffected.'
+        : 'No answer from the OpenStreetMap query service'+why+'. The rest of the map is unaffected.');
       return;
     }
     if(my!==this.cyReq) return;
     const n=this.drawCycle(els);
-    this.status(n.total>=OSMCY_CAP
+    this.cyNote.path=n.path; this.cyNote.lane=n.lane;
+    this.cySay('ok', n.total>=OSMCY_CAP
       ? 'Cycle ways: '+OSMCY_CAP.toLocaleString()+' in view, which is the cap \u2014 zoom in for the rest.'
       : n.path+' traffic-free \u00b7 '+n.lane+' on-road, in view.');
   }
@@ -5029,15 +5091,15 @@ class TrailApp {
     if(this.elevOn) this.renderElev(); else this.elevBand=null;
     this.savePrefs();
   }
-  /* Which stretch is drawn. The whole trail is the honest default — it is the shape a
-     rider is trying to learn, and it is the one span that does not move under them — but
-     582 miles across a phone is a mile and a half to the pixel, so 'View' hands the chart
-     the same stretch the map is showing and the two become one instrument.
+  /* Which stretch is drawn: whatever the map is showing, always. 582 miles across a phone
+     is a mile and a half to the pixel, which is a shape rather than a reading — and a chart
+     that covers exactly the ground on screen makes the two one instrument, so panning the
+     map is how you scroll the profile and no second control is needed to say so.
      Follows the map rather than the mile-range filter on purpose: this is a map control,
      and borrowing a filter set on another screen would make the chart change span for
      reasons a rider looking at the map cannot see. */
   elevRange(){
-    if(this.elevSpan==='view' && this.map){
+    if(this.map){
       const b=this.map.getBounds();
       let lo=Infinity, hi=-Infinity;
       for(let i=0;i<ROUTE.length;i++){
@@ -5054,15 +5116,10 @@ class TrailApp {
         return [Math.max(0,lo-pad), Math.min(TOTAL,hi+pad)];
       }
       // Panned off the trail entirely: there is no stretch to show, so show all of it
-      // rather than a blank box. The button stays lit; the moment the route is back on
-      // screen the chart follows it again.
+      // rather than a blank box. The moment the route is back on screen the chart follows
+      // it again.
     }
     return [0,TOTAL];
-  }
-  setElevSpan(s){
-    if(s!==this.elevSpan){ this.elevSpan=s; this.savePrefs(); }
-    document.querySelectorAll('[data-elevspan]').forEach(b=>b.classList.toggle('on',b.dataset.elevspan===this.elevSpan));
-    this.renderElev();
   }
   /* Redrawn from scratch each time. The chart is a few hundred path commands and one
      text node per label — cheaper to rebuild than to diff, and rebuilding is what makes
@@ -5080,6 +5137,13 @@ class TrailApp {
 
     const [m0,m1]=this.elevRange();
     this.elevBand=[m0,m1];
+    /* Panned or zoomed away from the mile under the cursor: it is not on the chart any
+       more, so it is not a cursor any more. Clamping it to the nearest edge instead would
+       quote figures for a point the rider never picked, and leaving it alone draws a
+       crosshair off the side of the plot with a dot still sitting on the map. */
+    if(this.elevCur!=null && (this.elevCur<m0||this.elevCur>m1)){
+      this.elevCur=null; this.showElevMark(null);
+    }
     const st=elevStats(m0,m1);
     this.elevSum=st;
 
@@ -5106,9 +5170,15 @@ class TrailApp {
     if(hi<=lo) hi=lo+60;
     const gstep=[10,20,25,50,100,200,250,500,1000,2000].find(s=>(hi-lo)/s<=3)||5000;
 
-    const X=m=>(m-m0)/(m1-m0)*W;
-    const Y=v=>BOT-(v-lo)/(hi-lo)*(BOT-TOP);
     this.elevGeom={W,H,TOP,BOT,lo,hi};
+    /* Miles run right to left, which is what makes the chart lie the same way round as the
+       map above it: mile zero is the Battery, the trail's eastern end, and east is the
+       right of the screen. Drawn the other way the two instruments contradict each other —
+       the hill the map shows on the left of the viewport turns up on the right of the
+       profile, and every reading has to be mirrored in the head before it can be pointed
+       at. Which is the whole point of a chart that follows the viewport. */
+    const X=m=>this.elevX(m);
+    const Y=v=>BOT-(v-lo)/(hi-lo)*(BOT-TOP);
 
     /* The silhouette, one point per pixel column, taking the HIGHEST sample in each
        column rather than the one that happens to land on it. Across the whole trail a
@@ -5137,14 +5207,14 @@ class TrailApp {
     grid.forEach((v,i)=>{
       const y=Math.round(Y(v))+.5;
       E('line',{x1:0,y1:y,x2:W,y2:y,class:'eg','stroke-width':1},gBg);
-      /* Left-hung and sitting on its line, which keeps the numbers out of the silhouette's
-         way: the ground rises to the right of the chart far more often than it does at
-         mile zero, because mile zero is the Battery and the trail only goes up from there.
-         The topmost one wears the unit, because these and the mileposts along the foot are
-         otherwise both bare numbers and the whole trail can show "500" twice — once at
+      /* Right-hung and sitting on its line, which keeps the numbers out of the silhouette's
+         way: the low ground is at the eastern end of any stretch far more often than not,
+         because the east end of the trail is the Battery and it only goes up from there —
+         and east is now the right of the chart. The topmost one wears the unit, because
+         these and the mileposts along the foot are otherwise both bare numbers and the whole trail can show "500" twice — once at
          500 feet and once at mile 500. One label carries it rather than all of them: on a
          76-pixel chart every repeat is a line of ink spent saying something already said. */
-      E('text',{x:3,y:y-2.5,class:'elab'},gLab).textContent=
+      E('text',{x:W-3,y:y-2.5,class:'elab','text-anchor':'end'},gLab).textContent=
         Math.round(v).toLocaleString('en-US')+(i===grid.length-1?' ft':'');
     });
 
@@ -5237,6 +5307,18 @@ class TrailApp {
       +sep+(flat ? ft(s.min)+'–'+ft(s.max)+' ft' : 'high '+ft(s.max)+' ft')
       +sep+'<span style="opacity:.8">TM '+mi(s.lo)+'–'+mi(s.hi)+'</span>';
   }
+  /* The axis, in one place, both ways round. Three call sites share it — the drawing, the
+     crosshair and the pointer maths — and any two of them disagreeing puts the dot
+     somewhere the ground is not. */
+  elevX(mile){
+    const b=this.elevBand, g=this.elevGeom;
+    if(!b||!g||b[1]<=b[0]) return 0;
+    return (b[1]-mile)/(b[1]-b[0])*g.W;
+  }
+  elevMileAtFrac(f){
+    const b=this.elevBand;
+    return b ? b[1]-(b[1]-b[0])*f : null;
+  }
   /* The crosshair. Drawn into a group of its own and rebuilt on every move, so tracking a
      finger costs three nodes rather than the whole chart. */
   drawElevCursor(){
@@ -5245,7 +5327,7 @@ class TrailApp {
     while(g.firstChild) g.removeChild(g.firstChild);
     if(this.elevCur==null) return;
     const NS='http://www.w3.org/2000/svg';
-    const x=(this.elevCur-band[0])/(band[1]-band[0])*geo.W;
+    const x=this.elevX(this.elevCur);
     const y=geo.BOT-(elevAt(this.elevCur)-geo.lo)/(geo.hi-geo.lo)*(geo.BOT-geo.TOP);
     const ln=document.createElementNS(NS,'line');
     ln.setAttribute('x1',x.toFixed(1)); ln.setAttribute('x2',x.toFixed(1));
@@ -5296,13 +5378,11 @@ class TrailApp {
     const r=host.getBoundingClientRect();
     if(!r.width) return null;
     const f=Math.max(0,Math.min(1,(clientX-r.left)/r.width));
-    return band[0]+(band[1]-band[0])*f;
+    return this.elevMileAtFrac(f);
   }
   wireElev(){
     const btn=this.$('elevBtn'); if(btn) btn.addEventListener('click',()=>this.toggleElev());
     const x=this.$('elevClose'); if(x) x.addEventListener('click',()=>this.setElev(false));
-    document.querySelectorAll('[data-elevspan]').forEach(b=>
-      b.addEventListener('click',()=>this.setElevSpan(b.dataset.elevspan)));
     const host=this.$('elevPlot');
     if(host){
       /* Pointer events rather than mouse and touch separately: one handler that a finger,
@@ -5311,6 +5391,7 @@ class TrailApp {
          the ends of the chart and keep tracking instead of being dropped at the edge. */
       host.addEventListener('pointerdown',e=>{
         this._elevDrag=true;
+        this._elevDownX=e.clientX;
         if(host.setPointerCapture) try{ host.setPointerCapture(e.pointerId); }catch(_){}
         this.setElevCursor(this.elevMileFromX(e.clientX));
       });
@@ -5318,15 +5399,27 @@ class TrailApp {
       host.addEventListener('pointerup',e=>{
         if(!this._elevDrag) return;
         this._elevDrag=false;
-        /* Lifting off says "take me there", which is the gesture that makes the chart
-           navigable rather than merely readable — across the whole trail the point under
-           your finger is nearly always somewhere else entirely. Only when it is somewhere
-           else, though: a tap on a hill you are already looking at should leave the map
-           exactly where it is rather than nudging it a few pixels for no reason. */
         const mi=this.elevMileFromX(e.clientX);
         if(mi==null||!this.map) return;
         const p=this.milePoint(mi);
-        if(!this.visibleBounds().contains(p)) this.centerVisible(p[0],p[1]);
+        /* Two gestures on one chart, told apart by how far the pointer travelled.
+           A SCRUB is reading: the finger is walking the profile with the dot walking the
+           map beside it, and zooming out from under it would throw away the very stretch
+           being read. It only moves the map when the mile it ends on is off screen, and
+           then only far enough to bring it into view.
+           A TAP is going: "that hill — show me". It zooms, on the same ladder the list
+           rows' zoom button climbs, so a point picked off a chart and a point picked off a
+           row land the same way. And because the chart draws whatever the map is showing,
+           the zoom lands in the profile too: the stretch you pointed at spreads out to fill
+           the width, and tapping again goes in further. That is the whole navigation model
+           here — the chart is a scrollbar for the map and the map is the zoom for the
+           chart — and it is why the tap is worth spending on zooming rather than on the
+           centre-if-off-screen nudge a scrub already does. */
+        if(abs(e.clientX-(this._elevDownX!=null?this._elevDownX:e.clientX))>6){
+          if(!this.visibleBounds().contains(p)) this.centerVisible(p[0],p[1]);
+          return;
+        }
+        this.centerVisible(p[0],p[1],Math.min(17, Math.max(this.map.getZoom()+3, 15)));
       });
       /* A mouse leaving takes the cursor with it. A finger lifting does not: there is no
          hover on a phone, so a mark that died with the touch would be a mark you can never
@@ -5339,16 +5432,15 @@ class TrailApp {
       if(typeof ResizeObserver!=='undefined')
         new ResizeObserver(()=>this.renderElev()).observe(host);
     }
-    this.setElevSpan(this.elevSpan);
     // The flag came back from storage; the panel is still in the markup's own hidden
     // state. Put the DOM where the flag says it should be. init's own snap lands a frame
     // after this and re-measures, so the redundant one setElev does here costs nothing.
     this.setElev(this.elevOn);
   }
-  /* A pan only moves the chart when the chart is following the map. On 'Trail' the span is
-     the whole trail and nothing about it has changed — redrawing 582 miles on every pan
-     would be a few hundred path commands spent to produce the identical picture. */
-  elevPanRefresh(){ if(this.elevOn && this.elevSpan==='view') this.renderElev(); }
+  /* Every pan moves the chart, because the chart is the stretch on screen. Only when it is
+     open, though — a closed panel redrawn on every pan is a few hundred path commands spent
+     on a picture nobody is looking at. */
+  elevPanRefresh(){ if(this.elevOn) this.renderElev(); }
   /* Map to chart. Throttled to a frame: projectRoute walks two thousand legs and a mouse
      can fire a great deal more often than the screen redraws, and the answer would be
      thrown away either way. */
@@ -6480,6 +6572,15 @@ class TrailApp {
       if(!t || !t.closest) return;
       const b=t.closest('[data-aadtlb]');
       if(b){ L.DomEvent.stop(ev); this.setAadtLabels(!this.aadtLb); return; }
+      /* "zoom in" is a chip you can press, because being told the cutoff and then having
+         to go and find it yourself is two steps where the message could have been one.
+         Centre is kept; only the zoom moves. */
+      const cy=t.closest('[data-cyst]');
+      if(cy && !cy.disabled){
+        L.DomEvent.stop(ev);
+        if(this.map && this.map.getZoom()<OSMCY_MINZ) this.map.setZoom(OSMCY_MINZ);
+        return;
+      }
       const x=t.closest('[data-ulx]');
       if(x){ L.DomEvent.stop(ev); this.armRemoveUser(x); }
     });
@@ -6641,11 +6742,13 @@ class TrailApp {
     this.cyPathLayer=L.layerGroup();
     this.regLayer('cypath', this.cyPathLayer,
       this.lyrSrc('Cycle paths', OSMCY_SRC, 'Traffic-free: cycleways, and paths signed for bikes. From OpenStreetMap via Overpass — opens the tagging guide')
-      +' <span class="lyr-ct lyr-key" style="background:'+CY_PATH+'">traffic-free</span>');
+      +' <span class="lyr-ct lyr-key" style="background:'+CY_PATH+'">traffic-free</span>'
+      +' <button type="button" class="lyr-ct lyr-cyst" data-cyst="cypath" hidden></button>');
     this.cyLaneLayer=L.layerGroup();
     this.regLayer('cylane', this.cyLaneLayer,
       this.lyrSrc('Bike lanes', OSMCY_SRC, 'On-road: roads carrying a painted lane or track. From OpenStreetMap via Overpass — opens the tagging guide')
-      +' <span class="lyr-ct lyr-key" style="background:'+CY_LANE+'">on-road</span>');
+      +' <span class="lyr-ct lyr-key" style="background:'+CY_LANE+'">on-road</span>'
+      +' <button type="button" class="lyr-ct lyr-cyst" data-cyst="cylane" hidden></button>');
     /* Either switch turns the one fetch on; only the last one off stands it down.
        Deliberately NOT clearing the row you just switched off, and deliberately not
        resetting the signature when you switch one on. One query fills both groups, and a
@@ -6657,13 +6760,23 @@ class TrailApp {
        and on again refetch rather than redraw a view you have since panned away from. */
     map.on('overlayadd', e=>{
       if(e.layer!==this.cyPathLayer && e.layer!==this.cyLaneLayer) return;
+      /* Sync before the fetch as well as inside it: a row switched on while the other one
+         already holds an answer has its count to show immediately, and the tick is not the
+         moment to leave a row blank. Ticking a checkbox does NOT rebuild the control —
+         Leaflet suppresses its own _update while it is handling the click — so nothing
+         else here would repaint these chips. */
+      this.syncCyChips();
       this.loadCycle();
     });
     map.on('overlayremove', e=>{
       if(e.layer!==this.cyPathLayer && e.layer!==this.cyLaneLayer) return;
-      if(this.cyOn()) return;
+      if(this.cyOn()){ this.syncCyChips(); return; }
       clearTimeout(this._cyTimer); this.cySig='';
+      // The full stand-down takes the message with it: "service busy" left standing on a
+      // row that is switched off is a complaint about a query nobody is asking for.
+      this.cyNote.kind='';
       this.cyPathLayer.clearLayers(); this.cyLaneLayer.clearLayers();
+      this.syncCyChips();
     });
     // Whatever the rider brought last time, back in the control in the same order.
     this.userLayers.forEach(rec=>this.registerUserLayer(rec));
