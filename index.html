@@ -610,6 +610,39 @@
     font-family:var(--font-body);font-size:10px;font-weight:700;line-height:1.3;
     font-variant-numeric:tabular-nums}
   .aadt-ln{cursor:pointer}
+  /* A cycle way's own name, on the way. Same plate as the traffic counts so the two read
+     as one family of map labels, but ruled on the left in the line's colour rather than
+     boxed all round: a name is longer than a number, and a full border at this length
+     turns into a second line on the map competing with the one it is naming. */
+  .cy-ic{background:none;border:0}
+  .cy-n{display:inline-block;max-width:100%;padding:1px 5px 1px 4px;
+    background:color-mix(in srgb,var(--color-bg) 92%,transparent);
+    border-left:3px solid currentColor;border-radius:2px var(--radius-md) var(--radius-md) 2px;
+    box-shadow:var(--shadow-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-family:var(--font-body);font-size:10.5px;font-weight:700;line-height:1.35}
+  /* A layer row asked the network for something and it hasn't landed. The button the row
+     was switched on from is where that gets said: accent, and the glyph turns over. */
+  .leaflet-control-layers.fab-layers.is-loading .leaflet-control-layers-toggle{
+    color:var(--color-accent);border-color:var(--color-accent)}
+  .leaflet-control-layers.fab-layers.is-loading .leaflet-control-layers-toggle .ic{
+    animation:lyr-spin 1.1s linear infinite;transform-origin:50% 50%}
+  @keyframes lyr-spin{to{transform:rotate(360deg)}}
+  /* Expanded, the toggle is hidden and the card is what you are looking at, so the card
+     says it instead — a moving hairline along the top edge rather than a spinning glyph
+     behind a list you are reading. */
+  .leaflet-control-layers.fab-layers.is-loading.leaflet-control-layers-expanded{
+    background-image:linear-gradient(90deg,var(--color-accent) 0 36%,transparent 36%);
+    background-size:280% 2.5px;background-repeat:no-repeat;background-position:0 0;
+    animation:lyr-sweep 1.2s linear infinite}
+  @keyframes lyr-sweep{to{background-position:100% 0}}
+  /* Turning is the point, so a rider who has asked for less motion gets the colour and a
+     slow pulse instead of a spin they did not ask for. */
+  @media (prefers-reduced-motion:reduce){
+    .leaflet-control-layers.fab-layers.is-loading .leaflet-control-layers-toggle .ic{
+      animation:lyr-pulse 1.4s ease-in-out infinite}
+    .leaflet-control-layers.fab-layers.is-loading.leaflet-control-layers-expanded{animation:none}
+    @keyframes lyr-pulse{50%{opacity:.35}}
+  }
   .poi-list{display:flex;flex-direction:column;gap:var(--space-3)}
   /* The same parent, over the run of groups it owns in the list below. */
   .poi-src{display:flex;align-items:baseline;gap:8px;margin:var(--space-4) 0 var(--space-2);

@@ -238,7 +238,23 @@ const AADT_DASH='7,7';
    a public mirror of the same data, kept for exactly this. */
 const OSMCY_URLS=['https://overpass-api.de/api/interpreter',
                   'https://overpass.kumi.systems/api/interpreter'];
-const OSMCY_MINZ=12, OSMCY_CAP=3000, OSMCY_WAIT=650;
+/* Two floors, because the two rows answer questions at different scales. A traffic-free
+   path is the thing you plan a day around — "is there a rail trail across this county" is
+   asked with the whole county on screen — so it draws from ten. A painted lane is a fact
+   about a road you are already on top of, unreadable and meaningless at county scale, and
+   it is also the expensive half of the query, so it waits until twelve.
+   Ten rather than twelve costs sixteen times the area, which is affordable only because
+   of the two things below it: at ten the query is the cheap half alone, and the box that
+   is asked for is padded, so panning across that county re-asks nothing. */
+const OSMCY_MINZ=10, OSMCY_LANE_MINZ=12;
+const OSMCY_CAP=3000, OSMCY_WAIT=650;
+/* Ask for more map than is on screen, and a nudge in any direction is already answered.
+   The old code keyed its cache on the exact viewport, so every pan — every frame of a
+   flick, once the debounce let go — was a fresh round trip to a shared public service for
+   a view that overlapped the last one by 90%. Doubled with the mirror above: a box already
+   answered is a box neither instance is asked for again. 0.35 buys roughly a screen and a
+   half in each direction for 1.8× the area. */
+const OSMCY_PAD=0.35;
 const OSMCY_SRC='https://wiki.openstreetmap.org/wiki/Bicycle';
 /* Green for the traffic-free ways and orange for the painted ones, and neither is a colour
    already spoken for: the route owns cyan and purple, your own position owns the blue, the
@@ -248,8 +264,18 @@ const OSMCY_SRC='https://wiki.openstreetmap.org/wiki/Bicycle';
    reads both at once. Solid where OSM names a hard surface, dashed where it names a soft
    one; where it names none the line stays solid rather than inventing a claim, and the
    popup is where "not recorded" gets said out loud. */
-const CY_PATH='#00875a', CY_LANE='#e8590c';
+/* Two colours each, the way the traffic bands carry two: the bright one is the line on
+   the map, the dark one is type — a green that reads as a 5px stroke over parkland is
+   unreadable as a 10px name on white. The line colours are a long way brighter than the
+   pair they replace (#00875a/#e8590c), which is half of why these were easy to lose; the
+   other half was that they had no casing, and a saturated line laid straight onto a busy
+   basemap is still a line the eye has to hunt for. Both get the white casing the route
+   has used all along. */
+const CY_PATH='#00c853', CY_PATH_INK='#00703c';
+const CY_LANE='#ff6d00', CY_LANE_INK='#9a4500';
 const CY_DASH='5,6';
+// Line, and the white casing under it. Cased weights are what the route uses, one step down.
+const CY_W={path:4.5, lane:3.5}, CY_CASE=3;
 const CY_PAVED=/^(asphalt|paved|concrete|paving_stones|chipseal|sett|metal|wood|cobblestone)/;
 /* The two halves of the trail as the MAP draws them — the route line, the milepost
    chips, the stop dots, the town names. Deliberately not --color-accent-2, which the
@@ -1219,11 +1245,17 @@ class TrailApp {
     this.routeLayer=null;
     this.aadtLayer=null; this.aadtSig=''; this.aadtReq=0;
     // The cycling vectors. Two layers, one fetch, one signature — see loadCycle.
-    this.cyPathLayer=null; this.cyLaneLayer=null; this.cySig=''; this.cyReq=0; this._cyTimer=0;
+    this.cyPathLayer=null; this.cyLaneLayer=null; this.cyReq=0; this._cyTimer=0;
     /* What the two rows are saying about themselves. Held rather than written straight to
        the DOM because Leaflet throws the layers list away and rebuilds it on every tick,
        so the chips have to be repaintable from a value at any moment — see syncCyChips. */
     this.cyNote={kind:'', path:0, lane:0};
+    /* cyBox is the padded box the last answer actually covers and cyKey which halves were
+       asked for; together they are the cache, and a view inside both is a view already
+       drawn. cyRows is that answer's ways, held so the names can be switched without
+       re-asking. Names on by default: a trail you cannot name is a trail you cannot
+       cross-check against a sign, a map, or the itinerary. */
+    this.cyBox=null; this.cyKey=''; this.cyRows=null; this.cyLb=true;
     /* The count numbers ride in their own group inside the traffic layer and keep the
        rows they were drawn from, so switching them off and on again is a relabel of
        what is already on screen rather than another trip to NYSDOT. On by default:
@@ -1376,6 +1408,7 @@ class TrailApp {
     if(isFinite(p.avgSpeed)&&p.avgSpeed>0) this.avgSpeed=p.avgSpeed;
     if(typeof p.showWx==='boolean') this.showWx=p.showWx;
     if(typeof p.aadtLb==='boolean') this.aadtLb=p.aadtLb;
+    if(typeof p.cyLb==='boolean') this.cyLb=p.cyLb;
     if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
     // Clamp a stored ride window to sane bounds and keep start before end.
     if(isFinite(p.wxRideStart)) this.wxRideStart=Math.max(0,Math.min(21,p.wxRideStart|0));
@@ -1441,7 +1474,7 @@ class TrailApp {
   }
   savePrefs(){
     try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
-      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,aadtLb:this.aadtLb,
+      miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,aadtLb:this.aadtLb,cyLb:this.cyLb,
       elevOn:this.elevOn,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
       grpShut:[...this.grpShut],lyrGrpShut:[...this.lyrGrpShut],searches:this.searches,
@@ -2481,6 +2514,18 @@ class TrailApp {
        value with no readers. */
   }
   status(msg){ const el=this.$('locStatus'); if(el) el.textContent=msg; }
+  /* Something a layer row asked for is in flight, said on the control that row lives in:
+     the layers button turns accent and its glyph spins. The layers card is where every
+     one of these fetches was started from, so it is the honest place to say one is still
+     going — the alternative was a status line on the Settings tab that nobody standing
+     over a map is looking at.
+     A counter rather than a flag, because two rows can be loading at once and the first
+     to land must not stand the spinner down on the second. */
+  netBusy(d){
+    this._busy=Math.max(0,(this._busy||0)+d);
+    const el=this.layersCtl && this.layersCtl.getContainer();
+    if(el) el.classList.toggle('is-loading', this._busy>0);
+  }
   /* The direction control is no longer one button in a bar that no longer exists —
      it repeats in every screen's title row plus a map FAB, so they all restate the
      same value on every flip. The FAB only has room for the short form. */
@@ -3983,6 +4028,10 @@ class TrailApp {
     return base.split('/').slice(-3).join('/');
   }
   async arcgisFeatures(base){
+    this.netBusy(1);
+    try{ return await this.arcgisFetch(base); } finally{ this.netBusy(-1); }
+  }
+  async arcgisFetch(base){
     const p=new URLSearchParams({where:'1=1', outFields:'*', outSR:'4326', returnGeometry:'true',
       geometry:JSON.stringify(USER_BOX), geometryType:'esriGeometryEnvelope', inSR:'4326',
       spatialRel:'esriSpatialRelIntersects', geometryPrecision:'5',
@@ -4569,6 +4618,7 @@ class TrailApp {
       // you can guess at, a truck route you cannot.
       orderByFields:'AADT DESC', resultRecordCount:String(AADT_CAP), f:'geojson'
     });
+    this.netBusy(1);
     this.status('Reading traffic counts from NYSDOT\u2026');
     let feats, cut;
     try{
@@ -4587,6 +4637,8 @@ class TrailApp {
       this.aadtSig='';
       this.status('No answer from the NYSDOT traffic service. The rest of the map is unaffected.');
       return;
+    }finally{
+      this.netBusy(-1);
     }
     if(my!==this.aadtReq) return;
     const n=this.drawAadt(feats);
@@ -4740,11 +4792,17 @@ class TrailApp {
     const k=this.cyNote.kind;
     document.querySelectorAll('[data-cyst]').forEach(el=>{
       const key=el.dataset.cyst, on=this.map&&this.lyrByKey[key]&&this.map.hasLayer(this.lyrByKey[key]);
+      /* Each row against its own floor, not one shared verdict. The two rows draw from
+         different zooms now, so at eleven the paths are on screen and reporting a count
+         while the lanes are still short of theirs \u2014 one "zoom in" across both would be
+         wrong on one of them either way round. */
+      const floor=key==='cylane' ? OSMCY_LANE_MINZ : OSMCY_MINZ;
+      const short=!!this.map && this.map.getZoom()<floor;
       // Off means silent. A row nobody has switched on has nothing to report, and a stale
       // count under an unticked box claims lines that are not on the map.
       let txt='', act=false;
       if(on){
-        if(k==='zoom'){ txt='zoom in'; act=true; }
+        if(short || k==='zoom'){ txt='zoom in'; act=true; }
         else if(k==='loading') txt='reading\u2026';
         else if(k==='busy') txt='service busy';
         else if(k==='error') txt='no answer';
@@ -4756,12 +4814,20 @@ class TrailApp {
       // The zoom chip is the only one you can press, and it says what it will do: below
       // the cutoff the honest instruction is not "wait" but "come closer", and the chip
       // that carries the message is the shortest route to acting on it.
-      el.title=act?('Zoom the map in to '+OSMCY_MINZ+', where these draw'):'';
+      el.title=act?('Zoom the map in to '+floor+', where these draw'):'';
     });
   }
-  /* One fetch feeds both switches. They are separate rows because they are separate
-     decisions, but they come out of one Overpass query \u2014 asking twice for two halves of
-     the same box would double the load on a shared service to save nothing. */
+  /* What this view should actually ask for: the rows that are switched on, each gated by
+     the zoom it is worth drawing at. Asking for the half you are not showing is what the
+     old code did \u2014 one query always fetched both \u2014 and on the common setting (one row on)
+     that was paying the expensive clause for nothing. */
+  cyWant(){
+    const m=this.map; if(!m) return {path:false, lane:false, any:false, key:''};
+    const z=m.getZoom();
+    const path=!!(this.cyPathLayer && m.hasLayer(this.cyPathLayer)) && z>=OSMCY_MINZ;
+    const lane=!!(this.cyLaneLayer && m.hasLayer(this.cyLaneLayer)) && z>=OSMCY_LANE_MINZ;
+    return {path, lane, any:path||lane, key:(path?'p':'')+(lane?'l':'')};
+  }
   queueCycle(){
     if(!this.cyOn()) return;
     clearTimeout(this._cyTimer);
@@ -4770,71 +4836,100 @@ class TrailApp {
   async loadCycle(){
     const m=this.map;
     if(!m||!this.cyOn()) return;
-    const z=m.getZoom();
-    if(z<OSMCY_MINZ){
+    const z=m.getZoom(), want=this.cyWant();
+    if(!want.any){
       if(this.cyPathLayer) this.cyPathLayer.clearLayers();
       if(this.cyLaneLayer) this.cyLaneLayer.clearLayers();
-      this.cySig='';
-      this.cySay('zoom','Cycle ways draw from zoom '+OSMCY_MINZ+' in \u2014 further out it is more query than any shared service should be asked for.');
+      this.cyBox=null; this.cyKey='';
+      // Whichever floor the rider is actually short of: with only Bike lanes ticked that
+      // is twelve, and telling them ten would be telling them to do something that does
+      // not work. syncCyChips does the same sum per row for the chip.
+      const floor=(this.cyLaneLayer && m.hasLayer(this.cyLaneLayer) && !(this.cyPathLayer && m.hasLayer(this.cyPathLayer)))
+        ? OSMCY_LANE_MINZ : OSMCY_MINZ;
+      this.cySay('zoom','Cycle ways draw from zoom '+floor+' in \u2014 further out it is more query than any shared service should be asked for.');
       return;
     }
-    const b=m.getBounds();
-    const sig=z+':'+[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(v=>v.toFixed(4)).join(',');
-    if(sig===this.cySig) return;
-    this.cySig=sig;
+    /* Already answered. The box we hold covers what is on screen and we asked it for the
+       same halves, so there is nothing a second round trip could add. This is what makes
+       panning across a county free rather than a query a frame. */
+    const view=m.getBounds();
+    if(this.cyBox && this.cyKey===want.key && this.cyBox.contains(view)) return;
+    const b=view.pad(OSMCY_PAD);
     const my=++this.cyReq;
     const box=[b.getSouth(),b.getWest(),b.getNorth(),b.getEast()].map(v=>v.toFixed(5)).join(',');
     /* out geom, so each way carries its own coordinates and there is no second pass to
        resolve node ids. qt orders by tile, which is what lets the cap cut a coherent
-       patch rather than a scatter. */
-    const q='[out:json][timeout:25];('
-      +'way["highway"="cycleway"]('+box+');'
-      +'way["bicycle"="designated"]["highway"~"^(path|footway|track|bridleway)$"]('+box+');'
-      +'way["cycleway"~"lane|track|share_busway|shared_lane"]('+box+');'
-      +'way["cycleway:both"~"lane|track"]('+box+');'
-      +'way["cycleway:left"~"lane|track"]('+box+');'
-      +'way["cycleway:right"~"lane|track"]('+box+');'
-      +');out geom qt '+OSMCY_CAP+';';
-    this.cySay('loading','Reading cycle ways from OpenStreetMap\u2026');
+       patch rather than a scatter.
+       The four cycleway:both/left/right clauses this used to carry are one clause now: a
+       key regex asks the same question in a single pass instead of walking the box four
+       times over. Same ways come back, and left/right pick up share_busway and
+       shared_lane on the way, which they should have had all along. */
+    const cl=[];
+    if(want.path) cl.push('way["highway"="cycleway"]('+box+');',
+      'way["bicycle"="designated"]["highway"~"^(path|footway|track|bridleway)$"]('+box+');');
+    if(want.lane) cl.push('way[~"^cycleway(:both|:left|:right)?$"~"lane|track|share_busway|shared_lane"]('+box+');');
+    const q='[out:json][timeout:25];('+cl.join('')+');out geom qt '+OSMCY_CAP+';';
+    this.netBusy(1);
+    this.cySay('loading','Reading cycle ways from OpenStreetMap…');
     let els=null, err=null;
-    for(let i=0;i<OSMCY_URLS.length && !els;i++){
-      try{
-        const r=await fetch(OSMCY_URLS[i],{method:'POST',body:'data='+encodeURIComponent(q),
-          headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-        // 429 and 504 are what a shared service says when it is busy, and they deserve their
-        // own sentence: "no answer" reads as broken, and this is "try again in a moment".
-        if(r.status===429||r.status===504) throw new Error('busy');
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        els=((await r.json())||{}).elements||[];
-      }catch(e){ err=e; }
-      // A pan that landed while the first address was thinking has already asked again;
-      // the mirror should not be woken to answer a question nobody is waiting on.
-      if(my!==this.cyReq) return;
+    try{
+      for(let i=0;i<OSMCY_URLS.length && !els;i++){
+        try{
+          const r=await fetch(OSMCY_URLS[i],{method:'POST',body:'data='+encodeURIComponent(q),
+            headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+          // 429 and 504 are what a shared service says when it is busy, and they deserve their
+          // own sentence: "no answer" reads as broken, and this is "try again in a moment".
+          if(r.status===429||r.status===504) throw new Error('busy');
+          if(!r.ok) throw new Error('HTTP '+r.status);
+          els=((await r.json())||{}).elements||[];
+        }catch(e){ err=e; }
+        // A pan that landed while the first address was thinking has already asked again;
+        // the mirror should not be woken to answer a question nobody is waiting on.
+        if(my!==this.cyReq) return;
+      }
+    }finally{
+      this.netBusy(-1);
     }
     if(!els){
-      this.cySig='';
+      this.cyBox=null; this.cyKey='';
       const busy=err && err.message==='busy';
       /* The reason is worth printing even though the chip has no room for it: "busy" and
          "HTTP 400" want different things from the reader, and the whole point of the More
          screen's line is that it is where you go when the short answer is not enough. */
       const why=err && err.message && err.message!=='busy' ? ' ('+err.message+')' : '';
       this.cySay(busy?'busy':'error', busy
-        ? 'The OpenStreetMap query service is busy on both addresses right now. Pan or zoom to ask it again \u2014 the rest of the map is unaffected.'
+        ? 'The OpenStreetMap query service is busy on both addresses right now. Pan or zoom to ask it again — the rest of the map is unaffected.'
         : 'No answer from the OpenStreetMap query service'+why+'. The rest of the map is unaffected.');
       return;
     }
     if(my!==this.cyReq) return;
     const n=this.drawCycle(els);
+    /* The cap cuts the box we asked for, not the one on screen, so holding onto it as
+       "covered" would leave a hole nothing refetches. Take the hit and re-ask on the next
+       pan instead — being told to zoom in is recoverable, a silently missing trail is not. */
+    if(n.total>=OSMCY_CAP){ this.cyBox=null; this.cyKey=''; }
+    else { this.cyBox=b; this.cyKey=want.key; }
     this.cyNote.path=n.path; this.cyNote.lane=n.lane;
     this.cySay('ok', n.total>=OSMCY_CAP
       ? 'Cycle ways: '+OSMCY_CAP.toLocaleString()+' in view, which is the cap \u2014 zoom in for the rest.'
-      : n.path+' traffic-free \u00b7 '+n.lane+' on-road, in view.');
+      : n.path+' traffic-free \u00b7 '+n.lane+' on-road'
+        +(want.lane?'':', from zoom '+OSMCY_LANE_MINZ)+', in view.');
+  }
+  /* One canvas per row, kept. Three thousand ways is six thousand strokes once each is
+     cased, and six thousand SVG <path> elements is a DOM the phone re-lays-out on every
+     pan — the other half of why this layer felt slow. Canvas draws them in one pass and
+     still hit-tests a tap, which is all these lines need to be able to do. */
+  cyRenderer(kind){
+    const k='_cyR'+kind;
+    if(!this[k]) this[k]=L.canvas({pane:this.lyrPane(kind==='path'?'cypath':'cylane'), padding:.3});
+    return this[k];
   }
   drawCycle(els){
     const gp=this.cyPathLayer, gl=this.cyLaneLayer;
     if(gp) gp.clearLayers();
     if(gl) gl.clearLayers();
     let path=0, lane=0;
+    const rows=[];
     els.forEach(el=>{
       const geom=el.geometry;
       if(!geom || geom.length<2) return;
@@ -4843,17 +4938,106 @@ class TrailApp {
       if(!g) return;
       const surf=this.cySurface(t);
       const ll=geom.map(p=>[p.lat,p.lon]);
-      const col=kind==='path'?CY_PATH:CY_LANE;
-      const ln=L.polyline(ll,{pane:this.lyrPane(kind==='path'?'cypath':'cylane'),
-        color:col, weight:kind==='path'?4:3, opacity:.9, lineCap:'round', lineJoin:'round',
-        dashArray: surf==='unpaved' ? CY_DASH : null});
-      ln.bindPopup('',{maxWidth:260,autoPan:false});
-      ln.on('popupopen',()=>ln.setPopupContent(this.cyPopup(t,kind,surf)));
-      ln.addTo(g);
+      const col=kind==='path'?CY_PATH:CY_LANE, w=CY_W[kind];
+      const opt={pane:this.lyrPane(kind==='path'?'cypath':'cylane'), renderer:this.cyRenderer(kind),
+        lineCap:'round', lineJoin:'round'};
+      /* Casing first so every line in the row sits under every core in the row — cased
+         per-line, the next way along would draw its white halo across the one before it
+         wherever two paths meet. Same reason the route lays both its casings before
+         either of its cores. Non-interactive, so it never eats a tap meant for the line. */
+      L.polyline(ll,Object.assign({color:'#fff', weight:w+CY_CASE, opacity:.9, interactive:false},opt)).addTo(g);
+      rows.push({ll, t, kind, surf, col, w, opt, g});
       if(kind==='path') path++; else lane++;
     });
+    rows.forEach(r=>{
+      const ln=L.polyline(r.ll,Object.assign({color:r.col, weight:r.w, opacity:1,
+        dashArray: r.surf==='unpaved' ? CY_DASH : null},r.opt));
+      // The tags ride on the line, and one delegated handler per row reads them — see
+      // wireCycleTaps. Three thousand bound popups was three thousand objects to build
+      // before the first one could be opened.
+      ln._cyT=r.t; ln._cyK=r.kind; ln._cyS=r.surf;
+      ln.addTo(r.g);
+    });
+    this.cyRows=rows;          // held so the names can be switched without re-asking
+    this.labelCycle(rows);
     this.applyLyrOrder();
     return {path, lane, total:path+lane};
+  }
+  /* One tap handler per row rather than a popup per way. Bound once, when the groups are
+     made; Leaflet propagates a child's click to its group with the child on the event. */
+  wireCycleTaps(){
+    [this.cyPathLayer, this.cyLaneLayer].forEach(g=>{
+      if(!g) return;
+      g.on('click',e=>{
+        const ln=e.propagatedFrom||e.layer;
+        if(!ln || !ln._cyT || !this.map) return;
+        L.popup({maxWidth:260, autoPan:false})
+          .setLatLng(e.latlng).setContent(this.cyPopup(ln._cyT, ln._cyK, ln._cyS)).openOn(this.map);
+      });
+    });
+  }
+  /* Names on the ways, which is the difference between "there is a path here" and "this
+     is the Erie Canalway". Built the way the traffic counts are: longest way first, so
+     when two names compete for the same patch of screen the trunk trail keeps its label
+     and a fifty-metre link road loses it; one label per name per view, because a trail
+     chopped into thirty OSM ways would otherwise write itself across the map thirty
+     times; and dropped outright where it would land on a label already placed. */
+  labelCycle(rows){
+    const m=this.map;
+    if(!m) return;
+    ['path','lane'].forEach(kind=>{
+      const g=kind==='path'?this.cyPathLayer:this.cyLaneLayer;
+      if(!g) return;
+      const k='cyLb'+kind;
+      if(!this[k]) this[k]=L.layerGroup();
+      if(!g.hasLayer(this[k])) g.addLayer(this[k]);
+      this[k].clearLayers();
+    });
+    if(!this.cyLb || !rows) return;
+    const placed=[], seen={};
+    // Longest first. Way length in points is a good enough stand-in for length on the
+    // ground here — these are all drawn from the same OSM geometry at the same detail.
+    rows.filter(r=>String(r.t.name||'').trim())
+        .slice().sort((a,b)=>b.ll.length-a.ll.length)
+        .forEach(r=>{
+      const nm=String(r.t.name).trim();
+      if(seen[nm]) return;
+      const mid=r.ll[Math.floor(r.ll.length/2)];
+      const pt=m.latLngToContainerPoint(mid);
+      const txt=nm.length>30 ? nm.slice(0,29)+'…' : nm;
+      /* Per-character estimate for this weight and size, run generous — the span is
+         ellipsised at the width of the box it is given, so an underestimate doesn't
+         crowd the map, it silently eats the end of the name. Mirrors .cy-n in the
+         stylesheet: change one, change the other. */
+      const w=txt.length*6.7+16, h=15;
+      const box={l:pt.x-w/2, t:pt.y-h/2, r:pt.x+w/2, b:pt.y+h/2};
+      if(placed.some(q=>!(box.r<q.l||box.l>q.r||box.b<q.t||box.t>q.b))) return;
+      placed.push(box); seen[nm]=1;
+      const ink=r.kind==='path'?CY_PATH_INK:CY_LANE_INK;
+      this['cyLb'+r.kind].addLayer(L.marker(mid,{pane:this.lyrLbPane(r.kind==='path'?'cypath':'cylane'),
+        interactive:false, keyboard:false,
+        icon:L.divIcon({className:'cy-ic', iconSize:[w,h], iconAnchor:[w/2,h/2],
+          html:'<span class="cy-n" style="color:'+ink+';border-color:'+r.col+'">'+esc(txt)+'</span>'})}));
+    });
+  }
+  /* Names on and off without touching the lines under them, the way the traffic counts
+     do it — except these have to come off the last draw's rows, which are held for
+     exactly this. Both rows share the flag and each carries a chip for it. */
+  setCyLabels(on){
+    this.cyLb=!!on;
+    this.savePrefs();
+    this.labelCycle(this.cyRows);
+    this.syncCyLb();
+  }
+  syncCyLb(){
+    const box=this.layersCtl && this.layersCtl._container;
+    if(!box) return;
+    [].slice.call(box.querySelectorAll('[data-cylb]')).forEach(b=>{
+      b.setAttribute('aria-pressed', this.cyLb?'true':'false');
+      b.classList.toggle('off', !this.cyLb);
+      b.title=this.cyLb ? 'Hide the path names' : 'Show the path names';
+      b.setAttribute('aria-label','Names on the map');
+    });
   }
   cyPopup(t,kind,surf){
     const nm=String(t.name||t.ref||'').trim()
@@ -6572,13 +6756,17 @@ class TrailApp {
       if(!t || !t.closest) return;
       const b=t.closest('[data-aadtlb]');
       if(b){ L.DomEvent.stop(ev); this.setAadtLabels(!this.aadtLb); return; }
+      const cn=t.closest('[data-cylb]');
+      if(cn){ L.DomEvent.stop(ev); this.setCyLabels(!this.cyLb); return; }
       /* "zoom in" is a chip you can press, because being told the cutoff and then having
          to go and find it yourself is two steps where the message could have been one.
-         Centre is kept; only the zoom moves. */
+         Centre is kept; only the zoom moves. Each row names its own floor, so the chip
+         on Bike lanes goes to twelve while the one on Cycle paths goes to ten. */
       const cy=t.closest('[data-cyst]');
       if(cy && !cy.disabled){
         L.DomEvent.stop(ev);
-        if(this.map && this.map.getZoom()<OSMCY_MINZ) this.map.setZoom(OSMCY_MINZ);
+        const to=cy.dataset.cyst==='cylane' ? OSMCY_LANE_MINZ : OSMCY_MINZ;
+        if(this.map && this.map.getZoom()<to) this.map.setZoom(to);
         return;
       }
       const x=t.closest('[data-ulx]');
@@ -6695,7 +6883,7 @@ class TrailApp {
        closed far more often than it would be worth adding and removing a listener for. */
     map.on('mousemove',e=>this.elevFromMap(e.latlng));
     map.on('mouseout',()=>{ if(this.elevOn && !this._elevDrag) this.setElevCursor(null); });
-    map.on('zoomend',()=>this.syncPoiLabels());
+    map.on('zoomend',()=>{ this.syncPoiLabels(); this.syncCyChips(); });
     map.on('baselayerchange',e=>this.svBaseChanged(e.layer));
     this.syncPoiLabels();
     /* The other half of the coupling: a facility layer switched from Leaflet's own
@@ -6739,23 +6927,30 @@ class TrailApp {
        Registered before the trail line so they draw underneath it — these are what the
        route is choosing between, not the route itself, and a 4px green path over the top
        of the 5px cyan line would read as a diversion off it. */
+    /* Each row carries the same Names chip driving the same switch, the way the traffic
+       row carries its AADT one. Two chips for one flag is deliberate: a rider who wants
+       the names off is looking at whichever row is putting them on screen, and making
+       them go and find the other row to turn them off would be a worse answer than the
+       chips agreeing with each other. */
+    const cyLbChip=' <button type="button" class="lyr-ct lyr-tog" data-cylb="1" aria-pressed="true">Names</button>';
     this.cyPathLayer=L.layerGroup();
     this.regLayer('cypath', this.cyPathLayer,
       this.lyrSrc('Cycle paths', OSMCY_SRC, 'Traffic-free: cycleways, and paths signed for bikes. From OpenStreetMap via Overpass — opens the tagging guide')
-      +' <span class="lyr-ct lyr-key" style="background:'+CY_PATH+'">traffic-free</span>'
-      +' <button type="button" class="lyr-ct lyr-cyst" data-cyst="cypath" hidden></button>');
+      +' <span class="lyr-ct lyr-key" style="background:'+CY_PATH+';color:#08301c">traffic-free</span>'
+      +' <button type="button" class="lyr-ct lyr-cyst" data-cyst="cypath" hidden></button>'+cyLbChip);
     this.cyLaneLayer=L.layerGroup();
     this.regLayer('cylane', this.cyLaneLayer,
-      this.lyrSrc('Bike lanes', OSMCY_SRC, 'On-road: roads carrying a painted lane or track. From OpenStreetMap via Overpass — opens the tagging guide')
-      +' <span class="lyr-ct lyr-key" style="background:'+CY_LANE+'">on-road</span>'
-      +' <button type="button" class="lyr-ct lyr-cyst" data-cyst="cylane" hidden></button>');
+      this.lyrSrc('Bike lanes', OSMCY_SRC, 'On-road: roads carrying a painted lane or track. From OpenStreetMap via Overpass \u2014 opens the tagging guide')
+      +' <span class="lyr-ct lyr-key" style="background:'+CY_LANE+';color:#3d1a00">on-road</span>'
+      +' <button type="button" class="lyr-ct lyr-cyst" data-cyst="cylane" hidden></button>'+cyLbChip);
+    this.wireCycleTaps();
+    this.syncCyLb();
     /* Either switch turns the one fetch on; only the last one off stands it down.
        Deliberately NOT clearing the row you just switched off, and deliberately not
-       resetting the signature when you switch one on. One query fills both groups, and a
-       group that is off the map still holds its lines — so switching the second row on is
-       free, and it used to cost a second identical query to a shared public service purely
-       because the handler reset the signature before asking. loadCycle's own guard is the
-       right judge of whether anything needs fetching; the handler's job is only to ask.
+       resetting the cache when you switch one on. loadCycle's own guard is the right judge
+       of whether anything needs fetching, and it now knows which halves the held answer
+       was asked for — so switching the second row on refetches (that half was never in
+       the answer) while switching one off and straight back on does not.
        The full stand-down, when neither is left on, is what makes switching them both off
        and on again refetch rather than redraw a view you have since panned away from. */
     map.on('overlayadd', e=>{
@@ -6771,7 +6966,7 @@ class TrailApp {
     map.on('overlayremove', e=>{
       if(e.layer!==this.cyPathLayer && e.layer!==this.cyLaneLayer) return;
       if(this.cyOn()){ this.syncCyChips(); return; }
-      clearTimeout(this._cyTimer); this.cySig='';
+      clearTimeout(this._cyTimer); this.cyBox=null; this.cyKey=''; this.cyRows=null;
       // The full stand-down takes the message with it: "service busy" left standing on a
       // row that is switched off is a complaint about a query nobody is asking for.
       this.cyNote.kind='';
