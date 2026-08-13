@@ -426,6 +426,39 @@ def nearest_on_route(lat, lon, route, grid):
     return best_d, best_mi
 
 
+# How close two counters have to be to count as the same site. 0.12 mi is about 200 m
+# — wide enough to join a rideshare desk logged at the kerb with the branch it lives
+# inside (Colonie Center's A23 and UBA23 are 0.11 mi apart on paper), and tight enough
+# that two genuinely separate Midtown counters a few blocks apart stay separate.
+SAME_SITE_MI = 0.12
+
+
+def tag_colocated(recs):
+    """Record which other counters share each one's site, as ["avis:H6M", ...].
+
+    Avis and Budget are one company and they staff the same desk constantly, so the
+    same kerb turns up as two or three records. That is not a duplicate to collapse —
+    they price and stock separately, and a rider wants both — but it IS the fact that
+    makes the rest of a pin readable.
+
+    It matters most for the rideshare desks. Avis publishes "UBH6M — Closed to Public,
+    Uber Drivers Only" at 1477 Main St, Buffalo, which reads as a place not to go; the
+    same address is also plain Avis H6M and Budget BU2, open to anyone. The restriction
+    is on that booking code, not on the building, so a pin that says "don't come here"
+    is wrong about the only thing a rider would act on. Knowing what else is on the spot
+    is what turns the warning back into a fact.
+    """
+    for r in recs:
+        near = []
+        for o in recs:
+            if o is r:
+                continue
+            if miles_between(r["y"], r["x"], o["y"], o["x"]) <= SAME_SITE_MI:
+                near.append(o["b"] + ":" + (o.get("c") or "?"))
+        if near:
+            r["k"] = sorted(near)
+
+
 _lock = threading.Lock()
 
 
@@ -494,6 +527,7 @@ def main():
         r["m"] = round(mi, 2) if mi is not None else None
         r["o"] = round(off, 2)
 
+    tag_colocated(uniq)
     uniq.sort(key=lambda r: (r["o"], r["b"]))
     out = [{k: v for k, v in r.items() if v not in ("", None)} for r in uniq]
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
