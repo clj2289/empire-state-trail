@@ -763,6 +763,28 @@ function ratesLink(q, date){
   if(date && out) p.push('checkin='+date,'checkout='+out);
   return 'https://www.booking.com/searchresults.html?'+p.join('&');
 }
+/* Where a rental on this trip is actually booked: the State of Florida's Avis Budget
+   Group portal. It is the contract, so it opens carrying the AWD and BCD the rate hangs
+   off (#X00000 and #L775600, set on the page itself) — avis.com's retail page does not,
+   and a link there is a link to the wrong price. That is why the brand's own page is not
+   offered from a rental pin at all.
+
+   It reads pickuploc and dropoffloc off the query string and writes them straight into
+   its FROM and RETURN TO fields, which is what makes a one-way expressible as a link.
+   Dates it does not read — those are still picked on the page — so this gets you a form
+   with both ends filled in, not a finished search.
+
+   The value is the station code, because that is the string that names one counter
+   without ambiguity, and for the airport counters it is the airport code the field
+   already expects (BUF, ALB, JFK). For a city counter (H6M, AVNY1) it is an internal
+   code, so the field may need a nudge to resolve it — it is prefilled text in a box a
+   human is about to look at, not a machine handshake. */
+const ABG_URL='https://www.carrental.com/abgPartners/sof/';
+function abgLink(from, to){
+  const q=['pickuploc='+encodeURIComponent(from||'')];
+  if(to) q.push('dropoffloc='+encodeURIComponent(to));
+  return ABG_URL+'?'+q.join('&');
+}
 /* The town popups' "find nearby" chips, but anchored to a coordinate instead of a
    town name — so a bare tap on the map gets them too, where there is no name to
    hand the query. Tighter than a name search even where there is one. */
@@ -1230,6 +1252,9 @@ class TrailApp {
     this.wxRideStart=8; this.wxRideEnd=17; this.wxZeroDay=-1; this.wxStartShift=0;
     this.wxData=null; this.wxGrids=null; this.wxCur=null; this.wxGridCache={};
     this.poiMarker={};
+    // Station code of the counter a one-way booking starts from, while one is being
+    // built across two popups. Session-only — see setRentFrom.
+    this.rentFrom=null;
     // Planning mode: no usable trail position, so distances run from the start of the
     // trip. offTrail records how far a real fix was, for the note that explains it.
     this.planning=false; this.offTrail=0;
@@ -2388,6 +2413,11 @@ class TrailApp {
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
     document.addEventListener('click',e=>{ const r=e.target.closest('.srch-rm'); if(r){ this.removeSearch(r.dataset.sk); if(this.map) this.map.closePopup(); } });
     document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
+    // The one-way pick-up, set on one rental popup and spent on another. See setRentFrom.
+    document.addEventListener('click',e=>{
+      const f=e.target.closest('.rent-from'); if(f){ this.setRentFrom(f.dataset.rc); return; }
+      if(e.target.closest('.rent-clr')) this.setRentFrom(null);
+    });
     document.addEventListener('click',e=>{
     });
     document.addEventListener('click',e=>{
@@ -3328,6 +3358,22 @@ class TrailApp {
   clearPick(){ if(this.pick&&this.map){ this.map.removeLayer(this.pick); this.pick=null; } }
   // Zoom is the second question, so it's a button rather than something a tap on a
   // row does for you — moving the map at your zoom is what "show me where" means.
+  /* The pick-up half of a one-way booking, parked between two popups.
+
+     Deliberately not saved to prefs: this is something you are in the middle of doing,
+     not something you prefer, and a stale pick-up from three weeks ago silently turning
+     every "Book" chip into a one-way from Buffalo is the bug that writes itself.
+
+     Closing the popup is the point rather than a side effect — the next thing you do is
+     open a different pin, and leaving this one covering the map makes you dismiss it
+     first. The status line carries the instruction out of the popup that is going away. */
+  setRentFrom(code){
+    this.rentFrom = code || null;
+    if(this.map) this.map.closePopup();
+    this.status(code
+      ? 'Pick-up set to '+code+'. Open another rental pin to book a one-way to it.'
+      : 'One-way pick-up cleared.');
+  }
   zoomHere(el){
     const m=this.map; if(!m) return;
     const lat=+el.dataset.zlat, lng=+el.dataset.zlng;
@@ -7177,10 +7223,32 @@ class TrailApp {
        has to aim at. */
     const lk=[this.measureBtnHtml(p.lat,p.lng),
       '<button type="button" class="pa pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
-    // A rental record's URL is the brand's own page for this exact counter, which is
-    // where you book it — "Website" undersells that into something you'd skip past.
-    const wlbl = p.src==='rental' ? 'Book on '+(p.brand==='avis'?'Avis':'Budget') : 'Website';
-    const purl=safeUrl(p.url); if(purl) lk.push('<a class="pa" href="'+purl+'" target="_blank" rel="noopener">'+wlbl+'</a>');
+    /* No link to the brand's own page from a rental pin: it books at the retail rate,
+       and every rental on this trip goes through the contract portal instead. See
+       ABG_URL. Everything else keeps its plain website link. */
+    if(p.src!=='rental'){
+      const purl=safeUrl(p.url);
+      if(purl) lk.push('<a class="pa" href="'+purl+'" target="_blank" rel="noopener">Website</a>');
+    } else if(p.code){
+      /* Booking, in the two shapes it comes in. Round trip is one link. A one-way needs
+         two counters named, and a map shows one popup at a time — so the pick-up is
+         parked on the app and collected when you open the pin you mean to drop at. The
+         chip says which of the three states you are in rather than making you remember:
+         nothing chosen, this pin is the pick-up, or this pin is the drop-off and the
+         link is ready. */
+      lk.push('<a class="pa" href="'+abgLink(p.code,'')+'" target="_blank" rel="noopener">'
+        +'Book '+esc(p.code)+'</a>');
+      const from=this.rentFrom;
+      if(!from) lk.push('<button type="button" class="pa rent-from" data-rc="'+esc(p.code)+'">'
+        +'One-way from here</button>');
+      else if(from===p.code) lk.push('<button type="button" class="pa rent-clr">'
+        +'Pick-up set — clear</button>');
+      else{
+        lk.push('<a class="pa rent-go" href="'+abgLink(from,p.code)+'" target="_blank" rel="noopener">'
+          +'Book '+esc(from)+' → '+esc(p.code)+'</a>');
+        lk.push('<button type="button" class="pa rent-clr">Clear</button>');
+      }
+    }
     // Searched by name, so it lands on the business rather than a bare pin.
     const gq=[p.name,p.addr].filter(Boolean).join(' ') || (p.lat.toFixed(6)+','+p.lng.toFixed(6));
     lk.push('<a class="pa" href="'+searchAt(gq,p.lat,p.lng)+'" target="_blank" rel="noopener">Google Maps</a>');
