@@ -178,6 +178,14 @@ function svMonth(s){
   if(!m) return String(s||'');
   return SV_MONTHS[+m[2]-1]+' '+m[1];
 }
+/* "2026-10-10" → "10 Oct 2026". Read as text, never through Date: a bare ISO date is
+   parsed as UTC midnight, which prints as the day before anywhere west of Greenwich —
+   including all of this trail. Anything that isn't a plain y-m-d comes back untouched. */
+function ymdTxt(s){
+  const m=String(s||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m || +m[2]<1 || +m[2]>12) return String(s||'');
+  return (+m[3])+' '+SV_MONTHS[+m[2]-1]+' '+m[1];
+}
 /* Road-snapping for the measure tool. FOSSGIS's public OSRM (bike profile) both snaps a
    dropped point to the nearest way (/nearest) and traces the roads between two points
    (/route), so a traced leg reads real pedalled miles rather than straight-line. A point
@@ -405,6 +413,9 @@ const P = {
   chevL:'M15 6l-6 6 6 6',
   layers:'M12 2 22 7 12 12 2 7Z|M2 12l10 5 10-5|M2 17l10 5 10-5',
   bike:'c5.5 17.5 3.2|c18.5 17.5 3.2|M5.5 17.5l4-8.5h6.5l-3 8.5|M9.5 9l3.5 8.5|M13.5 9h3',
+  // Side-on, because that is the shape a car is: roofline, beltline, two wheels. A
+  // three-quarter view needs detail this size cannot hold.
+  car:'M3 16.4v-3.1l2.2-4.8A2.4 2.4 0 0 1 7.4 7h9.2a2.4 2.4 0 0 1 2.2 1.5l2.2 4.8v3.1|M3 13.3h18|c7.5 16.6 1.9|c16.5 16.6 1.9',
   med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z',
   ruler:'M4 15 15 4l5 5-11 11z|M7.5 11.5l1.7 1.7|M10.5 8.5l1.7 1.7|M13.5 5.5l1.7 1.7',
   /* The little man you drag onto the map, and the one icon here that is a silhouette
@@ -1097,27 +1108,50 @@ const CATCFG={
   'nb-fuel':{icon:'fuel',label:'Fuel / gas',grp:'bundled'},
   'nb-water':{icon:'drop',label:'Water / restrooms',grp:'bundled'},
   'nb-bike':{icon:'bike',label:'Bike shops',grp:'bundled'},
-  'nb-pharmacy':{icon:'med',label:'Pharmacies',grp:'bundled'}
+  'nb-pharmacy':{icon:'med',label:'Pharmacies',grp:'bundled'},
+  /* Avis and Budget counters, statewide — see tools/fetch_car_rentals.py. Split by
+     brand because they price and stock separately even where they share a desk, so
+     "is there an Avis" and "is there a Budget" are two questions a rider asks one at
+     a time. Off by default like everything else that isn't on the trail. */
+  'car-avis':{icon:'car',label:'Avis',grp:'rental'},
+  'car-budget':{icon:'car',label:'Budget',grp:'rental'}
 };
 const CAT_GRP={
   chris:{label:'Chris’s picks', src:'Chosen by hand', toc:'Chris POIs'},
   trail:{label:'On the trail', src:'New York State', toc:'Trail POIs'},
-  bundled:{label:'Within 5 mi', src:'OpenStreetMap', toc:'OSM POIs'}
+  bundled:{label:'Within 5 mi', src:'OpenStreetMap', toc:'OSM POIs'},
+  /* Statewide, and said so, because this is the one group that deliberately breaks the
+     corridor rule the other two keep — a counter ninety miles away is still the answer
+     when the ride has stopped working. */
+  rental:{label:'Car rental (statewide)', src:'Avis / Budget', toc:'Car rental'}
 };
 // Picks first: a short list someone chose deliberately is worth more than either feed,
-// and it is the one that would otherwise get lost under them.
-const GRP_ORDER=['chris','trail','bundled'];
+// and it is the one that would otherwise get lost under them. Rental last: it is the
+// group you go looking for on the day something has gone wrong, not one you browse.
+const GRP_ORDER=['chris','trail','bundled','rental'];
 // An asset type the service invented and we don't hardcode is trail data — that
 // is the only place unknown categories can come from.
 const catGrp=a=>(CATCFG[a]&&CATCFG[a].grp)||'trail';
 // Both of these are somewhere to sleep, so both get the chain wordmark treatment.
 const LODGE_CATS={'Lodging':1,'nb-lodging':1};
+/* The rental brands get the same wordmark chip, for the same reason the hotel chains
+   do — you are looking for a name you already know, and a car glyph shared by both
+   brands would make you tap every pin to find out which one it is. Unlike the hotels
+   the brand is not guessed from the name: it is what the record IS, so it is keyed on
+   the category instead of matched out of a string.
+
+   Red against blue rather than Budget's own orange-on-blue: these two sit side by side
+   at the same airport more often than not, and red/blue is the one pairing that still
+   separates under every common colour-vision deficiency. The wordmark carries the
+   answer anyway — the colour is only there to sort them at a glance. */
+const RENT_TAG={'car-avis':{tag:'AVIS',color:'#cc0000'},'car-budget':{tag:'BUDGET',color:'#14539a'}};
 const CAT_DEFAULT={'chris':true,'Lock camping':true,'Campground':true,'Lodging':true};
 /* Fallback order for the Nearby groups — a rider who hasn't dragged anything yet
    gets sleeping options first, sightseeing after, logistics last. Grouped in the
    same order the parents render in, so a fresh install reads top to bottom. */
 const CAT_ORDER=['chris','Lock camping','Campground','Lodging','Attraction','Train Station','Restroom','Parking Area',
-                 'nb-grocery','nb-convenience','nb-food','nb-lodging','nb-camp','nb-fuel','nb-water','nb-bike','nb-pharmacy'];
+                 'nb-grocery','nb-convenience','nb-food','nb-lodging','nb-camp','nb-fuel','nb-water','nb-bike','nb-pharmacy',
+                 'car-avis','car-budget'];
 const catCfg=a=>CATCFG[a]||{icon:'pin',label:a};
 function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.test(p.name||'')) ? 'Lock camping' : p.asset; }
 
@@ -3923,7 +3957,7 @@ class TrailApp {
     // The bundled OSM corridor draws as the small hollow pin, which is what tells it
     // from the State's solid facilities.
     const grp=catGrp(poiCat(p)), osm=grp==='bundled';
-    const br=LODGE_CATS[poiCat(p)]?brandOf(p.name):null;
+    const br=LODGE_CATS[poiCat(p)]?brandOf(p.name):(RENT_TAG[poiCat(p)]||null);
     // Every pin carries its name. Hidden by CSS until the map is zoomed in past
     // POI_LABEL_Z, or the pin is hovered — a field of identical dots you have to tap
     // one at a time to identify is the thing this is fixing.
@@ -7003,14 +7037,16 @@ class TrailApp {
     Promise.allSettled([
       this.fetchAllPOIs(),
       this.loadBundledPois(),
-      this.loadChrisPois()
-    ]).then(([poi,bundled,chris])=>{
+      this.loadChrisPois(),
+      this.loadRentalPois()
+    ]).then(([poi,bundled,chris,rental])=>{
       // State POIs are already in this.POIS from fetchAllPOIs; fold the bundled corridor
       // and the hand-picked list in behind them and reindex once, then build every
       // category's layer in one pass.
       const nb = bundled.status==='fulfilled' ? bundled.value : [];
       const cp = chris.status==='fulfilled' ? chris.value : [];
-      const add = nb.concat(cp);
+      const rc = rental.status==='fulfilled' ? rental.value : [];
+      const add = nb.concat(cp, rc);
       // _byCat is keyed on POIS.length, and this is the one place the array grows.
       if(add.length){ this.POIS.push(...add); this.POIS.forEach((p,i)=>{ p.i=i; }); this._byCat=null; }
       this.buildPOILayers();
@@ -7020,7 +7056,8 @@ class TrailApp {
         const pmsg = poi.status==='fulfilled' ? poi.value+' live facilities loaded' : 'live facilities offline (lists still work)';
         const nmsg = nb.length ? ' · '+nb.length+' bundled within 5 mi' : '';
         const cmsg = cp.length ? ' · '+cp.length+' of your own' : '';
-        stat.textContent = pmsg+nmsg+cmsg+'.';
+        const rmsg = rc.length ? ' · '+rc.length+' rental counters statewide' : '';
+        stat.textContent = pmsg+nmsg+cmsg+rmsg+'.';
       }
       this.renderNext(); this.renderCategories(); this.renderNearby();
     });
@@ -7078,6 +7115,23 @@ class TrailApp {
        turns out to be dead. See LOCK_POWER. */
     if(p.power) h+='<div class="poi-note poi-pwr"><b>Power</b> '+esc(p.power)
       +' <span class="poi-pwr-c">Rider report, not an official amenity — don’t count on it.</span></div>';
+    /* A rental counter's own facts, in the order they decide things. The two warnings
+       come first because either one makes the rest of the popup moot — there is no
+       point reading the hours of a desk that won't rent to you. The station code is
+       next: it is what you type or read down a phone to name this exact counter, and
+       neither brand's own site makes it easy to find once you have left the page. */
+    if(p.src==='rental'){
+      if(p.restricted) h+='<div class="poi-note poi-warn"><b>Not a public counter.</b> '
+        +'It rents only to the group in its name — don’t ride to this one.</div>';
+      if(p.closes) h+='<div class="poi-note poi-warn"><b>Closing '+esc(ymdTxt(p.closes))+'.</b> '
+        +'The brand has this desk dated to shut — worth a call before you count on it.</div>';
+      if(p.code) h+='<div class="rc-code"><span>Location code</span><b>'+esc(p.code)+'</b></div>';
+      if(p.hours) h+='<div class="rc-line"><b>Hours</b> '+esc(p.hours)+'</div>';
+      // Only Budget publishes this, and only the distinction is worth printing: a
+      // corporate desk keeps the hours above, an agency is a counter inside somebody
+      // else's business and keeps theirs.
+      if(p.loctype) h+='<div class="rc-line"><b>Type</b> '+esc(p.loctype)+'</div>';
+    }
     if(p.addr) h+='<br>'+esc(p.addr);
     if(p.phone) h+='<br><a href="tel:'+p.phone.replace(/[^0-9]/g,'')+'">'+esc(p.phone)+'</a>';
     /* Every action is a chip on its own wrapping row rather than a middot-separated
@@ -7085,7 +7139,10 @@ class TrailApp {
        has to aim at. */
     const lk=[this.measureBtnHtml(p.lat,p.lng),
       '<button type="button" class="pa pop-zoom" data-zlat="'+p.lat+'" data-zlng="'+p.lng+'">Zoom in</button>'];
-    const purl=safeUrl(p.url); if(purl) lk.push('<a class="pa" href="'+purl+'" target="_blank" rel="noopener">Website</a>');
+    // A rental record's URL is the brand's own page for this exact counter, which is
+    // where you book it — "Website" undersells that into something you'd skip past.
+    const wlbl = p.src==='rental' ? 'Book on '+(p.asset==='car-avis'?'Avis':'Budget') : 'Website';
+    const purl=safeUrl(p.url); if(purl) lk.push('<a class="pa" href="'+purl+'" target="_blank" rel="noopener">'+wlbl+'</a>');
     // Searched by name, so it lands on the business rather than a bare pin.
     const gq=[p.name,p.addr].filter(Boolean).join(' ') || (p.lat.toFixed(6)+','+p.lng.toFixed(6));
     lk.push('<a class="pa" href="'+searchAt(gq,p.lat,p.lng)+'" target="_blank" rel="noopener">Google Maps</a>');
@@ -7097,6 +7154,8 @@ class TrailApp {
       ? 'From OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
       : p.src==='chris'
       ? 'One of your own picks, kept in data/pois-chris.json.'
+      : p.src==='rental'
+      ? 'From the brand’s own location page, bundled at build time — hours and whether a one-way drop is allowed change without notice, so ring the counter before you ride to it.'
       : '';
     return h+'<div class="pa-row poi-lk">'+lk.join('')+'</div>'
       +(osmNote?'<div class="poi-src">'+osmNote+'</div>':'');
@@ -7167,6 +7226,60 @@ class TrailApp {
       const pr=projectRoute(lat,lng);
       out.push({asset:'chris', name:o.n||'(pick)', sub:'', addr:o.a||'', phone:o.p||'',
         url:o.u||'', note:o.d||'', src:'chris', lat, lng, mile:pr.mile, off:pr.off});
+    });
+    return out;
+  }
+  /* Every Avis and Budget counter in New York State, from data/rentals.json — pulled
+     once by tools/fetch_car_rentals.py off the brands' own location pages, so the
+     station code a booking actually needs (AVNY1, A8N) travels with the pin.
+
+     Statewide on purpose. Every other bundled source is cut to a 5-mile corridor
+     because it answers "what is near the route"; this one answers "the ride has
+     stopped and I need a car", and on that day the nearest counter may be a train
+     ride away. Mile and off-route distance are still precomputed for all of them, so
+     the Nearby list sorts them like anything else and the far ones simply sort last.
+
+     Two records are dropped rather than drawn. A counter whose closing date has been
+     and gone is not a place — the brands rename the page instead of retiring it, so
+     the file keeps the record and the map does not. And a pin the rider cannot use is
+     worse than no pin, so anything still dated in the future stays, with the date said
+     out loud in the popup. Restricted counters (Uber drivers, employees of one
+     company) DO stay: they exist, they are signposted from the street, and the point
+     of showing them is to stop a rider riding three miles to one. */
+  async loadRentalPois(){
+    let data;
+    try{
+      const r=await fetch('data/rentals.json',{cache:'force-cache'});
+      if(!r.ok) return [];
+      data=await r.json();
+    }catch(e){ return []; }
+    if(!Array.isArray(data)) return [];
+    // Compared as ISO strings, which is why the fetcher writes them that way and why
+    // an undated closure is stamped 0000-00-00: it loses this comparison every time.
+    const today=localISO(Date.now()).slice(0,10);
+    const out=[];
+    data.forEach(o=>{
+      const lat=+o.y, lng=+o.x, cat='car-'+o.b;
+      if(!isFinite(lat) || !isFinite(lng) || !CATCFG[cat]) return;
+      if(o.z && o.z<today) return;                    // shut before today — see above
+      /* A counter dated to shut has had its name replaced by the notice, so the pin
+         would read "CLOSING October 10, 2026" and say nothing about where it is. The
+         town off its own address is what's left to call it. */
+      let nm=o.n||CATCFG[cat].label;
+      if(o.z && /^clos(ed|ing)\b/i.test(nm)){
+        const town=poiCity({addr:o.a});
+        if(town) nm=town+' (closing)';
+      }
+      const p={asset:cat, name:nm, sub:'', addr:o.a||'', phone:o.p||'',
+        url:o.u||'', src:'rental', code:o.c||'', hours:o.h||'', loctype:o.t||'',
+        restricted:!!o.r, closes:o.z||'', lat, lng,
+        mile:isFinite(+o.m)?+o.m:null, off:isFinite(+o.o)?+o.o:999};
+      /* Seeded rather than left for searchHits to derive from the name, because the
+         name alone is not what anyone types. These are called "Lower Manhattan Warren
+         St" — the words "avis" and "AVNY1" appear nowhere in them, so searching either
+         of the two things a rider actually knows about this pin would miss it. */
+      p._qn=normQ(nm+' '+(cat==='car-avis'?'avis':'budget')+' '+(o.c||''));
+      out.push(p);
     });
     return out;
   }

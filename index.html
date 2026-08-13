@@ -1238,6 +1238,22 @@
   .poi-pwr b{color:var(--color-accent-2)}
   /* The caveat rides with the claim, never on its own line to be skipped. */
   .poi-pwr-c{color:var(--color-neutral-500)}
+  /* A note that changes the answer rather than colouring it — this counter won't rent
+     to you, or won't be there. Same rule as the power note, in the palette's alert
+     colour, because both are "read this before you act on the rest". */
+  .poi-warn{border-left-color:var(--color-accent-2)}
+  .poi-warn b{color:var(--color-accent-2-700)}
+  /* The station code, set apart from the prose around it: it is the one string on this
+     popup you retype somewhere else, so it gets a monospace box you can read a
+     character at a time down a phone line. */
+  .rc-code{display:flex;align-items:baseline;gap:8px;margin-top:10px}
+  .rc-code span{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--color-neutral-600)}
+  .rc-code b{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;
+    letter-spacing:.1em;color:var(--color-neutral-900);background:var(--color-neutral-200);
+    border-radius:5px;padding:2px 7px}
+  .rc-line{margin-top:5px;font-size:12.5px;line-height:1.5;color:var(--color-neutral-700)}
+  .rc-line b{color:var(--color-neutral-600);font-weight:600;margin-right:5px}
   .leaflet-control-attribution{background:color-mix(in srgb,var(--color-bg) 82%,transparent);font-size:10px;color:var(--color-neutral-600)}
   .pa-lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-600);margin:11px 0 6px}
   .pa-row{display:flex;flex-wrap:wrap;gap:6px}
