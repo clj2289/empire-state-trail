@@ -6785,6 +6785,21 @@ class TrailApp {
   }
   /* What changed about one day since the save, in the words the row uses for it. Empty
      string when nothing did — which is most days, most of the time, which is the point. */
+  /* The part of a day's change that the row cannot rule through: its hours, and whether it
+     is a riding day at all. The town and the mileage are struck out in place instead. */
+  planDayNote(d, was){
+    if(!was) return '';
+    const pd=this.planP()[d], wd=was.days[d], wb=was.bounds[d];
+    if(!pd || !wd || !wb) return wd||wb ? '' : 'new day';
+    if(!!wd.zero!==!!pd.zero) return wd.zero ? 'was a rest day' : 'was a riding day';
+    if(pd.zero) return abs(wb.start-this.planBounds()[d].start)<0.5 ? ''
+      : 'was a rest at '+this.placeNameAt(wb.start);
+    const bits=[];
+    if(Math.round(wd.start)!==Math.round(pd.start)) bits.push('was out at '+this.planClock(wd.start));
+    if((wd.end==null)!==(pd.end==null) || (wd.end!=null && pd.end!=null && Math.round(wd.end)!==Math.round(pd.end)))
+      bits.push(wd.end==null ? 'ended when it ended' : 'was in at '+this.planClock(wd.end));
+    return bits.join(' · ');
+  }
   planDayChange(d, was){
     if(!was) return '';
     const pd=this.planP()[d], b=this.planBounds()[d];
@@ -6959,9 +6974,13 @@ class TrailApp {
        diff — the old town struck through with the new one beside it, the old mileage the
        same — and the bar carries Apply and Cancel instead of the save controls. */
     const prev=this.planPreview ? this.planViewOf(this.planPreview.after) : null;
-    const del=(cur,nxt)=> (prev && nxt!=null && nxt!==cur)
-      ? '<s class="pl-del">'+esc(cur)+'</s><span class="pl-ins">'+esc(nxt)+'</span>'
-      : esc(cur);
+    /* One shape for both kinds of change: the value that is going away ruled through, the
+       one replacing it beside it. Teal for a proposal, amber for work you have not saved —
+       the same two colours the bar at the top uses, so a struck-through town and the bar
+       above it are obviously about the same thing. */
+    const diff=(oldV,newV,cls)=> (oldV!=null && newV!=null && oldV!==newV)
+      ? '<s class="pl-del">'+esc(oldV)+'</s><span class="'+cls+'">'+esc(newV)+'</span>'
+      : esc(newV==null ? oldV : newV);
     const pvN=prev ? this.planPreviewCount(prev) : 0;
     const pvD=prev ? prev.days.length-days.length : 0;
     const was=this.planWas(), dirty=this.planDirty();
@@ -7113,8 +7132,17 @@ class TrailApp {
          destination, already struck through on the row above — diffing both ends put four
          town names in a title with room for two, and the ellipsis ate the new one, which
          is the half you were reading it for. */
-      const titleHtml=!prev || pd.zero || spent || !nb || !nd || nd.zero ? esc(title)
-        : esc(this.placeNameAt(nb.start))+' → '+del(toN, this.planEndName(nb.end));
+      const wasB=was&&was.bounds[d], wasD=was&&was.days[d];
+      const plain=pd.zero || spent;
+      /* Three states for one line. A proposal rules through what this day says now and
+         puts what it would say beside it; unsaved work rules through what the SAVED plan
+         said and puts what it says now beside it; otherwise it is just the day. */
+      const titleHtml=
+        (prev && !plain && nb && nd && !nd.zero)
+          ? esc(this.placeNameAt(nb.start))+' → '+diff(toN, this.planEndName(nb.end), 'pl-ins')
+        : (!prev && !plain && wasB && wasD && !wasD.zero)
+          ? esc(fromN)+' → '+diff(this.planEndName(wasB.end), toN, 'pl-ins-w')
+        : esc(title);
       const summary=pd.zero ? 'Rest day'
         : done ? 'The trail ends at '+fromN
         : idle ? 'An earlier day already reaches '+fromN
@@ -7143,8 +7171,12 @@ class TrailApp {
             /* The distance, in the empty half of the title row. It was buried at the head
                of the summary line, which is the line that ellipsises first — and it is the
                number you scan the list for. */
-            +(pd.zero||spent ? '' : '<span class="pl-mi">'
-              +del(String(Math.round(b.miles)), nb&&nd&&!nd.zero ? String(Math.round(nb.miles)) : null)
+            +(plain ? '' : '<span class="pl-mi">'
+              +(prev
+                ? diff(String(Math.round(b.miles)),
+                    nb&&nd&&!nd.zero ? String(Math.round(nb.miles)) : null, 'pl-ins')
+                : diff(wasB&&wasD&&!wasD.zero ? String(Math.round(wasB.miles)) : null,
+                    String(Math.round(b.miles)), 'pl-ins-w'))
               +'<i>mi</i></span>')
             /* A two-state control, labelled by what pressing it does rather than by what
                the day currently is — "Riding" sitting there in a box read as a status
@@ -7158,7 +7190,10 @@ class TrailApp {
       /* What this row used to be, when it is no longer what was saved. On every day the
          change touched, not only the one that was edited — the whole point is to see what
          an edit dragged with it without having to open each day and remember. */
-      const chg=prev ? '' : this.planDayChange(d, was);
+      // The town and the mileage are ruled through in the row itself now; this line is
+      // left with the things that have nowhere to be struck through — hours, and a day
+      // that changed between riding and resting.
+      const chg=prev ? '' : this.planDayNote(d, was);
       if(chg) h.push('<div class="pl-chg"><span class="pl-chg-d"></span>'+esc(chg)+'</div>');
       if(gone) h.push('<div class="pl-chg pl-chg-x"><span class="pl-chg-d"></span>this day goes</div>');
       /* A day an earlier one rode past, with the two ways out of it right there. */
