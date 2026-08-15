@@ -479,6 +479,21 @@
   /* What a row used to be. One line, only on the days that differ from the saved plan. */
   .pl-chg{display:flex;align-items:center;gap:5px;margin:1px 0 0;font-size:10.5px;color:#8a5a00}
   .pl-chg-d{flex:none;width:5px;height:5px;border-radius:999px;background:#d09216}
+  /* A proposal, drawn on the rows themselves: the old town ruled through, the new one
+     beside it. Teal rather than amber, because amber on this screen means "not saved" and
+     a preview is not a change yet. */
+  .pl-prevbar{background:#e6f2f6;border-color:rgba(0,103,134,.45)}
+  .pl-prevbar .pl-uk{color:#00566f}
+  .pl-prevbar .pl-ut{color:#134b5c}
+  .pl-prevbar .pl-ub{color:#00566f;border-color:rgba(0,103,134,.45)}
+  .pl-prevbar .pl-ub:hover{background:rgba(0,103,134,.12)}
+  .pl-del{color:var(--pl-faint);text-decoration-thickness:1px}
+  .pl-ins{color:#00566f;margin-left:5px}
+  .pl-mi .pl-ins{margin-left:3px}
+  .pl-day-del{opacity:.55}
+  .pl-day-del .pl-t{text-decoration:line-through}
+  .pl-chg-x{color:#8a2f12}
+  .pl-chg-x .pl-chg-d{background:#b3261e}
   /* A day an earlier one rode past: the warning and its two ways out, on the row. */
   .pl-idle{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:5px 0 2px;
     font-size:11px;color:#8a2f12}
@@ -531,6 +546,9 @@
   .pl-tl{display:flex;align-items:baseline;gap:6px}
   .pl-tl svg{align-self:center;flex:none}
   .pl-t{font-size:17px;font-weight:600;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* A title carrying a diff is twice as long, and the half being ellipsised away is the
+     new town — the one thing the preview exists to show. Let it wrap while it is up. */
+  .pl-previewing .pl-t{white-space:normal;overflow:visible;text-overflow:clip}
   .pl-s{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--pl-mute);margin-top:2px;
     font-variant-numeric:tabular-nums}
   .pl-moon{flex:none}

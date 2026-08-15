@@ -1453,7 +1453,7 @@ class TrailApp {
     /* The undo stack — a snapshot of the whole plan before each edit, with a name for the
        edit — and the last saved copy, which is both what Discard goes back to and what
        every "was 55 mi" note on the screen is measured against. */
-    this.planHist=[]; this.planRedo=[]; this.planSavedSnap=null;
+    this.planHist=[]; this.planRedo=[]; this.planSavedSnap=null; this.planPreview=null;
     /* The mini map inside a lodging list: which day's is showing, and whether it has been
        pulled taller. One instance, moved between rows — see planMini(). */
     this.planMiniDay=null; this.planMiniBig=false; this._miniMap=null; this._miniWrap=null;
@@ -6683,6 +6683,7 @@ class TrailApp {
     this.planHist.push({snap:before, label:label||'that change'});
     if(this.planHist.length>40) this.planHist.shift();
     this.planRedo=[];   // a fresh edit is a new branch; there is nothing to go forward to
+    this.planPreview=null;
     this._planAuto=false;
     this.draftPlan();
     this.planChanged();
@@ -6717,7 +6718,7 @@ class TrailApp {
   // Back to the last saved plan, and both stacks with it — Discard is not another edit.
   revertPlan(){
     if(this.planSavedSnap==null || !this.planRestore(this.planSavedSnap)) return false;
-    this.planHist=[]; this.planRedo=[]; this.clearDraft(); this.planChanged(); return true;
+    this.planHist=[]; this.planRedo=[]; this.planPreview=null; this.clearDraft(); this.planChanged(); return true;
   }
   draftPlan(){ try{ localStorage.setItem(PLAN_DRAFT_KEY, this.planSnapshot()); }catch(e){} }
   clearDraft(){ try{ localStorage.removeItem(PLAN_DRAFT_KEY); }catch(e){} }
@@ -6730,12 +6731,55 @@ class TrailApp {
   /* The last saved plan, laid out the way this one is, so a row can say what it used to
      be. This is the honest answer to "what did my edit drag with it": not a guess about
      what the edit meant, but the difference between the screen and the saved copy. */
-  planWas(){
-    if(this.planSavedSnap==null) return null;
-    let s; try{ s=JSON.parse(this.planSavedSnap); }catch(e){ return null; }
+  planViewOf(snap){
+    let s; try{ s=JSON.parse(snap); }catch(e){ return null; }
     if(!s || !Array.isArray(s.d)) return null;
     return {days:s.d, stay:s.s||{},
       bounds:planDayBounds(s.d, isFinite(s.a)?s.a:this.planStartMile(), this.dirSign(), TOTAL)};
+  }
+  planWas(){ return this.planSavedSnap==null ? null : this.planViewOf(this.planSavedSnap); }
+  /* Run an edit, keep its result, and put the plan back the way it was. Nothing has
+     happened yet: the rows draw what they are now with a line under each saying what this
+     would make it, and the bar carries Apply and Cancel. Cheaper than modelling a
+     "proposed plan" everywhere, because the proposal is just another snapshot. */
+  planPreviewOf(label, fn){
+    const before=this.planSnapshot();
+    try{ fn(); }catch(e){ this.planRestore(before); this.planPreview=null; return false; }
+    const after=this.planSnapshot();
+    this.planRestore(before);
+    if(after===before){ this.planPreview=null; this.planChanged();
+      this.status('That would not change anything.'); return false; }
+    this.planPreview={label, after};
+    this.planChanged();
+    return true;
+  }
+  applyPreview(){
+    const p=this.planPreview; if(!p) return false;
+    this.planPreview=null;
+    this.planEdit(p.label, ()=>this.planRestore(p.after));
+    return true;
+  }
+  cancelPreview(){ if(!this.planPreview) return false;
+    this.planPreview=null; this.planChanged(); return true; }
+  // The name a milepost would go by in a day's title: the finish by name, else its place.
+  planEndName(mile){
+    const term=this.dirSign()<0 ? 0 : TOTAL;
+    if(abs(mile-term)<=1) return this.destName();
+    const t=planTownAt(this.bedTowns(), mile);
+    return t ? t.n : mpTxt(mile);
+  }
+  /* How many days a proposal would touch — for the count in the preview bar. */
+  planPreviewCount(view){
+    if(!view) return 0;
+    const days=this.planP(), b=this.planBounds();
+    let n=Math.abs(view.days.length-days.length);
+    days.forEach((pd,i)=>{
+      const nd=view.days[i], nb=view.bounds[i];
+      if(!nd || !nb) return;
+      if(!!nd.zero!==!!pd.zero || Math.round(nb.miles)!==Math.round(b[i].miles)
+        || Math.round(nb.start)!==Math.round(b[i].start)) n++;
+    });
+    return n;
   }
   /* What changed about one day since the save, in the words the row uses for it. Empty
      string when nothing did — which is most days, most of the time, which is the point. */
@@ -6760,8 +6804,9 @@ class TrailApp {
   /* Re-plan the days after this one automatically, leaving everything up to and including
      it alone. The days that get rebuilt lose the bed booked for them, because it was a bed
      in a town this no longer visits — saying so is the notice on the row. */
-  replanFrom(d){
-    this.planEdit('re-planning from day '+(d+1), ()=>{
+  replanFrom(d){ this.planEdit('planning the rest again', ()=>this.replanFrom_(d)); }
+  replanFrom_(d){
+    {
       const days=this.planP().slice(0, d+1);
       const b=planDayBounds(days, this.planStartMile(), this.dirSign(), TOTAL);
       const from=b.length ? b[b.length-1].end : this.planStartMile();
@@ -6770,14 +6815,15 @@ class TrailApp {
         Math.max(5,this.wxPerDay||60), this.wxRideStart, Math.max(1,want), TOTAL);
       this.planDays=this.planTopUp(days.concat(rest));
       Object.keys(this.planStay).forEach(k=>{ if(+k>d) delete this.planStay[k]; });
-    });
+    }
   }
   /* Even out what is left. The trip still finishes where it finishes; the days between
      here and there are given equal shares of it, each one nudged onto a town with beds
      where there is one near its share. This is the answer to a day that got extended and
      left the next one carrying the whole difference. */
-  spreadFrom(d){
-    this.planEdit('evening out the days after day '+(d+1), ()=>{
+  spreadFrom(d){ this.planEdit('evening out the daily miles', ()=>this.spreadFrom_(d)); }
+  spreadFrom_(d){
+    {
       const days=this.planP().slice(), sgn=this.dirSign(), bd=this.planBounds();
       const from=bd[d].end, end=bd[bd.length-1].end;
       const idx=[]; for(let i=d+1;i<days.length;i++) if(!days[i].zero) idx.push(i);
@@ -6796,27 +6842,29 @@ class TrailApp {
         days[i]={...days[i], miles}; m+=sgn*miles;
       });
       this.planDays=days;
-    });
+    }
   }
   /* The other way to absorb a change: instead of the later days keeping their towns and
      giving up the miles, they keep their miles and every town moves along the trail. The
      lengths come from the saved plan, so this undoes the squeeze rather than compounding
      it however many edits ago it happened. */
-  cascadeFrom(d){
+  cascadeFrom(d){ return this.planEdit('shifting every town along', ()=>this.cascadeFrom_(d))!==false; }
+  cascadeFrom_(d){
     const was=this.planWas(); if(!was) return false;
-    this.planEdit('moving the days after day '+(d+1)+' along', ()=>{
+    {
       this.planDays=this.planP().map((x,i)=>{
         if(i<=d || x.zero || !was.days[i] || was.days[i].zero) return x;
         return {...x, miles:Math.round(was.bounds[i].miles)};
       });
-    });
+    }
     return true;
   }
   /* A day an earlier day rode straight past: drop it, and plan a fresh one onto the end.
      The towns after it are unchanged — they simply come a day sooner, which is what riding
      further on Saturday actually buys you. */
-  pullForward(d){
-    this.planEdit('pulling the trip forward a day', ()=>{
+  pullForward(d){ this.planEdit('moving the rest a day earlier', ()=>this.pullForward_(d)); }
+  pullForward_(d){
+    {
       const days=this.planP().slice();
       days.splice(d,1);
       const stay={};
@@ -6824,7 +6872,7 @@ class TrailApp {
         if(i===d) return; stay[i>d ? i-1 : i]=this.planStay[k]; });
       this.planStay=stay;
       this.planDays=this.planTopUp(days);
-    });
+    }
   }
   /* A shared link wins over the saved plan, because someone who just opened one is
      asking to see it. Restored days are re-snapped onto their towns first — see
@@ -6905,6 +6953,15 @@ class TrailApp {
     /* What the plan looked like when it was last saved, and how many days now differ from
        it. Computed once for the header and handed to each row, because "3 days changed"
        and the "was 55 mi" on the rows have to be counting the same thing. */
+    /* A proposal nobody has agreed to yet. While one is up the rows draw themselves as a
+       diff — the old town struck through with the new one beside it, the old mileage the
+       same — and the bar carries Apply and Cancel instead of the save controls. */
+    const prev=this.planPreview ? this.planViewOf(this.planPreview.after) : null;
+    const del=(cur,nxt)=> (prev && nxt!=null && nxt!==cur)
+      ? '<s class="pl-del">'+esc(cur)+'</s><span class="pl-ins">'+esc(nxt)+'</span>'
+      : esc(cur);
+    const pvN=prev ? this.planPreviewCount(prev) : 0;
+    const pvD=prev ? prev.days.length-days.length : 0;
     const was=this.planWas(), dirty=this.planDirty();
     const chgN=was ? days.reduce((n,x,i)=>n+(this.planDayChange(i,was)?1:0),0) : 0;
     /* How far the plan falls short of the end of the trail. Named in the header, because
@@ -6978,7 +7035,16 @@ class TrailApp {
       /* There when there is something to say, and it stays for one beat after you undo
          back to the saved plan — otherwise Redo would vanish with the bar and stepping
          back to look at what a change did would be a one-way trip. */
-      +((dirty || this.planRedo.length) ? '<div class="pl-unsaved'+(dirty?'':' clean')+'">'
+      +(prev ? '<div class="pl-unsaved pl-prevbar">'
+        +'<span class="pl-uk">Preview</span>'
+        +'<span class="pl-ut">'+esc(this.planPreview.label)+' · '
+          +(pvN ? pvN+(pvN===1?' day changes':' days change') : 'nothing changes')
+          +(pvD>0 ? ' · '+pvD+' more day'+(pvD>1?'s':'')+' on the end' : '')
+          +(pvD<0 ? ' · '+(-pvD)+' day'+(pvD<-1?'s':'')+' dropped' : '')+'</span>'
+        +'<button type="button" class="pl-ub" data-plan="applyprev">Apply</button>'
+        +'<button type="button" class="pl-ub" data-plan="cancelprev">Cancel</button>'
+      +'</div>'
+      : (dirty || this.planRedo.length) ? '<div class="pl-unsaved'+(dirty?'':' clean')+'">'
         +'<span class="pl-uk">'+(dirty?'Not saved':'Saved')+'</span>'
         +'<span class="pl-ut">'+(dirty
             ? (chgN ? chgN+(chgN===1?' day differs':' days differ') : 'changes pending')
@@ -7027,10 +7093,22 @@ class TrailApp {
       // Which bed, if one has been picked. Named in the summary in place of the count:
       // "4 hotels" is a question, "Rodeway Inn" is an answer.
       const dayLodge=this.planLodging(atT, b.end), stay=this.planStayFor(d, dayLodge);
+      const toN=fin ? this.destName() : atT ? atT.n : 'between towns';
       const title=pd.zero ? 'Rest day at '+fromN
         : done ? 'Nothing left to ride'
         : idle ? 'Nothing to ride this day'
-        : fromN+' → '+(fin ? this.destName() : atT ? atT.n : 'between towns');
+        : fromN+' → '+toN;
+      /* The same line as a diff, when a proposal is up: the towns that would change are
+         struck through with their replacements beside them, so what the button does is
+         readable on the rows themselves rather than described in a sentence. */
+      const nb=prev ? prev.bounds[d] : null, nd=prev ? prev.days[d] : null;
+      const gone=!!prev && !nd;
+      /* Only the destination is ruled through. Where a day STARTS is the day before it's
+         destination, already struck through on the row above — diffing both ends put four
+         town names in a title with room for two, and the ellipsis ate the new one, which
+         is the half you were reading it for. */
+      const titleHtml=!prev || pd.zero || spent || !nb || !nd || nd.zero ? esc(title)
+        : esc(this.placeNameAt(nb.start))+' → '+del(toN, this.planEndName(nb.end));
       const summary=pd.zero ? 'Rest day'
         : done ? 'The trail ends at '+fromN
         : idle ? 'An earlier day already reaches '+fromN
@@ -7040,7 +7118,7 @@ class TrailApp {
             : (atT&&(atT.hotel||atT.camp) ? this.bedWord(atT) : 'no beds'));
       const moonCol=(pd.zero||spent) ? '#7d7979' : (atT&&(atT.hotel||atT.camp) ? '#3b3a6a' : '#b3261e');
 
-      h.push('<div class="pl-day'+(pd.zero?' pl-zero':'')+'" data-d="'+d+'">'
+      h.push('<div class="pl-day'+(pd.zero?' pl-zero':'')+(gone?' pl-day-del':'')+'" data-d="'+d+'">'
         /* Which day of the trip, under the date. It goes in the rail because the rail
            already had the slack — the hairline below it is a flex filler, so the number
            costs the row nothing it was using. */
@@ -7052,14 +7130,16 @@ class TrailApp {
           +'<div class="pl-top">'
             +'<button type="button" class="pl-toggle" data-plan="open" data-d="'+d+'">'
               +'<span class="pl-tl">'+(warn?warnSvg:'')
-                +'<span class="pl-t"'+(warn?' style="color:#b3261e"':'')+'>'+esc(title)+'</span>'
+                +'<span class="pl-t"'+(warn&&!prev?' style="color:#b3261e"':'')+'>'+titleHtml+'</span>'
                 +caretSvg(open)+'</span>'
               +'<span class="pl-s">'+moonSvg(moonCol)+esc(summary)+'</span>'
             +'</button>'
             /* The distance, in the empty half of the title row. It was buried at the head
                of the summary line, which is the line that ellipsises first — and it is the
                number you scan the list for. */
-            +(pd.zero||spent ? '' : '<span class="pl-mi">'+Math.round(b.miles)+'<i>mi</i></span>')
+            +(pd.zero||spent ? '' : '<span class="pl-mi">'
+              +del(String(Math.round(b.miles)), nb&&nd&&!nd.zero ? String(Math.round(nb.miles)) : null)
+              +'<i>mi</i></span>')
             /* A two-state control, labelled by what pressing it does rather than by what
                the day currently is — "Riding" sitting there in a box read as a status
                and nobody could see it was the way to book a rest day. */
@@ -7072,17 +7152,25 @@ class TrailApp {
       /* What this row used to be, when it is no longer what was saved. On every day the
          change touched, not only the one that was edited — the whole point is to see what
          an edit dragged with it without having to open each day and remember. */
-      const chg=this.planDayChange(d, was);
+      const chg=prev ? '' : this.planDayChange(d, was);
       if(chg) h.push('<div class="pl-chg"><span class="pl-chg-d"></span>'+esc(chg)+'</div>');
+      if(gone) h.push('<div class="pl-chg pl-chg-x"><span class="pl-chg-d"></span>this day goes</div>');
       /* A day an earlier one rode past, with the two ways out of it right there. */
       if(idle) h.push('<div class="pl-idle">'+warnSvg
         +'<span>Day '+d+' already rides all the way to '+esc(fromN)+', so there are no miles left for this one.</span>'
         +'<button type="button" class="pl-fix" data-plan="pull" data-d="'+d+'"'
           +' title="Delete this empty day: every day after it happens one date earlier, and a new day is planned onto the end">'
           +'Move the rest a day earlier</button>'
+        /* The third honest answer to an empty day, and the one a tourer reaches for after
+           a ninety-mile Saturday: stay put. Distinct from the + Zero day pill, which
+           INSERTS a rest day and pushes the trip down — this one only relabels a day that
+           already has no miles in it, so nothing after it moves. */
+        +'<button type="button" class="pl-fix" data-plan="zerohere" data-d="'+d+'"'
+          +' title="Call it a rest day where you are. Nothing after it moves — the day has no miles in it either way">'
+          +'Make it a rest day</button>'
         +'<button type="button" class="pl-fix" data-plan="replan" data-d="'+d+'"'
-          +' title="Plan every day after day '+d+' again, automatically, from where day '+d+' ends">'
-          +'Plan the rest again</button>'
+          +' title="Throw the remaining days away and plan them again from where day '+d+' ends">'
+          +'Auto-plan the rest</button>'
       +'</div>');
 
       if(open){
@@ -7132,13 +7220,13 @@ class TrailApp {
            that are left, finishing where you were always going to finish; or keep their
            distances and move every town along. The fourth is to hand the rest back to the
            planner. All four are reversible, which is why they can sit on the row. */
-        if(d<days.length-1) h.push('<div class="pl-after"><span class="pl-k">The days after</span>'
+        if(d<days.length-1) h.push('<div class="pl-after"><span class="pl-k">The rest of the trip</span>'
           +'<button type="button" class="pl-fix" data-plan="spread" data-d="'+d+'"'
-            +' title="Share what is left evenly between them. The trip still finishes where it finishes now.">Even out the rest</button>'
+            +' title="Give every remaining day the same distance. You still finish where you finish now.">Even daily miles</button>'
           +'<button type="button" class="pl-fix" data-plan="cascade" data-d="'+d+'"'
-            +' title="Give them back the distances they had, so every town after this one moves along the trail with your change.">Push the rest along</button>'
+            +' title="Keep each remaining day the length it was, so every town after this one moves further along the trail.">Shift every town along</button>'
           +'<button type="button" class="pl-fix" data-plan="replan" data-d="'+d+'"'
-            +' title="Plan them again automatically from the end of this day, at your daily target.">Plan the rest again</button>'
+            +' title="Throw the remaining days away and plan them again from the end of this one.">Auto-plan the rest</button>'
         +'</div>');
 
         if(noBed){
@@ -7277,6 +7365,7 @@ class TrailApp {
 
     h.push('<div class="pl-foot">Saved on this phone. The Outlook graph and the map read these days. '
       +'Beds and stops are the app’s own pins — NY State’s register, the OpenStreetMap corridor and your own picks.</div>');
+    el.classList.toggle('pl-previewing', !!prev);
     el.innerHTML=h.join('');
     // The map instance survives the rewrite; this puts it back where it belongs.
     this.planMini();
@@ -7368,12 +7457,20 @@ class TrailApp {
         this.status(l ? 'Back to '+l+' again.' : 'Nothing to redo.'); }
       else if(act==='revert'){ if(this.revertPlan()){ this.renderPlan();
         this.status('Back to the plan you last saved.'); } }
-      else if(act==='spread'){ this.spreadFrom(d); this.renderPlan(); }
-      else if(act==='cascade'){ if(!this.cascadeFrom(d))
-          this.status('Save the plan once first — there is nothing to move them back to.');
+      /* The four that move days other than this one are proposed, not done: the rows
+         redraw as a diff and nothing is committed until Apply. */
+      else if(act==='spread'){ this.planPreviewOf('Even daily miles', ()=>this.spreadFrom_(d)); this.renderPlan(); }
+      else if(act==='cascade'){ if(!this.planWas())
+          this.status('Save the plan once first — there is nothing to measure the shift against.');
+        else this.planPreviewOf('Shift every town along', ()=>this.cascadeFrom_(d));
         this.renderPlan(); }
-      else if(act==='replan'){ this.replanFrom(d); this.renderPlan(); }
-      else if(act==='pull'){ this.pullForward(d); this.renderPlan(); }
+      else if(act==='replan'){ this.planPreviewOf('Auto-plan the rest', ()=>this.replanFrom_(d)); this.renderPlan(); }
+      else if(act==='pull'){ this.planPreviewOf('Move the rest a day earlier', ()=>this.pullForward_(d)); this.renderPlan(); }
+      else if(act==='zerohere'){ this.planEdit('calling day '+(d+1)+' a rest day', ()=>{
+          this.planDays=this.planP().map((x,i)=> i===d ? {...x, zero:true, miles:0} : x); });
+        this.renderPlan(); }
+      else if(act==='applyprev'){ this.applyPreview(); this.renderPlan(); }
+      else if(act==='cancelprev'){ this.cancelPreview(); this.renderPlan(); }
       else if(act==='addday'){ this.planEdit('a day on the end', ()=>{
           const days=this.planP().slice();
           if(days.length>=PLAN_DAYS_MAX) return;
