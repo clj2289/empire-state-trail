@@ -459,6 +459,32 @@
   .pl-save{flex:none;font-family:inherit;font-size:12px;padding:6px 14px;background:#201e1d;
     color:#f8f4f4;border:1px solid #201e1d;border-radius:999px;cursor:pointer;min-height:32px}
   .pl-head-2{display:flex;align-items:center;gap:14px;margin-top:9px;flex-wrap:wrap}
+  /* The unsaved bar. It only exists when there is something unsaved, so it is allowed to
+     be loud — an amber rule under the header rather than another permanent band. */
+  .pl-unsaved{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;
+    padding:5px 8px;background:#fdf3e0;border:1px solid #e0b872;border-radius:3px}
+  .pl-uk{flex:none;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    color:#8a5a00}
+  .pl-ut{flex:1;min-width:0;font-size:11px;color:#6b4a10;overflow:hidden;text-overflow:ellipsis}
+  .pl-ub{flex:none;font-family:inherit;font-size:11.5px;color:#6b4a10;background:transparent;
+    border:1px solid rgba(138,90,0,.4);border-radius:999px;padding:3px 10px;cursor:pointer;min-height:28px}
+  .pl-ub:hover{background:rgba(138,90,0,.1)}
+  /* What a row used to be. One line, only on the days that differ from the saved plan. */
+  .pl-chg{display:flex;align-items:center;gap:5px;margin:1px 0 0;font-size:10.5px;color:#8a5a00}
+  .pl-chg-d{flex:none;width:5px;height:5px;border-radius:999px;background:#d09216}
+  /* A day an earlier one rode past: the warning and its two ways out, on the row. */
+  .pl-idle{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:5px 0 2px;
+    font-size:11px;color:#8a2f12}
+  .pl-fix{flex:none;font-family:inherit;font-size:11px;color:var(--pl-link);background:transparent;
+    border:1px solid rgba(0,103,134,.4);border-radius:999px;padding:3px 9px;cursor:pointer;min-height:28px}
+  .pl-fix:hover{background:rgba(0,103,134,.09)}
+  .pl-after{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:7px 0 2px}
+  .pl-lmore{display:block;width:100%;margin-top:4px;font-family:inherit;font-size:11.5px;
+    color:var(--pl-link);background:transparent;border:1px dashed rgba(0,103,134,.4);
+    border-radius:3px;padding:6px;cursor:pointer;min-height:32px}
+  .pl-lmore:hover{background:rgba(0,103,134,.07)}
+  .pl-save{transition:background .12s,color .12s}
+  .pl-save:not(.on){background:transparent;color:var(--pl-ink)}
   .pl-field{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
   .pl-k{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--pl-faint);flex:none}
   .pl-unit{font-size:11.5px;color:var(--pl-mute)}
@@ -599,8 +625,10 @@
   .plan-lb{background:#f8f7f5;border:1px solid rgba(32,30,29,.2);padding:2px 5px;border-radius:2px}
   .plan-flag{width:24px;height:24px;display:grid;place-items:center;background:#f8f7f5;
     border:2px solid #178040;border-radius:999px}
-  .plan-stopdot{display:block;width:10px;height:10px;border-radius:999px;background:#0088b0;
-    border:2px solid #fff;box-shadow:0 0 0 1px rgba(32,30,29,.35)}
+  /* A ticked stop wears its own category's mark in its own category's colour — a dot said
+     only "something is here", which is the one thing the rider already knew. */
+  .plan-stop{display:grid;place-items:center;width:22px;height:22px;border-radius:999px;
+    background:#f8f7f5;border:2px solid;box-shadow:0 1px 2px rgba(32,30,29,.3)}
   .plan-wx{display:flex;flex-direction:column;width:62px;background:#f8f7f5;border:1.6px solid;
     border-radius:2px;overflow:hidden;font-family:ui-serif,Georgia,serif;font-variant-numeric:tabular-nums}
   .plan-wx-1{display:flex;align-items:baseline;gap:4px;padding:1px 4px}
