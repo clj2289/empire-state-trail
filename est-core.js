@@ -418,6 +418,10 @@ const P = {
      read instead of aim at. A calendar with a night booked on it: the screen is a run of
      days, and the one thing you set on each is where you sleep. */
   plan:'r3 5 18 16 2.5|M8 3v3.5|M16 3v3.5|M3 10h18|M7 14h4|M7 17.5h10',
+  // out of the app: the box-with-an-arrow everyone already reads as "opens elsewhere"
+  ext:'M14 4h6v6|M20 4l-9 9|M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
+  // a place's own page — a globe, because it is a website and not another app screen
+  link:'c12 12 9|M3 12h18|M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18',
   chevR:'M9 6l6 6-6 6',
   chevL:'M15 6l-6 6 6 6',
   layers:'M12 2 22 7 12 12 2 7Z|M2 12l10 5 10-5|M2 17l10 5 10-5',
@@ -1046,6 +1050,11 @@ const PLAN_STOP_CAT={'chris':'your pick', 'nb-grocery':'resupply', 'nb-food':'fo
 const PLAN_STOP_COL={'your pick':'#6a4fae', 'resupply':'#0f6a8b', 'food':'#a2551f',
   'shop':'#605d5d', 'water':'#2b6a84', 'bike shop':'#4a7a3a', 'pharmacy':'#8a3a3a',
   'sight':'#6a4fae'};
+/* Worth a detour, in order. Your own picks first because you chose them, then the things
+   that are only there once — a sight, a lock, water — and the interchangeable ones last:
+   there is another coffee up the road, there is not another aqueduct. */
+const PLAN_STOP_RANK={'your pick':0, 'sight':1, 'water':2, 'bike shop':3, 'pharmacy':4,
+  'resupply':5, 'food':6, 'shop':7};
 const PLAN_STOP_OFF_MI=1.5;
 const PLAN_STOP_MAX=14;
 /* The longest a day in the dropdown is allowed to be. Without a ceiling the "longer day"
@@ -6435,8 +6444,16 @@ class TrailApp {
       out.push({key:d+':'+(p.name||'')+':'+Math.round(p.mile*10), name:p.name||PLAN_STOP_CAT[p.asset],
         kind, asset:p.asset, mile:p.mile, lat:p.lat, lng:p.lng, off:p.off, poi:p});
     });
-    out.sort((x,y)=> (x.mile-y.mile)*(this.dirSign()));
-    return out.slice(0, PLAN_STOP_MAX);
+    /* Which ones survive the cap is a different question from what order they are shown
+       in. Sorted by milepost alone, a day through a city spent the whole list on its
+       tenth coffee shop and the aqueduct you actually wanted to see fell off the end. So
+       the cut is made by what a stop is worth stopping for, and the survivors are then put
+       back into the order you would ride past them. */
+    out.sort((x,y)=>{
+      const r=(PLAN_STOP_RANK[x.kind]||9)-(PLAN_STOP_RANK[y.kind]||9);
+      return r || (x.mile-y.mile)*this.dirSign();
+    });
+    return out.slice(0, PLAN_STOP_MAX).sort((x,y)=>(x.mile-y.mile)*this.dirSign());
   }
 
   planStayKey(poi){
@@ -6503,7 +6520,7 @@ class TrailApp {
   setPlanDay(d, patch){
     const before=this.planBounds();
     const next=this.planP().map((x,i)=> i===d ? {...x, ...patch} : x);
-    if(patch.miles!==undefined || patch.zero!==undefined){
+    if(patch.miles!==undefined){
       const sgn=this.dirSign();
       let m=this.planStartMile();
       for(let i=0;i<next.length;i++){
@@ -6517,6 +6534,39 @@ class TrailApp {
       }
     }
     this.planDays=next; this._planAuto=false; this.savePlan(); this.planChanged();
+  }
+  /* Taking a zero pushes the schedule down; it does not hand the missing miles to
+     tomorrow. The days after a rest day do exactly what they were already going to do,
+     one date later — same towns, same distances, and the hotel booked for each of them
+     travels with it. So this INSERTS a rest day rather than editing one, and un-taking it
+     lifts the day back out again. The seventh day falls off the end when a rest is
+     inserted, and a fresh one is planned onto the end when it is removed. */
+  setZeroDay(d, on){
+    const days=this.planP().slice(), stay={...this.planStay};
+    const shift=(from,by)=>{
+      const out={};
+      Object.keys(stay).forEach(k=>{ const i=+k; out[i>=from ? i+by : i]=stay[k]; });
+      return out;
+    };
+    if(on){
+      days.splice(d, 0, {miles:0, start:this.wxRideStart, end:null, zero:true});
+      days.length=PLAN_DAYS;
+      this.planStay=shift(d, 1);
+      delete this.planStay[d];
+    } else {
+      days.splice(d, 1);
+      this.planStay=shift(d+1, -1);
+      delete this.planStay[d];
+      // the tail grew a gap; fill it by planning on from wherever the last day ends
+      while(days.length<PLAN_DAYS){
+        const b=planDayBounds(days, this.planStartMile(), this.dirSign(), TOTAL);
+        const from=b.length ? b[b.length-1].end : this.planStartMile();
+        const one=defaultRidePlan(this.beddedTowns(), from, this.dirSign(),
+          Math.max(5,this.wxPerDay||60), this.wxRideStart, 1, TOTAL);
+        days.push(one[0]);
+      }
+    }
+    this.planDays=days; this._planAuto=false; this.savePlan(); this.planChanged();
   }
   /* Auto-plan re-anchors on purpose: pressing it three days into the trip should plan
      the days you have left, from where you are, not from where you set off. */
@@ -6816,6 +6866,9 @@ class TrailApp {
               +'<div class="pl-lacts">'
                 +(p.tel?'<a href="tel:'+esc(p.tel.replace(/[^0-9+]/g,''))+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h4l2 5-2.5 1.5a12 12 0 0 0 6 6L15 14l5 2v4a1 1 0 0 1-1.1 1A17 17 0 0 1 3 5.1 1 1 0 0 1 4 4Z"></path></svg>'+esc(p.tel)+'</a>':'')
                 +'<button type="button" data-poi="'+p.poi.i+'" data-lat="'+p.poi.lat+'" data-lng="'+p.poi.lng+'" data-z="15"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>Map</button>'
+                // its own page, where the pin carries one — that is where you book
+                +(p.poi.url ? '<a href="'+esc(p.poi.url)+'" target="_blank" rel="noopener">'
+                  +icon('link',11)+'Website</a>' : '')
                 +'<a href="'+p.mapHref+'" target="_blank" rel="noopener"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg>Directions</a>'
               +'</div></div></div>'; }).join('')+'</div>');
           h.push('</div>');
@@ -6841,14 +6894,29 @@ class TrailApp {
             const on=!!this.planPicked[s.key];
             const cfg=catCfg(s.asset), col=PLAN_STOP_COL[s.kind]||'#605d5d';
             const off=(s.off!=null && s.off>=0.2) ? ' · '+s.off.toFixed(1)+' mi off' : '';
-            return '<button type="button" class="pl-stop'+(on?' on':'')+'" data-plan="pickstop" data-key="'+esc(s.key)+'">'
-              +'<span class="pl-tick">'+(on?'✓':'')+'</span>'
-              +'<span class="pl-sic" style="color:'+col+'">'+icon(cfg.icon,15)+'</span>'
-              +'<span class="pl-sbody">'
-                +'<span class="pl-sname">'+esc(s.name)+'</span>'
-                +'<span class="pl-smeta"><b class="pl-scat" style="color:'+col+'">'+esc(s.kind)+'</b>'
-                  +' · '+esc(mpTxt(s.mile))+esc(off)+'</span>'
-              +'</span></button>';
+            /* A row you can look at, not only tick. The toggle stays the whole left-hand
+               block so the gesture is unchanged; the links sit outside it, because an
+               anchor inside a button is markup a browser is entitled to ignore. */
+            return '<div class="pl-stop'+(on?' on':'')+'">'
+              +'<button type="button" class="pl-stoggle" data-plan="pickstop" data-key="'+esc(s.key)+'"'
+                +' aria-pressed="'+(on?'true':'false')+'">'
+                +'<span class="pl-tick">'+(on?'✓':'')+'</span>'
+                +'<span class="pl-sic" style="color:'+col+'">'+icon(cfg.icon,15)+'</span>'
+                +'<span class="pl-sbody">'
+                  +'<span class="pl-sname">'+esc(s.name)+'</span>'
+                  +'<span class="pl-smeta"><b class="pl-scat" style="color:'+col+'">'+esc(s.kind)+'</b>'
+                    +' · '+esc(mpTxt(s.mile))+esc(off)+'</span>'
+                +'</span></button>'
+              +'<span class="pl-sacts">'
+                +'<button type="button" title="Show it on the map" aria-label="Show '+esc(s.name)+' on the map"'
+                  +' data-poi="'+s.poi.i+'" data-lat="'+s.lat+'" data-lng="'+s.lng+'" data-z="15">'
+                  +icon('map',14)+'</button>'
+                +(s.poi.url ? '<a href="'+esc(s.poi.url)+'" target="_blank" rel="noopener"'
+                  +' title="Its own page" aria-label="'+esc(s.name)+' website">'+icon('link',14)+'</a>' : '')
+                +'<a href="https://www.google.com/maps/search/?api=1&query='+s.lat+','+s.lng+'"'
+                  +' target="_blank" rel="noopener" title="Directions" aria-label="Directions to '+esc(s.name)+'">'
+                  +icon('ext',14)+'</a>'
+              +'</span></div>';
           }).join('')+'</div>');
           h.push('</div>');
         }
@@ -6924,7 +6992,7 @@ class TrailApp {
       else if(act==='save'){ this.savePlan(); this.status('Ride plan saved on this phone.'); }
       else if(act==='tomap'){ this.showTab('map'); this.planFit(); }
       else if(act==='open'){ this.planOpenDay=this.planOpenDay===d?null:d; this.renderPlan(); }
-      else if(act==='zero'){ this.setPlanDay(d,{zero:!this.planP()[d].zero}); this.renderPlan(); }
+      else if(act==='zero'){ this.setZeroDay(d, !this.planP()[d].zero); this.renderPlan(); }
       else if(act==='lodge'){ this.planOpenLodge=this.planOpenLodge===d?null:d;
         if(this.planOpenLodge!==d) this.planMiniDay=null;
         this.renderPlan(); }
@@ -7084,8 +7152,12 @@ class TrailApp {
     const days=this.planP(), bounds=this.planBounds();
     box.innerHTML=days.map((pd,d)=>{
       const t=this.planDayTown(d);
+      /* Both ends of the leg. A colour against one town name says where the day finished
+         and leaves you to work out which stroke on the map it is; naming the leg says it
+         outright, which is the whole job of a key. */
+      const from=this.placeNameAt(bounds[d].start);
       const lab=this.planDayLabel(d).replace(/,.*/,'')+' · '
-        +(pd.zero?'zero':(t?t.n:Math.round(bounds[d].end)+' mi'));
+        +(pd.zero ? 'zero at '+from : from+' → '+(t?t.n:Math.round(bounds[d].end)+' mi'));
       return '<span class="plan-key-row"><span class="plan-key-sw" style="background:'
         +this.planDayCol(d)+'"></span><span>'+esc(lab)+'</span></span>';
     }).join('');
@@ -7112,6 +7184,7 @@ class TrailApp {
       +'<div class="plan-card-ln">'+esc(p.name)+'</div>'
       +'<div class="plan-card-la">'+esc(p.addr)+esc(this.planLodgeWhere(p))+'</div>'
       +(p.tel?'<a href="tel:'+esc(p.tel.replace(/[^0-9+]/g,''))+'">'+esc(p.tel)+'</a> ':'')
+      +(p.poi.url?'<a href="'+esc(p.poi.url)+'" target="_blank" rel="noopener">Website</a> ':'')
       +'<a href="'+p.mapHref+'" target="_blank" rel="noopener">Directions</a></div>').join('')+'</div>');
     h.push('<div class="plan-card-btns">'
       +'<button type="button" class="plan-card-go" data-planedit="'+d+'">Edit this day</button>'
