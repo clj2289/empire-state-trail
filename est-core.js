@@ -116,6 +116,10 @@ const WX_SAMPLE_MI=12;
    nothing to work out, so a tapped spot's own timeline runs far enough to date any point
    on the trail — three weeks covers the whole 750 miles even at a gentle 40 a day. */
 const WX_ETA_DAYS=21;
+/* The sizes the Outlook's own text control steps through. 1 is the design's drawing;
+   the rest are the same drawing bigger or smaller, because "readable" is a fact about a
+   pair of eyes and a phone and not something a stylesheet can settle on their behalf. */
+const WX_SCALES=[0.85, 1, 1.15, 1.35, 1.6];
 /* How far off the line a press can land and still be asking about the route. Beyond it
    the tap is about somewhere else, and gets a forecast without an arrival. Same figure
    the map layer's anchor uses, so panning and pressing agree on what counts as on-route. */
@@ -409,10 +413,18 @@ const P = {
   wind:'M3 8h10a3 3 0 1 0-3-3|M3 13h14a3 3 0 1 1-3 3|M3 18h7a2 2 0 1 1-2 2',
   // sun behind a cloud — the outlook tab, distinct from the plain wind glyph
   fcast:'M8.5 2.6v1.8|M3.6 4.6l1.3 1.3|M1.6 9.5h1.8|M13.4 4.6l-1.3 1.3|c8.5 9.5 3|M10 20h7.5a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8.6 11.4 4.3 4.3 0 0 0 10 20Z',
+  /* The ride plan tab. Not the plain list glyph the mock's dock used — that one is
+     already the Trip tab's, and a dock with the same mark twice is a dock you have to
+     read instead of aim at. A calendar with a night booked on it: the screen is a run of
+     days, and the one thing you set on each is where you sleep. */
+  plan:'r3 5 18 16 2.5|M8 3v3.5|M16 3v3.5|M3 10h18|M7 14h4|M7 17.5h10',
   chevR:'M9 6l6 6-6 6',
   chevL:'M15 6l-6 6 6 6',
   layers:'M12 2 22 7 12 12 2 7Z|M2 12l10 5 10-5|M2 17l10 5 10-5',
   bike:'c5.5 17.5 3.2|c18.5 17.5 3.2|M5.5 17.5l4-8.5h6.5l-3 8.5|M9.5 9l3.5 8.5|M13.5 9h3',
+  /* A canal lock, drawn as what it is: a chamber with a gate at each end. Not a padlock —
+     these are the Erie's locks, and free camping at them is a real place to sleep. */
+  canallock:'M3 4v16|M21 4v16|M3 8.5h18|M3 15.5h18|M12 8.5v7',
   // Side-on, because that is the shape a car is: roofline, beltline, two wheels. A
   // three-quarter view needs detail this size cannot hold.
   car:'M3 16.4v-3.1l2.2-4.8A2.4 2.4 0 0 1 7.4 7h9.2a2.4 2.4 0 0 1 2.2 1.5l2.2 4.8v3.1|M3 13.3h18|c7.5 16.6 1.9|c16.5 16.6 1.9',
@@ -948,33 +960,177 @@ function readGrid(maps, key, epochHour){
   const v=m.get(epochHour);
   return (v==null || !isFinite(v)) ? null : v;
 }
+/* What one day of the plan asks for. The ride plan holds a record per day — miles, the
+   hour out, the hour in, whether it's a zero — and this is the one place that reads it,
+   so a caller with no plan (the spot forecast's long timeline, a first run) still gets a
+   day out of the uniform settings. An hour "in" of null is the hour the day's miles run
+   out at the day's pace, half-hour resolution, never past 10pm. */
+function planDaySpec(o, day){
+  const sp=o.speed>0?o.speed:12;
+  const pd=(o.dayPlan && o.dayPlan[day]) || null;
+  if(!pd) return {miles:o.perDay, start:o.rideStart, end:o.rideEnd,
+    zero: day===(o.zeroDay==null?-1:o.zeroDay)};
+  const start=pd.start==null ? o.rideStart : pd.start;
+  const miles=pd.zero ? 0 : (pd.miles==null ? o.perDay : pd.miles);
+  const end=pd.end!=null ? pd.end : Math.min(22, Math.round((start+miles/sp)*2)/2);
+  return {miles, start, end:Math.max(start+0.5, end), zero:!!pd.zero};
+}
 /* Where the rider is at every clock hour across the horizon. Contiguous calendar hours
    from day-0 local midnight; advance only during the ride window on non-zero days, only
    until the day's miles are done, and never before `nowMs`. A zero day holds position.
    `sgn` carries direction (+1 to Buffalo, −1 to NYC); miles clamp to [0,total]. */
 function planTimeline(o){
-  const days=o.days, sgn=o.sgn, sp=o.speed, per=o.perDay;
+  const days=o.days, sgn=o.sgn, sp=o.speed;
   const startMs=o.startMs, nowMs=(o.nowMs==null?startMs:o.nowMs);
-  const total=o.totalMi, zeroDay=(o.zeroDay==null?-1:o.zeroDay);
+  const total=o.totalMi;
   const reached=(mile,target)=> sgn>0 ? mile>=target-1e-9 : mile<=target+1e-9;
   const clampMi=m=>Math.max(0, Math.min(total, m));
   const r2=v=>Math.round(v*100)/100;
   const hours=[], dayInfo=[];
   let mile=clampMi(o.anchorMile);
   for(let day=0; day<days; day++){
-    const zero=day===zeroDay, dayStart=mile;
-    const target=zero ? mile : clampMi(mile+sgn*per);
+    const spec=planDaySpec(o, day), zero=spec.zero, dayStart=mile;
+    const target=zero ? mile : clampMi(mile+sgn*spec.miles);
     for(let hr=0; hr<24; hr++){
       const idx=day*24+hr, tMs=startMs+idx*3600000;
-      const inWin=!zero && hr>=o.rideStart && hr<o.rideEnd;
-      const riding=inWin && !reached(mile,target) && tMs>=nowMs;
+      const inWin=!zero && hr>=spec.start && hr<spec.end;
+      /* Two different questions, and conflating them was a bug. `onBike` is what the
+         PLAN says: inside the day's window, with miles still to do. `riding` adds "and
+         it hasn't happened yet", which is what the mile integration needs so a plan
+         opened at lunchtime doesn't pretend you rode the morning.
+         Anything the rider READS — the ride shading, the head/cross/tail verdict, the
+         start flag — is about the plan and uses onBike. Only position uses riding. */
+      const onBike=inWin && !reached(mile,target);
+      const riding=onBike && tMs>=nowMs;
       if(riding) mile=clampMi(mile+sgn*sp);
-      hours.push({tMs, hour:hr, day, mile:r2(mile), riding, zero});
+      hours.push({tMs, hour:hr, day, mile:r2(mile), riding, onBike, zero});
     }
     mile=target;
-    dayInfo.push({day, zero, startMile:r2(dayStart), endMile:r2(mile)});
+    dayInfo.push({day, zero, startMile:r2(dayStart), endMile:r2(mile),
+      start:spec.start, end:spec.end, miles:spec.miles});
   }
   return {hours, days:dayInfo};
+}
+
+/* ═══════ The ride plan ═══════════════════════════════════════════════════════════
+   One record per day — {miles, start, end|null, zero} — plus the trail mile the first
+   day leaves from. It is the source of truth the Outlook graph, the plan tab and the
+   map's day legs all read; nothing derives "where does this day end" for itself.
+
+   A day ends AT A TOWN, not at a mileage: the nearest bedded town within PLAN_SNAP_MI
+   of the end mile is the answer, decided once here and used by every widget. Beyond
+   that the day ends between towns, which is a warning rather than a plan. */
+const PLAN_KEY='est_outlook_plan_v1';
+const PLAN_DAYS=7;
+const PLAN_SNAP_MI=6;
+/* A bed counts towards a town if it's within PLAN_SNAP_MI along the trail and this far
+   off it — the same corridor the Nearby list treats as reachable. The lodging list
+   inside a day row is a disclosure, not a directory, so it stops at a handful. */
+const PLAN_BED_OFF_MI=5;
+const PLAN_LODGE_MAX=6;
+/* How far a place's beds may be strung out along the trail and still be one place. Two
+   motels ten miles apart sharing a postal city are two stops, not one. */
+const PLAN_PLACE_SPREAD_MI=5;
+/* Pin names that are place names. A canal lock, a state park, a campground or a marina is
+   a spot on the map a rider names their night after; a hotel brand is not. */
+const PLACE_LIKE=/\block\b|lock\s*\d+|state park|campground|camp\b|marina|preserve|refuge|island/i;
+/* What's worth stopping for on the way, and what to call it. Keys are the app's own POI
+   assets, so the candidate list is the pins the rider already has switched on somewhere
+   else rather than a second taxonomy invented for this screen. */
+const PLAN_STOP_CAT={'chris':'your pick', 'nb-grocery':'resupply', 'nb-food':'food',
+  'nb-convenience':'shop', 'nb-water':'water', 'nb-bike':'bike shop',
+  'nb-pharmacy':'pharmacy', 'Attraction':'sight'};
+/* One colour per kind of stop, so a list of fourteen is scanned rather than read. Kept
+   clear of the wind palette's red / amber / green, which mean head / cross / tail
+   everywhere else in this app and must not start meaning "lunch" here. */
+const PLAN_STOP_COL={'your pick':'#6a4fae', 'resupply':'#0f6a8b', 'food':'#a2551f',
+  'shop':'#605d5d', 'water':'#2b6a84', 'bike shop':'#4a7a3a', 'pharmacy':'#8a3a3a',
+  'sight':'#6a4fae'};
+const PLAN_STOP_OFF_MI=1.5;
+const PLAN_STOP_MAX=14;
+/* The longest a day in the dropdown is allowed to be. Without a ceiling the "longer day"
+   band ran to the end of the trail and offered a 457-mile Tuesday — every town ahead is
+   technically reachable if you never stop, which is not what the question was asking.
+   A day past this is still typeable in the miles box; it is just not a suggestion. */
+const PLAN_DAY_MAX_MI=140;
+/* One colour per day on the map. Cool and dark on purpose: red, amber and green belong
+   to head, cross and tail, and the trail itself is teal below Albany and purple above,
+   so a leg has to be unmistakable for either. */
+const PLAN_DAY_COLS=['#1f4e8c','#d6006c','#4b3f2a','#5f3dc4','#00695c','#495057','#8d3b72'];
+/* The saved shape is {days,speed,anchorTM}; the shared one is {d,s,a}. One reader for
+   both, so a link and a reload can't disagree about what a plan is. */
+function decodeSavedPlan(raw){
+  if(!raw) return null;
+  try{
+    const o=JSON.parse(raw);
+    if(o && Array.isArray(o.days) && o.days.length)
+      return {days:o.days, speed:o.speed, anchorTM:o.anchorTM, stay:o.stay};
+  }catch(e){}
+  return null;
+}
+/* The town nearest a milepost, but only if it's near enough to be where you sleep. */
+function planTownAt(towns, mile, within){
+  if(!towns || !towns.length || mile==null) return null;
+  const c=towns.reduce((a,t)=> abs(t.tm-mile)<abs(a.tm-mile) ? t : a);
+  return abs(c.tm-mile)<=(within==null?PLAN_SNAP_MI:within) ? c : null;
+}
+/* Each day's start and end milepost, walked from the anchor. Zero days hold position.
+   Clamped to the trail: a day cannot ride past the end of it, and `miles` is what the
+   day actually covers rather than what was asked for — so the header total, the legs on
+   the map and the trail-mile span all stop where the trail does. */
+function planDayBounds(days, anchor, sgn, total){
+  const hi=(total==null?Infinity:total);
+  const clamp=m=>Math.max(0, Math.min(hi, m));
+  const out=[]; let m=clamp(anchor);
+  (days||[]).forEach(pd=>{
+    const end=pd.zero ? m : clamp(m+sgn*(pd.miles||0));
+    out.push({start:m, end, miles:abs(end-m)}); m=end;
+  });
+  return out;
+}
+/* Auto-populate: each day ends in the bedded town nearest the daily target, so nobody
+   has to type a mileage to get a plan they can ride. Once the trail runs out the
+   remaining days are given no miles rather than a distance that does not exist — the
+   plan is seven rows, but the trip is however long the trail is. */
+function defaultRidePlan(bedded, anchor, sgn, target, startHour, n, total){
+  const tgt=target>0?target:60, days=[], hi=(total==null?Infinity:total);
+  let mile=anchor;
+  for(let d=0; d<(n||PLAN_DAYS); d++){
+    const room=sgn>0 ? hi-mile : mile;
+    if(room<=0.5){ days.push({miles:0, start:startHour==null?7:startHour, end:null, zero:false}); continue; }
+    const want=mile+sgn*tgt;
+    const ahead=(bedded||[]).filter(t=>(t.tm-mile)*sgn > tgt*0.45 && (t.tm-mile)*sgn <= room);
+    const pick=ahead.length ? ahead.reduce((a,t)=> abs(t.tm-want)<abs(a.tm-want) ? t : a) : null;
+    const miles=pick ? Math.round(abs(pick.tm-mile)) : Math.round(Math.min(tgt, room));
+    days.push({miles, start:startHour==null?7:startHour, end:null, zero:false});
+    mile+=sgn*miles;
+  }
+  return days;
+}
+/* Re-seat a restored plan on the towns it was built from, so the title, the miles field
+   and the trail-mile range can't drift apart across a reload or a change of pace. */
+function snapPlanToTowns(days, bedded, anchor, sgn){
+  let m=anchor;
+  return (days||[]).map(pd=>{
+    if(pd.zero) return pd;
+    const c=planTownAt(bedded, m+sgn*(pd.miles||0));
+    const miles=c ? Math.round(abs(c.tm-m)) : (pd.miles||0);
+    m+=sgn*miles;
+    return {...pd, miles};
+  });
+}
+/* The plan as a URL fragment — base64 JSON, no server. Round-trips through #plan=. */
+function encodePlan(days, speed, anchorTM){
+  try{ return btoa(JSON.stringify({d:days, s:speed, a:anchorTM})).replace(/=+$/,''); }
+  catch(e){ return ''; }
+}
+function decodePlan(raw){
+  const m=String(raw||'').match(/[#?&]?plan=([A-Za-z0-9+/=_-]+)/);
+  try{
+    const o=JSON.parse(atob((m?m[1]:String(raw||'').trim()).replace(/-/g,'+').replace(/_/g,'/')));
+    if(o && Array.isArray(o.d) && o.d.length) return {days:o.d, speed:o.s, anchorTM:o.a};
+  }catch(e){}
+  return null;
 }
 /* One forecast is fetched per point, so the set stays small and bounded the way the old
    town-by-town outlook was: the anchor, the rider's position stepped every `spacing`
@@ -1007,7 +1163,8 @@ function assembleOutlookHours(plan, smiles, gridByIndex, headingAt){
     if(hi==null || temp==null || temp<80 || hi<temp+1) hi=null; else hi=Math.round(hi);
     const windMph=readGrid(g,'windMph',eh), fromDeg=readGrid(g,'fromDeg',eh), heading=headingAt(hp.mile);
     const w=windOnRider(fromDeg, heading, windMph);
-    return {t:localISO(hp.tMs), hour:hp.hour, day:hp.day, mile:hp.mile, riding:hp.riding, zero:hp.zero,
+    return {t:localISO(hp.tMs), hour:hp.hour, day:hp.day, mile:hp.mile,
+      riding:hp.riding, onBike:hp.onBike, zero:hp.zero,
       heading: heading==null?null:Math.round(heading*10)/10,
       temp:r0(temp), dewpoint:r0(readGrid(g,'dewpoint',eh)), heatIndex:hi,
       rh:r0(readGrid(g,'rh',eh)), sky:r0(readGrid(g,'sky',eh)),
@@ -1245,12 +1402,41 @@ class TrailApp {
     this.hintTimer=null;
     this.avgSpeed=12; this.wxCache={}; this.wxNow=null; this.wxAsOf=null;
     this.showWx=true; this.wxPerDay=60; this.wxBusy=false;
-    // The meteogram Outlook's planning state: the ride window (a real preference), an
-    // optional zero (rest) day as a day index, a start-date shift in days, the built
-    // timeline, and the spatial forecast field it was assembled from (kept so the
-    // window/zero controls re-plan without re-fetching). wxCur is the tapped hour.
-    this.wxRideStart=8; this.wxRideEnd=17; this.wxZeroDay=-1; this.wxStartShift=0;
-    this.wxData=null; this.wxGrids=null; this.wxCur=null; this.wxGridCache={};
+    // The meteogram Outlook's planning state: the ride window (the default a new day
+    // in the plan gets), a start-date shift in days, the built timeline, and the spatial
+    // forecast field it was assembled from — kept so a change to the plan re-folds it
+    // without re-fetching. Zero days are a per-day flag on the ride plan now.
+    this.wxRideStart=8; this.wxRideEnd=17; this.wxStartShift=0;
+    this.wxData=null; this.wxGrids=null; this.wxGridCache={};
+    /* The ride plan — see the PLAN_KEY block up top. planDays is the per-day record the
+       Outlook, the plan tab and the map all read; planAnchor is the trail mile day one
+       leaves from, null until a position or a restored plan supplies one. Loaded in
+       loadPlan(), saved to localStorage under PLAN_KEY. */
+    this.planDays=null; this.planAnchor=null;
+    /* Plan tab: which day is open (one at a time), whose lodging and whose stops lists
+       are showing, and the waypoints ticked on those lists. Only `picked` is saved. */
+    this.planOpenDay=null; this.planOpenLodge=null; this.planOpenStops=null; this.planPicked={};
+    /* The mini map inside a lodging list: which day's is showing, and whether it has been
+       pulled taller. One instance, moved between rows — see planMini(). */
+    this.planMiniDay=null; this.planMiniBig=false; this._miniMap=null; this._miniWrap=null;
+    /* The bed booked for each day, by day index. Keyed by name and position rather than
+       by POI index, because that index is an artefact of the order the sources happened
+       to answer in and would point at a car park after a reload. Saved with the plan. */
+    this.planStay={};
+    /* Outlook: the scrubbed hour, how many hours are on the strip (grows as you scroll
+       out to the forecast horizon), whether the readout is the full block or one line,
+       and the day the strip is scrolled to. */
+    /* Compact to start with. The readout's one line already carries the hour, the next
+       town, the mile, the temperature, the rain and the wind verdict — the full block is
+       for when you want the rest, and the caret remembers which you asked for. */
+    this.wxSel=null; this.wxHours=48; this.wxReadOpen=false; this.wxViewDay=0; this.wxGrowing=false;
+    /* How big the graph is drawn. The strip is built in one fixed coordinate system and
+       then scaled on the way out, so this magnifies type, lines and spacing together —
+       the same thing pinching would do, except it survives a redraw and it is saved. */
+    this.wxScale=1;
+    /* Map: the plan overlay's own switches and the day whose sheet is up. */
+    this.planLayer=null; this.planPins=true; this.planEnds=true; this.planSolo=null; this.planSheet=null;
+    this._bedTowns=null; this._bedTownsN=-1;
     this.poiMarker={};
     // Station code of the counter a one-way booking starts from, while one is being
     // built across two popups. Session-only — see setRentFrom.
@@ -1430,12 +1616,16 @@ class TrailApp {
   init(){
     this.loadPrefs();
     this.loadUserLayers();
+    // Before initMap, so the plan's legs are on the map the first time it draws — and
+    // after loadPrefs, because a saved plan carries the pace it was built at.
+    this.loadPlan();
     this.buildDropdowns();
     this.buildTestRows();
     this.wireTabs();
     this.applyTripTab();
     this.applyWxTab();
     this.wireControls();
+    this.wirePlan();
     this.wirePanelDrag();
     this.watchMapStrip();
     this.initMap();
@@ -1479,6 +1669,8 @@ class TrailApp {
     if(typeof p.cyLb==='boolean') this.cyLb=p.cyLb;
     if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
     // Clamp a stored ride window to sane bounds and keep start before end.
+    if(typeof p.wxReadOpen==='boolean') this.wxReadOpen=p.wxReadOpen;
+    if(isFinite(p.wxScale)) this.wxScale=Math.max(WX_SCALES[0],Math.min(WX_SCALES[WX_SCALES.length-1],p.wxScale));
     if(isFinite(p.wxRideStart)) this.wxRideStart=Math.max(0,Math.min(21,p.wxRideStart|0));
     if(isFinite(p.wxRideEnd)) this.wxRideEnd=Math.max(this.wxRideStart+1,Math.min(23,p.wxRideEnd|0));
     if(isFinite(p.miMin)) this.miMin=p.miMin;
@@ -1541,7 +1733,7 @@ class TrailApp {
     this.syncSortUi(); this.syncFilterState();
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxScale:this.wxScale,wxReadOpen:this.wxReadOpen,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,aadtLb:this.aadtLb,cyLb:this.cyLb,
       elevOn:this.elevOn,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
@@ -2312,6 +2504,10 @@ class TrailApp {
     // one screen is active at a time, so a flag for this would be a flag that is always
     // set. renderNearby's own mount test decides whether there is anything to do.
     if(name==='nearby') this.renderNearby();
+    // Same reason as Nearby: the plan reads the pins and the pace, and both move while
+    // you are on another screen. Rebuilt on the way in rather than tracked for staleness.
+    if(name==='plan') this.renderPlan();
+    if(name==='wx') this.renderOutlook();
     // Only resize. Recentring here threw away wherever you had panned to the moment
     // you glanced at another tab and came back.
     if(name==='map' && this.map){ setTimeout(()=>{ this.map.invalidateSize(); this.flushFit(); },60); }
@@ -2560,12 +2756,15 @@ class TrailApp {
       this.savePrefs(); this.renderAll();
       this.status('Showing trail mile '+lo+' to '+hi+' — the stretch on the map.');
     });
-    const wg=this.$('wxGo');
-    if(wg) wg.addEventListener('click',()=>this.buildOutlook());
+    /* The Outlook screen is the graph and nothing else, so its one button is built and
+       rebuilt inside the render — delegated rather than bound to a node that a redraw
+       throws away. */
+    const wo=this.$('wxOut');
+    if(wo) wo.addEventListener('click',e=>{ if(e.target.closest('[data-wxgo]')) this.buildOutlook(); });
     const rd=id=>{ const el=this.$(id); if(!el) return;
       el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this.wxPerDay=n; this.savePrefs();
-        // With an outlook already on screen, a new miles-a-day re-plans it (re-fetching
-        // only if the longer day now runs past the ground already sampled).
+        // Miles a day is the target Auto-plan aims at; it does not move a plan already
+        // made. With an outlook already on screen, a re-plan re-folds the cached field.
         if(this.wxData && !this.wxData.err && !this.wxData.loading) this.wxReplan(); } }); };
     rd('wxPerDay');
     const sw=this.$('showWx');
@@ -2577,6 +2776,8 @@ class TrailApp {
         const e2=this.$('wxSpeedEcho'); if(e2) e2.textContent=n;
         // Speed decides where each forecast hour lands, so the layer is now wrong.
         if(this.wxLayer && this.map && this.map.hasLayer(this.wxLayer)) this.loadWeather();
+        // …and it decides what hour each day gets in at, so the plan moved too.
+        this.savePlan(); this.planChanged();
       }
     });
     /* Nothing listens for the filter block opening any more. The fold is a native
@@ -3328,6 +3529,12 @@ class TrailApp {
       if(move) this.map.setView(ll, Math.max(this.map.getZoom(),10));
     }
     this.savePrefs();
+    /* A plan nobody has touched follows the rider — that is what makes the first open
+       useful without asking for anything. The moment a day is edited it stops moving,
+       because a plan you have made decisions about must not re-base under you. */
+    if(this._planAuto!==false && abs((this.planAnchor==null?pr.mile:this.planAnchor)-pr.mile)>3){
+      this.planRebuild(); this._planAuto=true; this.planChanged();
+    }
     this.renderAll();
   }
   /* Moving the map to a place you picked from a list answered "where" and left
@@ -6020,21 +6227,872 @@ class TrailApp {
     const start=new Date(now.getFullYear(),now.getMonth(),now.getDate()+d,8,0,0,0).getTime();
     return (d===0 && now.getTime()>start) ? now.getTime() : start;
   }
+  /* ═══════ the ride plan ═══════════════════════════════════════════════════════
+     The days the Outlook graph and the map both read. The mock this was drawn from
+     carried a table of towns with hotel and camp counts baked in; here the counts come
+     off the app's own pins, so a town has beds because something is pinned at it. */
+
+  /* Everywhere along the route you could actually sleep, worked out from the pins.
+
+     This used to be the app's hand-kept TOWNS table filtered to the ones with beds, and
+     that made the table the ceiling: a night somewhere the table didn't list — Niagara
+     Falls, a hamlet with one motel — simply could not be planned. So the places are
+     derived instead. Every lodging and camping pin within the corridor is grouped by the
+     city in its own address, falling back to the nearest trail town when it has no
+     address to give, and each group becomes a place with a milepost of its own.
+
+     Nothing to process and nothing to maintain: add a pin to data/pois-chris.json, or
+     let the State service publish one, and the place appears in the plan by itself. */
+  bedTowns(){
+    if(this._bedTowns && this._bedTownsN===this.POIS.length) return this._bedTowns;
+    const bedKind=p=>{
+      const a=p.asset;
+      if(a==='Lodging' || a==='nb-lodging') return 'hotel';
+      if(a==='Campground' || a==='Lock camping' || a==='nb-camp') return 'camp';
+      return null;
+    };
+    const groups=new Map();
+    this.POIS.forEach(p=>{
+      const kind=bedKind(p);
+      if(!kind || p.mile==null || p.off>PLAN_BED_OFF_MI) return;
+      // poiCat is the app's own reading of a lock camp; reuse it rather than re-deciding
+      const lock=poiCat(p)==='Lock camping';
+      /* Its own address city first — that is the name on the road sign and the name a
+         rider would say. The nearest trail town is the fallback, for the pins (mostly
+         campgrounds) that carry no address at all. */
+      const near=nearestTown(p.mile);
+      const name=poiCity(p) || (near ? this.shortTown(near.n) : '');
+      if(!name) return;
+      const key=normKey(name);
+      let g=groups.get(key);
+      if(!g){ g={n:name, beds:[], hotel:0, camp:0}; groups.set(key,g); }
+      g.beds.push({p, kind, lock}); g[kind]++;
+    });
+    const rows=[];
+    groups.forEach(g=>{
+      /* Where the place is: the median of its own beds' mileposts. A median rather than
+         a mean because one motel out on a bypass should not drag the whole town two
+         miles up the trail. */
+      /* A name whose beds are strung out over more than a day's detour is a name shared
+         by two places. Peel the clusters apart rather than keeping the first and throwing
+         the rest away — canal locks are addressed to the nearest post town, so "Rome"
+         covers both the hotels in Rome and Locks 21 and 22 out at New London eight miles
+         off, and discarding the strays lost the free lock camping entirely.
+
+         The first cluster keeps the city's name, because it is the one the name is really
+         about. Each later one is named for the pin at its own centre, which for a lock is
+         exactly what a rider calls it: "Lock 21 New London". */
+      let rest=g.beds.slice();
+      const clusters=[];
+      while(rest.length){
+        const ms2=rest.map(b=>b.p.mile).sort((a,b)=>a-b);
+        const mid=ms2[Math.floor(ms2.length/2)];
+        rest.forEach(b=>{ b.gap=abs(b.p.mile-mid); });
+        const core=rest.filter(b=>b.gap<=PLAN_PLACE_SPREAD_MI);
+        rest=rest.filter(b=>b.gap>PLAN_PLACE_SPREAD_MI);
+        if(!core.length) break;
+        core.sort((a,b)=> (a.kind===b.kind ? a.gap-b.gap : a.kind==='hotel'?-1:1));
+        clusters.push({mid, core, seat:core.reduce((a,b)=> b.gap<a.gap ? b : a)});
+      }
+      /* Splitting exists to rescue the canal locks — they are addressed to a post town
+         miles away and were being thrown out with the rest of that town's outliers. It is
+         NOT for fracturing a town: Lockport's hotels are strung twelve miles along the
+         canal and are still Lockport, and cutting them into three places suffixed with
+         mileposts made a mess of every title that named one.
+
+         So a cluster only becomes a place of its own when the pin at its centre is itself
+         a place — a lock, a state park, a refuge. Everything else folds back into the
+         city, however far along the trail it sits. */
+      clusters.sort((a,b)=>b.core.length-a.core.length);
+      const main=[];
+      clusters.forEach((c,rank)=>{
+        if(rank>0 && PLACE_LIKE.test(c.seat.p.name||'')){
+          rows.push({n:c.seat.p.name, full:c.seat.p.name, tm:c.mid,
+            lat:c.seat.p.lat, lng:c.seat.p.lng, beds:c.core,
+            hotel:c.core.filter(b=>b.kind==='hotel').length,
+            camp:c.core.filter(b=>b.kind==='camp').length});
+        } else main.push(...c.core);
+      });
+      if(main.length){
+        const mm=main.map(b=>b.p.mile).sort((a,b)=>a-b);
+        const mid=mm[Math.floor(mm.length/2)];
+        main.forEach(b=>{ b.gap=abs(b.p.mile-mid); });
+        main.sort((a,b)=> (a.kind===b.kind ? a.gap-b.gap : a.kind==='hotel'?-1:1));
+        const seat=main.reduce((a,b)=> b.gap<a.gap ? b : a);
+        rows.push({n:g.n, full:g.n, tm:mid, lat:seat.p.lat, lng:seat.p.lng, beds:main,
+          hotel:main.filter(b=>b.kind==='hotel').length,
+          camp:main.filter(b=>b.kind==='camp').length});
+      }
+    });
+    rows.sort((a,b)=>a.tm-b.tm);
+    this._bedTownsN=this.POIS.length;
+    return this._bedTowns=rows;
+  }
+  /* The name of wherever a milepost is, bedded or not — for saying where a day STARTS,
+     which is a fact about the trail rather than about the beds. */
+  placeNameAt(mile){
+    const p=planTownAt(this.bedTowns(), mile);
+    if(p) return p.n;
+    const t=nearestTown(mile);
+    return (t && abs(t.mi-mile)<=PLAN_SNAP_MI) ? this.shortTown(t.n) : 'mile '+Math.round(mile);
+  }
+  // Every derived place has beds by construction; the alias is kept for the callers
+  // that read as "somewhere you could stop", which is the question they are asking.
+  beddedTowns(){ return this.bedTowns(); }
+  /* How a town's beds read in one phrase. Deliberately the same wording everywhere it
+     appears — the day summary, the dropdown option and the map sheet all call this. */
+  bedWord(t){
+    if(!t) return 'no beds';
+    if(t.hotel && t.camp) return t.hotel+(t.hotel>1?' hotels':' hotel')+' · '+t.camp+' camp'+(t.camp>1?'s':'');
+    if(t.hotel) return t.hotel+(t.hotel>1?' hotels':' hotel');
+    if(t.camp) return t.camp+(t.camp>1?' campsites':' campsite');
+    return 'no beds';
+  }
+  /* The actual places, from the pins. Capped: this is a disclosure inside a day row, not
+     the Nearby list, and a rider deciding where to stop wants the nearest few.
+
+     Deduped by name, because the same inn is in NY State's register AND in the
+     OpenStreetMap corridor, and two rows for one bed is a list that overstates the town.
+     The first one wins, which is the nearest, which is the State record where there is
+     one — see how bedTowns sorts. */
+  planLodging(t, fromMile){
+    if(!t) return [];
+    const seen=new Set(), sgn=this.dirSign();
+    return t.beds.filter(b=>{
+      const k=normKey(b.p.name||''); if(!k) return true;
+      if(seen.has(k)) return false; seen.add(k); return true;
+    }).slice(0, PLAN_LODGE_MAX).map(b=>({
+      poi:b.p, name:b.p.name||'(unnamed)', kind:b.kind, hotel:b.kind==='hotel',
+      mark:b.lock ? 'lock' : b.kind,
+      addr:b.p.addr||(t.n+', NY'), tel:b.p.phone||'',
+      /* The two distances a tired rider actually asks about: how much further along the
+         trail it is than where the day stops (negative means back the way you came), and
+         how far off the trail you then have to turn. Both from the pin's own milepost. */
+      along: (fromMile==null || b.p.mile==null) ? null : (b.p.mile-fromMile)*sgn,
+      off: b.p.off==null || b.p.off>90 ? null : b.p.off,
+      mapHref:'https://www.google.com/maps/search/?api=1&query='+b.p.lat+','+b.p.lng
+    }));
+  }
+  // The same two distances, said in words, or '' when it is close enough not to matter.
+  planLodgeWhere(p){
+    const bits=[];
+    if(p.along!=null && abs(p.along)>=0.3)
+      bits.push(abs(p.along).toFixed(1)+' mi '+(p.along>0?'further on':'back'));
+    if(p.off!=null && p.off>=0.3) bits.push(p.off.toFixed(1)+' mi off the trail');
+    return bits.length ? ' · '+bits.join(' · ') : '';
+  }
+  /* Candidate stops between two mileposts, from the pins that are worth stopping at.
+     The day's own destination is never offered — you are sleeping there, not stopping. */
+  planWayStops(d, a, b){
+    const lo=Math.min(a,b)+2, hi=Math.max(a,b)-2;
+    if(!(hi>lo)) return [];
+    const endT=planTownAt(this.bedTowns(), b);
+    const out=[];
+    this.POIS.forEach(p=>{
+      const kind=PLAN_STOP_CAT[p.asset];
+      if(!kind || p.mile==null || p.mile<lo || p.mile>hi || p.off>PLAN_STOP_OFF_MI) return;
+      const near=planTownAt(this.bedTowns(), p.mile, PLAN_SNAP_MI);
+      if(endT && near && near.n===endT.n) return;
+      out.push({key:d+':'+(p.name||'')+':'+Math.round(p.mile*10), name:p.name||PLAN_STOP_CAT[p.asset],
+        kind, asset:p.asset, mile:p.mile, lat:p.lat, lng:p.lng, off:p.off, poi:p});
+    });
+    out.sort((x,y)=> (x.mile-y.mile)*(this.dirSign()));
+    return out.slice(0, PLAN_STOP_MAX);
+  }
+
+  planStayKey(poi){
+    return (poi.name||'')+'|'+(+poi.lat).toFixed(4)+','+(+poi.lng).toFixed(4);
+  }
+  // The row the rider picked for a day, found again among whatever this load's pins are.
+  planStayFor(d, lodge){
+    const k=this.planStay[d]; if(!k) return null;
+    return (lodge||[]).find(p=>this.planStayKey(p.poi)===k) || null;
+  }
+  /* The plan itself, built on first ask so an app that has never had one still draws.
+     _planAuto marks a plan nobody has touched — it is the licence to rebuild it once the
+     facility pins arrive and the towns can finally say which of them have beds. */
+  planP(){
+    if(!this.planDays){ this.planRebuild(); this._planAuto=true; }
+    return this.planDays;
+  }
+  planPoisReady(){
+    this._bedTowns=null;
+    if(!this.beddedTowns().length) return;
+    if(this._planAuto) this.planRebuild();
+    else this.planSnap();
+    this.planChanged();
+  }
+  /* Rebuild from wherever the rider is now, and PIN that mile as the plan's anchor.
+     Pinning is the point: without it planStartMile keeps answering "wherever you are",
+     the day bounds re-base every time you move, and the town a day was planned around
+     stops being the town its own mileage lands on. From here only the Starting-at
+     dropdown moves it. */
+  planRebuild(){
+    this.planAnchor=null;
+    this.planAnchor=this.planStartMile();
+    this.planDays=defaultRidePlan(this.beddedTowns(), this.planAnchor, this.dirSign(),
+      Math.max(5,this.wxPerDay||60), this.wxRideStart, PLAN_DAYS, TOTAL);
+  }
+  /* Where day one leaves from. A plan the rider saved keeps its own anchor across a
+     reload — otherwise a phone that has lost its fix would silently re-plan the trip
+     from wherever the map happens to be pointing. */
+  planStartMile(){
+    if(this.planAnchor!=null) return this.planAnchor;
+    const a=this.wxAnchorMile();
+    return a==null ? (this.dir==='B2NYC' ? TOTAL : 0) : a;
+  }
+  planBounds(){ return planDayBounds(this.planP(), this.planStartMile(), this.dirSign(), TOTAL); }
+  // One town, one answer — every widget that names a day's end calls this and no other.
+  planDayTown(d){
+    const b=this.planBounds()[d]; if(!b) return null;
+    return planTownAt(this.bedTowns(), b.end);
+  }
+  planDayEndHour(d){
+    const pd=this.planP()[d]; if(!pd) return this.wxRideEnd;
+    return planDaySpec({dayPlan:this.planP(), speed:this.avgSpeed>0?this.avgSpeed:12,
+      perDay:Math.max(5,this.wxPerDay||60), rideStart:this.wxRideStart, rideEnd:this.wxRideEnd}, d).end;
+  }
+  /* Change one day without dragging the rest of the trip with it.
+
+     A day is stored as a length, but what the rider picked was a DESTINATION — and every
+     later day's start is the one before it's end, so lengthening Tuesday used to push
+     Thursday's town twenty miles up the trail along with the hotel they had already
+     chosen there. So when a day's distance changes, the days after it keep the mileposts
+     they already ended at, and their lengths are recomputed to suit. A later day the
+     change has ridden straight past collapses to no miles, which is the truth: you got
+     there yesterday. */
+  setPlanDay(d, patch){
+    const before=this.planBounds();
+    const next=this.planP().map((x,i)=> i===d ? {...x, ...patch} : x);
+    if(patch.miles!==undefined || patch.zero!==undefined){
+      const sgn=this.dirSign();
+      let m=this.planStartMile();
+      for(let i=0;i<next.length;i++){
+        if(next[i].zero) continue;
+        if(i<=d){ m+=sgn*(next[i].miles||0); continue; }
+        const want=before[i] ? before[i].end : m+sgn*(next[i].miles||0);
+        const gone=(want-m)*sgn;
+        const miles=gone>0 ? Math.round(gone) : 0;
+        next[i]={...next[i], miles};
+        m+=sgn*miles;
+      }
+    }
+    this.planDays=next; this._planAuto=false; this.savePlan(); this.planChanged();
+  }
+  /* Auto-plan re-anchors on purpose: pressing it three days into the trip should plan
+     the days you have left, from where you are, not from where you set off. */
+  autoPlan(){
+    this.planRebuild();
+    this._planAuto=false; this.savePlan(); this.planChanged();
+  }
+  /* The plan as a link — base64 JSON in the fragment, no server. The design took the
+     share button off the screen, so this is a console affordance like window.app itself:
+     app.planLink() gives you something to paste, and loadPlan reads it back on open. */
+  planLink(){
+    return location.origin+location.pathname+'#plan='
+      +encodePlan(this.planP(), this.avgSpeed, this.planStartMile());
+  }
+  savePlan(){
+    try{ localStorage.setItem(PLAN_KEY, JSON.stringify({days:this.planP(),
+      speed:this.avgSpeed, anchorTM:this.planStartMile(), stay:this.planStay})); }catch(e){}
+  }
+  /* A shared link wins over the saved plan, because someone who just opened one is
+     asking to see it. Restored days are re-snapped onto their towns first — see
+     snapPlanToTowns for why that can't wait until something asks. */
+  loadPlan(){
+    const fromUrl=location.hash.indexOf('plan=')>=0 ? decodePlan(location.hash) : null;
+    let saved=fromUrl;
+    if(!saved){ try{ saved=decodeSavedPlan(localStorage.getItem(PLAN_KEY)); }catch(e){} }
+    if(!saved) return;
+    if(isFinite(saved.speed) && saved.speed>0) this.avgSpeed=saved.speed;
+    if(isFinite(saved.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,saved.anchorTM));
+    this.planDays=saved.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
+      start:isFinite(pd.start)?pd.start:this.wxRideStart, end:isFinite(pd.end)?pd.end:null,
+      zero:!!pd.zero})).slice(0,PLAN_DAYS);
+    this._planAuto=false;
+    if(saved.stay && typeof saved.stay==='object') this.planStay={...saved.stay};
+    this.planSnap();
+    if(fromUrl) this.savePlan();
+  }
+  planSnap(){
+    if(!this.planDays) return;
+    const bedded=this.beddedTowns();
+    if(bedded.length) this.planDays=snapPlanToTowns(this.planDays, bedded, this.planStartMile(), this.dirSign());
+    // Snapping can only move a day's miles; the bounds decide what it actually covers.
+    const bs=this.planBounds();
+    this.planDays=this.planDays.map((pd,i)=> pd.zero||bs[i]==null ? pd : {...pd, miles:Math.round(bs[i].miles)});
+  }
+  /* One place for "the plan moved". The Outlook re-folds against the field it already
+     fetched where it can, the plan tab and the map legs redraw, and the layers card's
+     day key follows — nothing here goes to the network unless the ride walked off the
+     ground the forecast was sampled over. */
+  planChanged(){
+    this._planKey=null;
+    if(this.screen==='plan') this.renderPlan();
+    this.drawPlanLayer();
+    if(this.wxData && !this.wxData.err && !this.wxData.loading) this.wxReplan();
+  }
+
+  /* ---------- the ride plan tab ----------
+     Where each day ends, and nothing else. The Outlook graph and the map's legs both
+     read these rows, so this is the screen that decides the other two. One day is open
+     at a time: a plan is a sequence of decisions and you make them one at a time.
+
+     The primary control is a town, not a mileage. "Ride to Albany · 57 mi · 9 hotels"
+     is the decision a tourer actually makes; the miles are the consequence. The mileage
+     box is still there, pushed right and named "or set miles", for the day that ends
+     somewhere with no name. */
+  planDateFor(d){
+    const now=new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()+(this.wxStartShift||0)+d);
+  }
+  planDayLabel(d){
+    return this.planDateFor(d).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+  }
+  planClock(hr){ const h=((hr%24)+24)%24, s=h%12===0?12:h%12; return s+(h<12?' am':' pm'); }
+  planTick(hr){ const h=((hr%24)+24)%24, s=h%12===0?12:h%12; return s+(h<12?'am':'pm'); }
+  planDayCol(d){ return PLAN_DAY_COLS[d%PLAN_DAY_COLS.length]; }
+
+  renderPlan(){
+    const el=this.$('planOut'); if(!el) return;
+    const days=this.planP(), bounds=this.planBounds(), bedded=this.beddedTowns();
+    const sgn=this.dirSign(), speed=this.avgSpeed>0?this.avgSpeed:12;
+    const tot=bounds.reduce((m,b,i)=>m+(days[i].zero?0:b.miles),0);
+    const zs=days.filter(x=>x.zero).length;
+    const ridden=bounds.filter((b,i)=>!days[i].zero && b.miles>0.5).length;
+    const anchor=this.planStartMile();
+    const h=[];
+
+    /* header */
+    h.push('<div class="pl-head">'
+      +'<div class="pl-head-1">'
+        +'<div class="pl-title-wrap"><div class="pl-title">Ride plan</div>'
+        +'<div class="pl-sum">'+ridden+(ridden===1?' riding day · ':' riding days · ')+Math.round(tot)+' mi'
+          +(zs?' · '+zs+' zero':'')+'</div></div>'
+        +'<button type="button" class="pl-auto" data-plan="auto">Auto-plan</button>'
+        +'<button type="button" class="pl-save" data-plan="save">Save</button>'
+      +'</div>'
+      +'<div class="pl-head-2">'
+        +'<span class="pl-field"><span class="pl-k">Starting at</span>'
+        /* "Here" has to say where here IS. A bare milepost is the one thing on this
+           screen a rider cannot picture, and when the anchor happened to land on a place
+           already in the list below, the list showed that place ticked while the row
+           reading "Here" did not — two rows for one spot, disagreeing about which was
+           chosen. So: name it, and when it IS one of them, drop the duplicate. */
+        +(()=>{
+          const at=planTownAt(bedded, anchor, 0.5);
+          const near=at ? null : planTownAt(bedded, anchor);
+          const where=at ? ' · '+esc(at.n)
+            : near ? ' · '+Math.round(abs(near.tm-anchor))+' mi from '+esc(near.n) : '';
+          return '<select class="pl-sel" data-plan="anchor">'
+            +'<option value="'+esc(String(anchor))+'" selected>Here'+where+' · '+mpTxt(anchor)+'</option>'
+            /* In the order you would ride past them, not in milepost order — riding to
+               NYC walks the mileposts DOWN, so a numeric sort hands the list back
+               reversed. */
+            +bedded.filter(t=>!(at && t.tm===at.tm)).sort((x,y)=>(x.tm-y.tm)*sgn)
+              .map(t=>'<option value="'+t.tm+'">'+esc(t.n)+' · '+mpTxt(t.tm)+'</option>').join('')
+            +'</select>';
+        })()+'</span>'
+        /* Named for what it is. "Pace" next to "mph" reads as the moving average a bike
+           computer shows, and it is not that — the plan turns this straight into the hour
+           you get in, so lunch, locks, photographs and a puncture are all already inside
+           it. A 12 that means 12 on the road will put you at the hotel after dark. */
+        +'<span class="pl-field"><span class="pl-k">Pace incl. stops</span>'
+        +'<input class="pl-num" type="number" inputmode="numeric" min="4" max="25" value="'+speed+'"'
+        +' data-plan="speed" title="Overall average from wheels-out to wheels-in, stops included — not a moving average">'
+        +'<span class="pl-unit">mph</span></span>'
+        +'<button type="button" class="pl-pin" data-plan="tomap" title="See the days on the map" aria-label="See the days on the map">'
+        +'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>'
+        +'</button>'
+      +'</div>'
+    +'</div>');
+
+    const moonSvg=col=>'<svg class="pl-moon" width="11" height="11" viewBox="0 0 24 24" fill="'+col+'" stroke="none"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"></path></svg>';
+    const warnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#b3261e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"></path><path d="M12 10v5"></path><path d="M12 17.6v.01"></path></svg>';
+    const caretSvg=(open,col)=>'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="'+(col||'#9b9797')+'" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"'
+      +(open?'':' style="transform:rotate(180deg)"')+'><path d="M6 15l6-6 6 6"></path></svg>';
+    /* Bed, tent, lock — three marks because they are three different nights. The lock
+       one especially: free canal camping is not the same proposition as a campground and
+       should not wear its icon. */
+    const BED_COL={hotel:'#0f6a8b', camp:'#4a7a3a', lock:'#2b6a84'};
+    const bedIc=(mark,size)=>'<span class="pl-bic" style="color:'+(BED_COL[mark]||'#605d5d')+'">'
+      +icon(mark==='hotel'?'bed':mark==='lock'?'canallock':'tent', size)+'</span>';
+
+    days.forEach((pd,d)=>{
+      const b=bounds[d], de=this.planDayEndHour(d);
+      const atT=this.planDayTown(d);
+      const fromN=this.placeNameAt(b.start);
+      const open=this.planOpenDay===d;
+      // Past the end of the trail there is nothing to plan, and saying "between towns"
+      // about it would be a warning about a day that does not exist.
+      const spent=!pd.zero && b.miles<0.5;
+      const warn=!pd.zero && !spent && !atT;
+      const noBed=!pd.zero && !spent && !(atT && (atT.hotel||atT.camp));
+      const dt=this.planDateFor(d);
+      const DW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      // Which bed, if one has been picked. Named in the summary in place of the count:
+      // "4 hotels" is a question, "Rodeway Inn" is an answer.
+      const dayLodge=this.planLodging(atT, b.end), stay=this.planStayFor(d, dayLodge);
+      const title=pd.zero ? 'Rest day at '+fromN
+        : spent ? 'Nothing left to ride'
+        : fromN+' → '+(atT?atT.n:'between towns');
+      const summary=pd.zero ? 'Rest day'
+        : spent ? 'The trail ends at '+fromN
+        : this.planTick(pd.start)+'–'+this.planTick(Math.round(de))
+          +' · '+(stay ? stay.name
+            : (atT&&(atT.hotel||atT.camp) ? this.bedWord(atT) : 'no beds'));
+      const moonCol=(pd.zero||spent) ? '#7d7979' : (atT&&(atT.hotel||atT.camp) ? '#3b3a6a' : '#b3261e');
+
+      h.push('<div class="pl-day'+(pd.zero?' pl-zero':'')+'" data-d="'+d+'">'
+        /* Which day of the trip, under the date. It goes in the rail because the rail
+           already had the slack — the hairline below it is a flex filler, so the number
+           costs the row nothing it was using. */
+        +'<div class="pl-rail"><div class="pl-dw">'+DW[dt.getDay()]+'</div>'
+          +'<div class="pl-dn">'+dt.getDate()+'</div>'
+          +'<div class="pl-dc">Day '+(d+1)+'</div>'
+          +'<div class="pl-hair" style="background:'+this.planDayCol(d)+'"></div></div>'
+        +'<div class="pl-body">'
+          +'<div class="pl-top">'
+            +'<button type="button" class="pl-toggle" data-plan="open" data-d="'+d+'">'
+              +'<span class="pl-tl">'+(warn?warnSvg:'')
+                +'<span class="pl-t"'+(warn?' style="color:#b3261e"':'')+'>'+esc(title)+'</span>'
+                +caretSvg(open)+'</span>'
+              +'<span class="pl-s">'+moonSvg(moonCol)+esc(summary)+'</span>'
+            +'</button>'
+            /* The distance, in the empty half of the title row. It was buried at the head
+               of the summary line, which is the line that ellipsises first — and it is the
+               number you scan the list for. */
+            +(pd.zero||spent ? '' : '<span class="pl-mi">'+Math.round(b.miles)+'<i>mi</i></span>')
+            /* A two-state control, labelled by what pressing it does rather than by what
+               the day currently is — "Riding" sitting there in a box read as a status
+               and nobody could see it was the way to book a rest day. */
+            +'<button type="button" class="pl-pill'+(pd.zero?' on':'')+'" data-plan="zero" data-d="'+d+'"'
+              +' aria-pressed="'+(pd.zero?'true':'false')+'" title="'
+              +(pd.zero?'Ride this day instead':'Make this a rest day')+'">'
+              +(pd.zero?'✓ Zero day':'+ Zero day')+'</button>'
+          +'</div>');
+
+      if(open){
+        /* "Ride to" — the towns ahead, in the order you would reach them, each with the
+           day it would make and the beds it has. No bands: a rider reading down a list of
+           towns already knows which are near and which are far, and sorting them into
+           "about right" and "longer" only buries the one they were looking for. Capped at
+           PLAN_DAY_MAX_MI so the list stops at days rather than at the end of the trail. */
+        const ahead=this.bedTowns()
+          .filter(t=>{ const m=(t.tm-b.start)*sgn; return m>2 && m<=PLAN_DAY_MAX_MI; })
+          .sort((p,q)=>(p.tm-q.tm)*sgn);
+        let opts=ahead.map(t=>'<option value="'+t.tm+'"'+(atT&&t.tm===atT.tm?' selected':'')+'>'
+            +esc(t.n)+' · '+Math.round(abs(t.tm-b.start))+' mi · '+esc(this.bedWord(t))+'</option>').join('');
+        /* The end of the trail, always — it is the one destination that is a destination
+           whether or not anything is pinned at it, and the list was leaving it out
+           because it is chosen by beds. Skipped only when a place already sits on it. */
+        (()=>{
+          const term=sgn<0 ? 0 : TOTAL, gone=(term-b.start)*sgn;
+          if(gone<=2 || gone>PLAN_DAY_MAX_MI) return;
+          if(ahead.some(t=>abs(t.tm-term)<=3)) return;
+          const nt=nearestTown(term);
+          opts+='<option value="'+term+'"'+(!atT && abs(b.end-term)<3?' selected':'')+'>'
+            +esc(nt?this.shortTown(nt.n):'the end')+' · '+Math.round(abs(gone))+' mi · end of the trail</option>';
+        })();
+        // a day that ends nowhere named still has to be able to show what it is
+        if(!atT) opts+='<option value="'+Math.round(b.end)+'" selected>⚠ '
+              +Math.round(b.miles)+' mi · between towns, no beds</option>';
+
+        h.push('<div class="pl-row"><span class="pl-k">Ride to</span>'
+          +'<select class="pl-sel pl-to" data-plan="to" data-d="'+d+'"'+(pd.zero?' disabled':'')+'>'+opts+'</select></div>');
+
+        const hrOpts=(list,cur)=>list.map(v=>'<option value="'+v+'"'+(Math.round(cur)===v?' selected':'')+'>'
+          +this.planClock(v)+'</option>').join('');
+        h.push('<div class="pl-row pl-row-w">'
+          +'<span class="pl-field"><span class="pl-k">Out</span>'
+            +'<select class="pl-sel" data-plan="start" data-d="'+d+'">'+hrOpts([4,5,6,7,8,9,10,11,12],pd.start)+'</select></span>'
+          +'<span class="pl-field"><span class="pl-k">In</span>'
+            +'<select class="pl-sel" data-plan="end" data-d="'+d+'">'+hrOpts([9,10,11,12,13,14,15,16,17,18,19,20,21,22],de)+'</select>'
+            +'<span class="pl-note">'+(pd.end==null?'auto · '+speed+' mph':'set by you')+'</span></span>'
+          +'<span class="pl-field pl-right"><span class="pl-k">or set miles</span>'
+            +'<input class="pl-num" type="number" inputmode="numeric" min="0" max="160" value="'+Math.round(b.miles)+'" data-plan="miles" data-d="'+d+'"></span>'
+        +'</div>');
+
+        if(noBed){
+          const near=this.bedTowns().filter(t=>abs(t.tm-b.end)<=14)
+            .sort((p,q)=>abs(p.tm-b.end)-abs(q.tm-b.end)).slice(0,3);
+          h.push('<div class="pl-nobed"><span class="pl-nobed-k">'+warnSvg+'No beds there. Nearest:</span>'
+            +(near.length ? near.map(t=>'<button type="button" class="pl-chip" data-plan="pick" data-d="'+d+'" data-tm="'+t.tm+'">'
+                +esc(t.n)+' · '+Math.round(abs(t.tm-b.start))+' mi day</button>').join('')
+              : '<span class="pl-nobed-none">nothing pinned within 14 miles either way</span>')
+          +'</div>');
+        }
+
+        const lodge=dayLodge;
+        if(lodge.length){
+          const lopen=this.planOpenLodge===d;
+          h.push('<div class="pl-disc">'
+            +'<div class="pl-disc-h">'
+              +'<button type="button" class="pl-disc-b" data-plan="lodge" data-d="'+d+'">'
+                +caretSvg(lopen,'currentColor')
+                +(stay ? 'Staying at '+esc(stay.name)
+                       : lodge.length+' place'+(lodge.length>1?'s':'')+' to sleep in '+esc(atT.n))+'</button>'
+              +'<button type="button" class="pl-maplink'+(this.planMiniDay===d?' on':'')+'" data-plan="mini" data-d="'+d+'"'
+                +' aria-pressed="'+(this.planMiniDay===d?'true':'false')+'">'
+                +'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>'
+                +(this.planMiniDay===d?'Hide map':'Map')+'</button>'
+            +'</div>');
+          /* The mini map lives between the toggle and the list, so the pins and the rows
+             they belong to are on screen together. The element here is only a socket —
+             planMini moves the one real Leaflet instance into it after the render. */
+          if(this.planMiniDay===d) h.push('<div class="pl-minibox">'
+            +'<div class="pl-mini'+(this.planMiniBig?' big':'')+'" data-planmini></div>'
+            +'<div class="pl-mini-bar">'
+              +'<button type="button" data-plan="minibig">'+(this.planMiniBig?'Smaller':'Bigger')+'</button>'
+              +'<button type="button" data-plan="minifull" data-lat="'+atT.lat+'" data-lng="'+atT.lng+'" data-z="14">Open in the map</button>'
+              +'<button type="button" class="pl-mini-x" data-plan="mini" data-d="'+d+'">Hide</button>'
+            +'</div></div>');
+          /* Picking one is the point of the list: the day's town is where you ride to,
+             this is where you actually sleep, and the map's overnight marker follows it. */
+          if(lopen) h.push('<div class="pl-lodge" role="radiogroup" aria-label="Where you sleep on this night">'
+            +lodge.map(p=>{
+            const on=stay && this.planStayKey(p.poi)===this.planStayKey(stay.poi);
+            return '<div class="pl-lrow'+(on?' on':'')+'">'
+            /* A radio, not a checkbox: you sleep in one bed. Picking another moves the
+               night rather than adding to it, and the control has to say that before it
+               is pressed, not after. */
+            +'<button type="button" class="pl-ltick'+(on?' on':'')+'" data-plan="stay" data-d="'+d+'"'
+              +' data-key="'+esc(this.planStayKey(p.poi))+'" role="radio" aria-checked="'+(on?'true':'false')+'"'
+              +' aria-label="'+(on?'Staying here':'Stay here on this night')+'"'
+              +' title="'+(on?'Not staying here after all':'Stay here on this night')+'"><i></i></button>'
+            +bedIc(p.mark,14)
+            +'<div class="pl-lbody"><div class="pl-lname">'+esc(p.name)+'</div>'
+              +'<div class="pl-laddr">'+esc(p.addr)+esc(this.planLodgeWhere(p))+'</div>'
+              +'<div class="pl-lacts">'
+                +(p.tel?'<a href="tel:'+esc(p.tel.replace(/[^0-9+]/g,''))+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h4l2 5-2.5 1.5a12 12 0 0 0 6 6L15 14l5 2v4a1 1 0 0 1-1.1 1A17 17 0 0 1 3 5.1 1 1 0 0 1 4 4Z"></path></svg>'+esc(p.tel)+'</a>':'')
+                +'<button type="button" data-poi="'+p.poi.i+'" data-lat="'+p.poi.lat+'" data-lng="'+p.poi.lng+'" data-z="15"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>Map</button>'
+                +'<a href="'+p.mapHref+'" target="_blank" rel="noopener"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg>Directions</a>'
+              +'</div></div></div>'; }).join('')+'</div>');
+          h.push('</div>');
+        }
+
+        if(!pd.zero){
+          const stops=this.planWayStops(d, b.start, b.end);
+          const sopen=this.planOpenStops===d;
+          const picked=stops.filter(s=>this.planPicked[s.key]).length;
+          h.push('<div class="pl-disc">'
+            +'<button type="button" class="pl-disc-b" data-plan="stops" data-d="'+d+'">'
+              +caretSvg(sopen,'currentColor')
+              +(picked ? picked+(picked===1?' stop':' stops')+' along the way'
+                : (stops.length? 'Add a stop along the way' : 'Nothing pinned along this day'))
+            +'</button>');
+          /* The name on its own line with what it IS and where it IS on the line under
+             it. The mile used to be flush right, which meant reading a name and then
+             tracking the eye the width of the phone to find out whether it was worth
+             stopping at — the two facts belong next to each other. The category leads
+             that line as its own label rather than trailing the name after a dot, where
+             it read as part of the shop's name. */
+          if(sopen && stops.length) h.push('<div class="pl-stops">'+stops.map(s=>{
+            const on=!!this.planPicked[s.key];
+            const cfg=catCfg(s.asset), col=PLAN_STOP_COL[s.kind]||'#605d5d';
+            const off=(s.off!=null && s.off>=0.2) ? ' · '+s.off.toFixed(1)+' mi off' : '';
+            return '<button type="button" class="pl-stop'+(on?' on':'')+'" data-plan="pickstop" data-key="'+esc(s.key)+'">'
+              +'<span class="pl-tick">'+(on?'✓':'')+'</span>'
+              +'<span class="pl-sic" style="color:'+col+'">'+icon(cfg.icon,15)+'</span>'
+              +'<span class="pl-sbody">'
+                +'<span class="pl-sname">'+esc(s.name)+'</span>'
+                +'<span class="pl-smeta"><b class="pl-scat" style="color:'+col+'">'+esc(s.kind)+'</b>'
+                  +' · '+esc(mpTxt(s.mile))+esc(off)+'</span>'
+              +'</span></button>';
+          }).join('')+'</div>');
+          h.push('</div>');
+        }
+      }
+      h.push('</div></div>');
+    });
+
+    h.push('<div class="pl-foot">Saved on this phone. The Outlook graph and the map read these days. '
+      +'Beds and stops are the app’s own pins — NY State’s register, the OpenStreetMap corridor and your own picks.</div>');
+    el.innerHTML=h.join('');
+    // The map instance survives the rewrite; this puts it back where it belongs.
+    this.planMini();
+  }
+
+  /* A map inside the list, so "6 places to sleep in Rhinebeck" can be answered by
+     looking rather than by leaving. It is one Leaflet instance held on the app and moved
+     into whichever row asked for it: renderPlan rewrites the screen's HTML on every tap,
+     and a map rebuilt from scratch each time would flash its tiles and forget its zoom.
+     Re-parenting keeps both, at the cost of one invalidateSize. */
+  planMini(){
+    const slot=this.$('planOut') && this.$('planOut').querySelector('[data-planmini]');
+    if(!slot){ if(this._miniWrap && this._miniWrap.parentNode) this._miniWrap.remove(); return; }
+    if(!window.L) return;
+    if(!this._miniWrap){
+      this._miniWrap=document.createElement('div');
+      this._miniWrap.className='pl-mini-canvas';
+    }
+    slot.appendChild(this._miniWrap);
+    if(!this._miniMap){
+      this._miniMap=L.map(this._miniWrap,{zoomControl:false, attributionControl:false,
+        scrollWheelZoom:false, dragging:true, doubleClickZoom:true});
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(this._miniMap);
+      this._miniPins=L.layerGroup().addTo(this._miniMap);
+      this._miniLine=L.layerGroup().addTo(this._miniMap);
+    }
+    const d=this.planMiniDay, t=this.planDayTown(d), b=this.planBounds()[d];
+    if(!t){ return; }
+    this._miniPins.clearLayers(); this._miniLine.clearLayers();
+    // the stretch of trail either side of where the day ends, so a bed reads as on or off it
+    const slice=this.routeSliceLL(b.end-4, b.end+4);
+    if(slice.length>1){
+      L.polyline(slice,{color:'#fff', weight:7, opacity:.9}).addTo(this._miniLine);
+      L.polyline(slice,{color:'#0088b0', weight:3.5}).addTo(this._miniLine);
+    }
+    const ep=this.routePtAt(b.end);
+    L.marker([ep[0],ep[1]],{icon:L.divIcon({className:'', iconSize:[22,22], iconAnchor:[11,11],
+      html:'<span class="plan-ring"><svg width="12" height="12" viewBox="0 0 24 24"><path fill="#3b3a6a" d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg></span>'}),
+      title:'Where day '+(d+1)+' ends'}).addTo(this._miniPins);
+    const pts=[[ep[0],ep[1]]];
+    this.planLodging(t, b.end).forEach(p=>{
+      pts.push([p.poi.lat,p.poi.lng]);
+      const on=this.planStay[d]===this.planStayKey(p.poi);
+      L.circleMarker([p.poi.lat,p.poi.lng],{radius:on?9:7, weight:on?3:2.5,
+        color:on?'#201e1d':'#fff', fillColor:p.hotel?'#0f6a8b':'#4a7a3a', fillOpacity:1})
+        .bindPopup('<b>'+esc(p.name)+'</b><br>'+esc(p.addr)+esc(this.planLodgeWhere(p))
+          +'<br><a href="'+p.mapHref+'" target="_blank" rel="noopener">Directions</a>')
+        .addTo(this._miniPins);
+    });
+    this._miniMap.invalidateSize();
+    if(pts.length>1) this._miniMap.fitBounds(L.latLngBounds(pts),{padding:[26,26], maxZoom:15});
+    else this._miniMap.setView([ep[0],ep[1]],14);
+  }
+
+  /* One listener for the whole screen, because the rows are rebuilt on every change and
+     a handler bound to a row would be a handler bound to a node that no longer exists. */
+  wirePlan(){
+    const el=this.$('planOut'); if(!el || el._wired) return;
+    el._wired=true;
+    el.addEventListener('click',e=>{
+      const b=e.target.closest('[data-plan]'); if(!b) return;
+      const act=b.dataset.plan, d=+b.dataset.d;
+      if(act==='auto'){ this.autoPlan(); this.renderPlan(); }
+      else if(act==='save'){ this.savePlan(); this.status('Ride plan saved on this phone.'); }
+      else if(act==='tomap'){ this.showTab('map'); this.planFit(); }
+      else if(act==='open'){ this.planOpenDay=this.planOpenDay===d?null:d; this.renderPlan(); }
+      else if(act==='zero'){ this.setPlanDay(d,{zero:!this.planP()[d].zero}); this.renderPlan(); }
+      else if(act==='lodge'){ this.planOpenLodge=this.planOpenLodge===d?null:d;
+        if(this.planOpenLodge!==d) this.planMiniDay=null;
+        this.renderPlan(); }
+      else if(act==='stay'){ const k=b.dataset.key;
+        if(this.planStay[d]===k) delete this.planStay[d]; else this.planStay[d]=k;
+        this.savePlan(); this.drawPlanLayer(); this.renderPlan(); }
+      else if(act==='mini'){ this.planMiniDay=this.planMiniDay===d?null:d; this.renderPlan(); }
+      else if(act==='minibig'){ this.planMiniBig=!this.planMiniBig; this.renderPlan(); }
+      else if(act==='minifull'){ /* the [data-lat] delegate does the travelling */ }
+      else if(act==='stops'){ this.planOpenStops=this.planOpenStops===d?null:d; this.renderPlan(); }
+      else if(act==='pick'){ const b0=this.planBounds()[d];
+        this.setPlanDay(d,{miles:Math.max(0,Math.round(abs(+b.dataset.tm-b0.start)))}); this.renderPlan(); }
+      else if(act==='pickstop'){ const k=b.dataset.key;
+        this.planPicked[k]=!this.planPicked[k]; this.drawPlanLayer(); this.renderPlan(); }
+    });
+    el.addEventListener('change',e=>{
+      const s=e.target.closest('[data-plan]'); if(!s) return;
+      const act=s.dataset.plan, d=+s.dataset.d, v=+s.value;
+      if(act==='anchor'){ this.planAnchor=Math.max(0,Math.min(TOTAL,v)); this.planSnap();
+        this.savePlan(); this.planChanged(); this.renderPlan(); }
+      else if(act==='speed'){ const n=Math.max(4,Math.min(25,v||12));
+        this.avgSpeed=n; this.savePrefs(); this.savePlan(); this.planChanged(); this.renderPlan(); }
+      else if(act==='to'){ const b0=this.planBounds()[d];
+        this.setPlanDay(d,{miles:Math.max(0,Math.round(abs(v-b0.start)))}); this.renderPlan(); }
+      else if(act==='start'){ this.setPlanDay(d,{start:v}); this.renderPlan(); }
+      else if(act==='end'){ this.setPlanDay(d,{end:v}); this.renderPlan(); }
+      else if(act==='miles'){ this.setPlanDay(d,{miles:Math.max(0,Math.min(160,v||0))}); this.renderPlan(); }
+    });
+    /* The day card lives in a Leaflet popup, which is outside this screen — so its two
+       buttons are caught on the document instead. */
+    if(!document._planCard){
+      document._planCard=true;
+      document.addEventListener('click',e=>{
+        const ed=e.target.closest('[data-planedit]');
+        if(ed){ const d=+ed.dataset.planedit; if(this.map) this.map.closePopup();
+          this.planOpenDay=d; this.showTab('plan'); this.renderPlan(); return; }
+        const so=e.target.closest('[data-plansolo]');
+        if(so){ const d=+so.dataset.plansolo;
+          this.planSolo=this.planSolo===d?null:d; this.drawPlanLayer();
+          if(this.map) this.map.closePopup(); }
+      });
+    }
+  }
+
+  /* ---------- the plan on the map ----------
+     The same days, in space. One colour per day, deliberately clear of the trail's own
+     teal and purple and of the weather palette's red / amber / green — a leg must never
+     be mistakable for a headwind. A moon at every overnight town, and a weather pin at
+     the mile the plan puts you at, so a day you drag longer moves its own forecast. */
+  routeSliceLL(mA, mB){
+    const lo=Math.min(mA,mB), hi=Math.max(mA,mB);
+    const mid=ROUTE.filter(p=>p[2]>=lo && p[2]<=hi).map(p=>[p[0],p[1]]);
+    const a=this.routePtAt(lo), b=this.routePtAt(hi);
+    const out=[[a[0],a[1]]].concat(mid, [[b[0],b[1]]]);
+    return out.filter((p,i)=> i===0 || p[0]!==out[i-1][0] || p[1]!==out[i-1][1]);
+  }
+  planLayerOn(key){ const l=this.lyrByKey[key]; return !!(l && this.map && this.map.hasLayer(l)); }
+  planDayVisible(d){ return this.planSolo==null || this.planSolo===d; }
+
+  drawPlanLayer(){
+    if(!this.map || !this.planLayer) return;
+    const L=window.L, days=this.planP(), bounds=this.planBounds();
+    this.planLayer.clearLayers();
+    if(this.planNightLayer) this.planNightLayer.clearLayers();
+    if(this.planWxLayer) this.planWxLayer.clearLayers();
+    const pane=this.lyrPane('plan');
+    const moon='<svg width="12" height="12" viewBox="0 0 24 24"><path fill="#3b3a6a" d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>';
+    const flagSvg=col=>'<svg width="13" height="13" viewBox="0 0 24 24"><path d="M2 22V2" stroke="'+col+'" stroke-width="2.6" fill="none" stroke-linecap="round"/><path d="M2 3h13l-2.4 4.5L15 12H2Z" fill="'+col+'"/></svg>';
+
+    days.forEach((pd,d)=>{
+      const b=bounds[d];
+      if(pd.zero || !this.planDayVisible(d) || abs(b.end-b.start)<0.05) return;
+      const col=this.planDayCol(d), line=this.routeSliceLL(b.start,b.end);
+      if(line.length<2) return;
+      L.polyline(line,{pane, color:'#fff', weight:10, opacity:.85, interactive:false}).addTo(this.planLayer);
+      L.polyline(line,{pane, color:col, weight:6, opacity:.95})
+        .bindPopup(()=>this.planDayCard(d), {maxWidth:280}).addTo(this.planLayer);
+    });
+
+    if(this.planNightLayer){
+      const npane=this.lyrPane('plannight');
+      /* the start, once */
+      const sp=this.routePtAt(this.planStartMile());
+      L.marker([sp[0],sp[1]],{pane:npane, icon:L.divIcon({className:'', iconSize:[24,24], iconAnchor:[12,12],
+        html:'<span class="plan-flag">'+flagSvg('#178040')+'</span>'})}).addTo(this.planNightLayer);
+      /* The finish flag belongs to the last day that actually rides, not to row seven —
+         days past the end of the trail have no miles and no place to plant it. */
+      let lastRiding=-1;
+      days.forEach((pd,d)=>{ if(!pd.zero && bounds[d].miles>0.5) lastRiding=d; });
+      days.forEach((pd,d)=>{
+        const b=bounds[d];
+        if(pd.zero || !this.planDayVisible(d) || b.miles<0.5) return;
+        const t=this.planDayTown(d), rp=this.routePtAt(b.end);
+        const last=d===lastRiding;
+        /* Once a bed is picked the moon goes ON it. Where you sleep is a place with a
+           door, not the milepost you stopped pedalling at — and the gap between the two
+           is exactly the detour worth seeing on a map. */
+        const stay=this.planStayFor(d, this.planLodging(t, b.end));
+        const ep=stay ? [stay.poi.lat, stay.poi.lng] : rp;
+        const label=stay ? stay.name : (t?t.n:'mile '+Math.round(b.end));
+        const html=last
+          ? '<span class="plan-night"><span class="plan-ring plan-fin">'+flagSvg('#7a1410')+'</span><span class="plan-lb">'+esc(label)+'</span></span>'
+          : '<span class="plan-night"><span class="plan-ring">'+moon+'</span><span class="plan-lb">night '+(d+1)+' · '+esc(label)+'</span></span>';
+        L.marker([ep[0],ep[1]],{pane:npane, icon:L.divIcon({className:'', iconSize:[130,24], iconAnchor:[11,-12], html})})
+          .bindPopup(()=>this.planDayCard(d), {maxWidth:280}).addTo(this.planNightLayer);
+        // the walk from the trail to the bed, so a two-mile detour is visible as one
+        if(stay) L.polyline([[rp[0],rp[1]],[ep[0],ep[1]]],{pane:npane, color:'#3b3a6a',
+          weight:2, opacity:.8, dashArray:'3 4'}).addTo(this.planNightLayer);
+      });
+      /* the waypoints you ticked in the plan tab */
+      days.forEach((pd,d)=>{
+        const b=bounds[d];
+        if(pd.zero || !this.planDayVisible(d)) return;
+        this.planWayStops(d,b.start,b.end).forEach(s=>{
+          if(!this.planPicked[s.key]) return;
+          L.marker([s.lat,s.lng],{pane:npane, icon:L.divIcon({className:'', iconSize:[10,10], iconAnchor:[5,5],
+            html:'<span class="plan-stopdot"></span>'}), title:s.name}).addTo(this.planNightLayer);
+        });
+      });
+    }
+
+    /* weather pins: an hour the plan says you'd be riding, at the mile it puts you at.
+       Thinned by zoom, because forty cards on one bend is not a forecast. */
+    const wx=this.wxData;
+    if(this.planWxLayer && wx && !wx.err && !wx.loading && wx.hours){
+      const wpane=this.lyrPane('planwx');
+      const z=this.map.getZoom();
+      /* Thinned by counting the hours actually ridden, not the hours on the clock: an
+         hour index steps through the nights too, so a plain i%n drops most of a day at
+         low zoom and leaves the map claiming there was no forecast for it. */
+      const every=z>=12 ? 1 : z>=10 ? 2 : z>=8 ? 4 : 8;
+      let ridden=-1;
+      wx.hours.forEach((r,i)=>{
+        if(!r.onBike || !this.planDayVisible(r.day)) return;
+        ridden++;
+        if(ridden%every) return;
+        const p=this.routePtAt(r.mile);
+        const col=r.kind==='head'?'#7a1410':r.kind==='cross'?'#9a6b00':'#279a52';
+        const word=(r.kind==='head'?'HEAD':r.kind==='cross'?'CROSS':'TAIL')
+          +(r.windMph==null?'':' '+Math.round(r.windMph));
+        const hh=+r.t.slice(11,13), s=hh%12===0?12:hh%12;
+        const html='<span class="plan-wx" style="border-color:'+col+'">'
+          +'<span class="plan-wx-1"><b>'+(r.temp==null?'—':r.temp+'°')+'</b><i>'+s+(hh<12?'am':'pm')+'</i></span>'
+          +'<span class="plan-wx-2" style="background:'+col+'">'+word+'</span></span>';
+        L.marker([p[0],p[1]],{pane:wpane, icon:L.divIcon({className:'', iconSize:[62,32], iconAnchor:[-6,34], html})})
+          .addTo(this.planWxLayer);
+        L.circleMarker([p[0],p[1]],{pane:wpane, radius:2.6, weight:0, fillColor:col, fillOpacity:1})
+          .addTo(this.planWxLayer);
+      });
+    }
+    this.syncPlanKey();
+  }
+  /* The colour key under the layer row: one line per day, so a leg on the map has a name
+     without tapping it. Repainted here because Leaflet rebuilds the list on every tick. */
+  syncPlanKey(){
+    const box=document.querySelector('.plan-key'); if(!box) return;
+    const days=this.planP(), bounds=this.planBounds();
+    box.innerHTML=days.map((pd,d)=>{
+      const t=this.planDayTown(d);
+      const lab=this.planDayLabel(d).replace(/,.*/,'')+' · '
+        +(pd.zero?'zero':(t?t.n:Math.round(bounds[d].end)+' mi'));
+      return '<span class="plan-key-row"><span class="plan-key-sw" style="background:'
+        +this.planDayCol(d)+'"></span><span>'+esc(lab)+'</span></span>';
+    }).join('');
+  }
+  /* The card a leg or a moon opens: the day, what it costs, where you'd sleep, and the
+     two things you might want next — edit it, or look at it on its own. */
+  planDayCard(d){
+    const pd=this.planP()[d], b=this.planBounds()[d], t=this.planDayTown(d);
+    const de=this.planDayEndHour(d), col=this.planDayCol(d);
+    const all=this.planLodging(t, b.end), booked=this.planStayFor(d, all);
+    const lodge=booked ? [booked] : all.slice(0,3);
+    const h=['<div class="plan-card">'
+      +'<div class="plan-card-h"><span class="plan-card-bar" style="background:'+col+'"></span>'
+      +'<div><div class="plan-card-k">Day '+(d+1)+' · '+esc(this.planDayLabel(d))+'</div>'
+      +'<div class="plan-card-t">'+esc(pd.zero ? 'Rest day at '+this.placeNameAt(b.start)
+        : this.placeNameAt(b.start)+' → '+(t?t.n:'between towns'))+'</div></div></div>'
+      +'<div class="plan-card-p">'+(pd.zero ? 'No miles'
+        : Math.round(b.miles)+' mi · '+this.planTick(pd.start)+'–'+this.planTick(Math.round(de))
+          +' · '+mpTxt(Math.min(b.start,b.end))+'–'+Math.round(Math.max(b.start,b.end)))+'</div>'
+      +'<div class="plan-card-b"'+((t&&(t.hotel||t.camp))?'':' style="color:#b3261e"')+'>'
+        +(booked ? 'Staying at '+esc(booked.name)
+          : t&&(t.hotel||t.camp) ? esc(this.bedWord(t)+' in '+t.n) : 'No beds at this stop')+'</div>'];
+    if(lodge.length) h.push('<div class="plan-card-l">'+lodge.map(p=>'<div class="plan-card-lr">'
+      +'<div class="plan-card-ln">'+esc(p.name)+'</div>'
+      +'<div class="plan-card-la">'+esc(p.addr)+esc(this.planLodgeWhere(p))+'</div>'
+      +(p.tel?'<a href="tel:'+esc(p.tel.replace(/[^0-9+]/g,''))+'">'+esc(p.tel)+'</a> ':'')
+      +'<a href="'+p.mapHref+'" target="_blank" rel="noopener">Directions</a></div>').join('')+'</div>');
+    h.push('<div class="plan-card-btns">'
+      +'<button type="button" class="plan-card-go" data-planedit="'+d+'">Edit this day</button>'
+      +'<button type="button" class="plan-card-iso" data-plansolo="'+d+'">'
+      +(this.planSolo===d?'Show all days':'Only this day')+'</button></div></div>');
+    return h.join('');
+  }
+  planFit(){
+    if(!this.map) return;
+    const b=this.planBounds();
+    if(!b.length) return;
+    const lo=Math.min(this.planStartMile(), ...b.map(x=>x.end));
+    const hi=Math.max(this.planStartMile(), ...b.map(x=>x.end));
+    const ll=this.routeSliceLL(lo,hi);
+    if(ll.length>1) this.map.fitBounds(L.latLngBounds(ll), {padding:[18,18], maxZoom:11});
+  }
+
   /* ---------- the outlook, assembled ----------
      Gather the planning parameters the timeline integrator needs. Returns null with a
      message when there's no trail position to hang a plan off. Day 0 is local midnight
      of today (plus any start-date shift); the rider advances from `now` so a plan opened
      mid-morning doesn't pretend you rode the pre-dawn hours. */
   wxPlanOpts(){
-    const anchor=this.wxAnchorMile();
+    const anchor=this.planStartMile();
     if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
     const now=new Date();
     const midnight=new Date(now.getFullYear(),now.getMonth(),now.getDate()+ (this.wxStartShift||0),0,0,0,0).getTime();
-    const zero=(this.wxZeroDay>=0 && this.wxZeroDay<WX_OUTLOOK_DAYS) ? this.wxZeroDay : -1;
-    return {opts:{days:WX_OUTLOOK_DAYS, sgn:this.dir==='B2NYC'?-1:1,
+    return {opts:{days:WX_OUTLOOK_DAYS, sgn:this.dirSign(),
       speed:this.avgSpeed>0?this.avgSpeed:12, perDay:Math.max(5,this.wxPerDay||60),
       startMs:midnight, nowMs:Date.now(), totalMi:TOTAL, anchorMile:anchor,
-      rideStart:this.wxRideStart, rideEnd:this.wxRideEnd, zeroDay:zero}, anchor};
+      rideStart:this.wxRideStart, rideEnd:this.wxRideEnd, dayPlan:this.planP()}, anchor};
   }
   // The town list the plan reads, in the renderer's shape: short name, milepost, a spot
   // of context, and coordinates for the nearest-sample fetch.
@@ -6053,6 +7111,8 @@ class TrailApp {
       return {date, zero:d.zero,
         label:new Date(ms).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'}),
         startMile:d.startMile, endMile:d.endMile,
+        // the window the timeline actually rode, so the rail cannot draw a different one
+        rideStart:d.start, rideEnd:d.end, miles:d.miles,
         towns:towns.filter(t=>t.arrive.slice(0,10)===date).map(t=>t.name)};
     });
     const lastMile=plan.hours[plan.hours.length-1].mile;
@@ -6075,8 +7135,13 @@ class TrailApp {
     this.wxBusy=true; this.wxData={loading:true}; this.renderOutlook();
     const opts=po.opts, anchor=po.anchor;
     const plan=planTimeline(opts);
+    /* Which towns are worth a grid point of their own: the ones the plan actually
+       reaches. Taken off the built timeline rather than off miles-a-day × days — with a
+       per-day plan those two stopped being the same number, and a ninety-mile Tuesday
+       would have left its towns reading someone else's forecast. */
+    const reach=plan.hours[plan.hours.length-1].mile;
     const townMiles=this.wxTownList().map(t=>t.tm)
-      .filter(m=>{ const a=(m-anchor)*opts.sgn; return a>=-3 && a<=opts.perDay*opts.days+3; });
+      .filter(m=>{ const a=(m-anchor)*opts.sgn; return a>=-3 && a<=abs(reach-anchor)+3; });
     const smiles=sampleMiles(plan, townMiles, WX_SAMPLE_MI, TOTAL);
     const res=await Promise.allSettled(smiles.map(m=>{
       const p=this.routePtAt(m); return this.nwsGrid(p[0], p[1]);
@@ -6089,7 +7154,9 @@ class TrailApp {
     const data=this.wxAssemble(plan, smiles, gridByIndex, opts, anchor);
     data.at=Date.now(); data.got=got; data.of=smiles.length;
     this.wxData=data;
-    if(this.wxCur==null){ const f=data.hours.find(hh=>hh.riding); this.wxCur=f?data.hours.indexOf(f):0; }
+    // A fresh read is a fresh graph: the hour under the cursor is picked again rather
+    // than left pointing at whatever index it held before the plan moved.
+    this.wxSel=null;
     this.renderOutlook();
   }
   /* A control moved. If the new plan stays inside the ground already fetched, re-fold the
@@ -6109,7 +7176,6 @@ class TrailApp {
     const data=this.wxAssemble(plan, this.wxGrids.smiles, this.wxGrids.gridByIndex, opts, anchor);
     data.at=this.wxData.at; data.got=this.wxData.got; data.of=this.wxData.of;
     this.wxData=data;
-    if(this.wxCur==null){ const f=data.hours.find(hh=>hh.riding); this.wxCur=f?data.hours.indexOf(f):0; }
     this.renderOutlook();
   }
 
@@ -6221,426 +7287,538 @@ class TrailApp {
     return h.join('');
   }
 
-  /* ---------- the meteogram (concept "Broadsheet re-cut") ----------
-     The NWS hourly meteogram's information, re-set in the app's own newsprint: one
-     continuous clock scrolled left-to-right, a sticky y-gutter and hour readout, the
-     towns and mileposts laid on the same axis, and the wind panel carrying the weight —
-     one line recoloured along its length by what the wind does to the rider, each kind
-     also carrying its own dash, weight and marker so the three survive greyscale and
-     red-green colour blindness. Off-window hours and the zero day read recessive. */
+  /* ---------- the meteogram ----------
+     The NWS hourly graphical forecast, panel for panel: the same stack (temperature,
+     wet, wind, humidity), the same colours, the same white legend chips sitting on the
+     plot, the same night shading. One modification, and it is the reason the screen
+     exists — the wind panel reads head / cross / tail against the rider's heading
+     instead of drawing barbs. A barb says where the air is going. A rider needs to know
+     what it is going to do to them, which is a different question and the only one worth
+     a panel. Off the bike there is no heading, so the whole wind treatment goes grey and
+     the readout says a plain "Wind 14 mph": a head/tail verdict you aren't riding into
+     is a number pretending to be advice.
+
+     Two SVGs side by side. A fixed 34px gutter carries the axis numbers so they survive
+     scrolling; the strip beside it scrolls sideways through the hours. Above the panels
+     is a 64px rail that belongs to the ride rather than the weather — the day's window,
+     the towns the plan puts you at, the trail mile under every riding hour, a moon where
+     you stop for the night. The x-axis is the clock, but every hour also carries a mile,
+     which is what makes a town appear on a weather graph at all. */
   renderOutlook(){
     const el=this.$('wxOut'); if(!el) return;
-    const echo=this.$('wxSpeedEcho'); if(echo) echo.textContent=this.avgSpeed;
-    const d=this.wxData;
-    if(!d){ el.innerHTML='<div class="up-empty">Set your miles a day and press the button. It reads the US National Weather Service along the route ahead of you and lays the next four days onto one graph — so it only asks when you ask.</div>'; return; }
-    if(d.err){ el.innerHTML='<div class="up-empty">'+esc(d.err)+'</div>'; return; }
-    if(d.loading){ el.innerHTML='<div class="up-empty">Reading the forecast along your route…</div>'; return; }
-    const app=this, data=d;
+    const app=this, data=this.wxData;
+    el.className='ok-root';
+    const blank=(msg, btn)=>{ el.innerHTML='<div class="ok-blank"><p>'+msg+'</p>'
+      +(btn?'<button type="button" class="ok-go" data-wxgo>'+btn+'</button>':'')+'</div>'; };
+    if(!data){ return blank('The days your ride plan covers, hour by hour, along the route '
+      +'the plan puts you on — from the US National Weather Service. It only asks when you ask.',
+      'Get the outlook'); }
+    if(data.err){ return blank(esc(data.err), 'Try again'); }
+    if(data.loading){ return blank('Reading the forecast along your route…'); }
+
     const NS='http://www.w3.org/2000/svg';
-    const H=data.hours, DAYS=data.days, TOWNS_=data.towns, META=data.meta;
-    const NH=H.length, DC=DAYS.length;
+    const H=data.hours, DAYS=data.days, TOWNLIST=data.towns, META=data.meta;
+    const FULL=H.length, DCFULL=DAYS.length;
+    const NH=Math.max(24, Math.min(FULL, this.wxHours||48));
+    const DC=Math.ceil(NH/24);
+    const sgn=this.dirSign();
+    if(this.wxSel==null || this.wxSel>=NH){
+      const f=H.findIndex(hh=>hh.riding);
+      this.wxSel=f>=0 && f<NH ? f : Math.min(NH-1, this.wxRideStart);
+    }
+    const sel=this.wxSel;
 
-    /* geometry */
-    const PPH=16, LEFT=34, RIGHT=26, RAIL_H=100, SPINE_Y=73;
-    const PANELS=[
-      {key:'temp',   title:'TEMPERATURE · °F',          h:74, titleH:15, extra:0},
-      {key:'wind',   title:'WIND ON THE RIDER · MPH',   h:92, titleH:30, extra:16},
-      {key:'hum',    title:'HUMIDITY & SKY COVER · %',  h:52, titleH:15, extra:0},
-      {key:'chance', title:'RAIN & THUNDER CHANCE · %', h:54, titleH:15, extra:0}
-    ];
-    let _y=RAIL_H;
-    PANELS.forEach(p=>{ p.titleY=_y; p.top=_y+p.titleH; p.bot=p.top+p.h; p.tickY=p.bot+p.extra+11; _y=p.bot+p.extra+14+12; });
-    const TOTAL_H=_y-6, SVG_W=LEFT+NH*PPH+RIGHT;
+    /* ── geometry ── the numbers are the design's, and the panels are stacked in the
+       NWS order with a 4px gap; the plot is inset inside each panel so a value label
+       at the top of the range still has room above the line. */
+    /* Sizes, in one block. The handoff draws this graph at 6.2–8px, which is right for
+       a desktop mock and unreadable on the phone it is actually for — so the type is set
+       at phone sizes and the hours are given the width that needs. A strip you scroll
+       further but can read beats one that fits and can't. */
+    const PPH=34, RIGHT=120, RAIL=88, GW=48;
+    const FS={hour:10, val:10, gut:10.5, town:11, townMi:9, mile:10, rail:9.5,
+      moon:9.5, flag:9.5, kind:9, note:10};
+    const PANELS=[{k:'temp',h:164},{k:'wet',h:104},{k:'wind',h:158},{k:'hum',h:140}];
+    let _y=RAIL;
+    PANELS.forEach(p=>{ p.top=_y; p.bot=_y+p.h; p.plotTop=p.top+13; p.plotBot=p.bot-14; _y=p.bot+4; });
+    const P={}; PANELS.forEach(p=>P[p.k]=p);
+    const GH=_y, SW=NH*PPH+RIGHT;
+    const x=hf=>hf*PPH;
 
-    /* palette */
-    const INK='#201e1d';
-    const C_TEMP='#bf3b22', C_DEW='#2f6b46', C_HI='#8a6a1e';
-    const C_HEAD='#7a1410', C_CROSS='#9a6b00', C_TAIL='#279a52';   // luminances spread: .047 / .174 / .242
-    const C_GUST='#7d7979', C_RH='#2f6b46', C_SKY='#3b6ea5', C_POP='#35688c', C_THU='#9c2b2b';
-    const NEUTRAL_FILL='#d5cfc8';
+    /* ── palette ──
+       NWS's own ink for everything the NWS also plots, so the graph reads as the graph
+       it is copying. The three wind kinds are the app's, not the mock's: they are spread
+       across luminance (.05 / .18 / .24) so head, cross and tail survive greyscale and
+       red-green colour blindness, which a red/amber/green triad does not. The kind band
+       under the wind line says the word as well, so the colour is never the only channel. */
+    const C_TEMP='#e00000', C_DEW='#008000', C_HI='#b8860b';
+    const C_GUST='#000080', C_RAIN='#0a8f2f', C_THU='#e00000';
+    const C_RH='#008000', C_SKY='#0000cc';
+    const K_HEAD='#7a1410', K_CROSS='#9a6b00', K_TAIL='#279a52', K_OFF='#9b9797';
+    /* Two washes behind the panels, and they answer different questions. Night is grey
+       because it is the absence of daylight. The ride window is pale blue because it is
+       the presence of you: the hours the plan has you turning the pedals, which is the
+       only stretch of the graph where a head or a tail means anything. Where they
+       overlap — a pre-dawn start — the ride wins, because that is the fact that matters. */
+    const NIGHT='#e4e4e4', RIDE='#e2eff6', MOON='#3b3a6a', START='#178040', FINISH='#7a1410';
+    const kColor=k=> k==='head'?K_HEAD : k==='cross'?K_CROSS : K_TAIL;
+    const kWord=k=> k==='head'?'Headwind' : k==='cross'?'Crosswind' : 'Tailwind';
 
-    /* helpers */
+    /* ── helpers ── */
     const E=(tag,attrs,parent)=>{ const n=document.createElementNS(NS,tag);
       if(attrs) for(const k in attrs){ if(attrs[k]!=null) n.setAttribute(k,attrs[k]); }
       if(parent) parent.appendChild(n); return n; };
-    const TX=(parent,x,y,str,cls,attrs)=>{ const t=E('text',attrs||{},parent);
-      t.setAttribute('x',x); t.setAttribute('y',y); if(cls) t.setAttribute('class',cls);
+    const TX=(parent,px,py,str,o)=>{ o=o||{};
+      const t=E('text',{x:px, y:py, fill:o.fill||'#333', 'font-size':o.fs||8,
+        'font-weight':o.fw||400, 'font-style':o.italic?'italic':null,
+        'text-anchor':o.anchor||'start', opacity:o.op==null?null:o.op,
+        'paint-order':o.halo?'stroke':null, stroke:o.halo?'#fff':null,
+        'stroke-width':o.halo?2.6:null, 'stroke-linejoin':o.halo?'round':null},parent);
       t.textContent=str; return t; };
     const EL=(tag,cls,txt)=>{ const n=document.createElement(tag); if(cls) n.className=cls;
       if(txt!==undefined) n.textContent=txt; return n; };
-    const hourLabel=hr=>{ let s=hr%12; if(s===0) s=12; return s+(hr<12?'a':'p'); };
-    const clockLabel=hr=>{ let s=hr%12; if(s===0) s=12; return s+':00 '+(hr<12?'am':'pm'); };
-    const n1=v=>(Math.round(v*10)/10).toFixed(1);
-    const domain=(vals,step,floorZero)=>{
-      let lo=Infinity, hi=-Infinity;
-      for(const v of vals){ if(v==null) continue; if(v<lo) lo=v; if(v>hi) hi=v; }
-      if(!isFinite(lo)){ lo=0; hi=step; }
-      const dlo=floorZero?0:Math.floor((lo-step*0.35)/step)*step;
-      let dhi=Math.ceil((hi+step*0.35)/step)*step;
-      if(dhi<=dlo) dhi=dlo+step;
-      return [dlo,dhi];
-    };
-    const ticksOf=(dom,step)=>{ const t=[]; for(let v=dom[0]; v<=dom[1]+1e-6; v+=step) t.push(Math.round(v*100)/100); return t; };
-    const glyph=(shape,cx,cy,r)=>{
-      if(shape==='diamond') return 'M'+cx+' '+(cy-r)+'L'+(cx+r)+' '+cy+'L'+cx+' '+(cy+r)+'L'+(cx-r)+' '+cy+'Z';
-      if(shape==='tri') return 'M'+cx+' '+(cy-r-.3)+'L'+(cx+r)+' '+(cy+r*.8)+'L'+(cx-r)+' '+(cy+r*.8)+'Z';
-      return 'M'+(cx-r)+' '+(cy-r)+'h'+(2*r)+'v'+(2*r)+'h'+(-2*r)+'Z';
-    };
+    const tick=hr=>{ const h=((hr%24)+24)%24, s=h%12===0?12:h%12; return s+(h<12?'am':'pm'); };
+    const clock=hr=>{ const h=((hr%24)+24)%24, s=h%12===0?12:h%12; return s+(h<12?' am':' pm'); };
+    const dirName=deg=>{ const N=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+      return N[Math.round((((deg%360)+360)%360)/22.5)%16]; };
+    const mi0=m=>String(Math.round(m));
+    const scale=(p,dom)=> v=> p.plotBot-(Math.min(Math.max(v,dom[0]),dom[1])-dom[0])/(dom[1]-dom[0])*(p.plotBot-p.plotTop);
+    /* A label for a value at the floor of its panel wants to sit below the floor, where
+       the panel border cuts it in half. Clamped into the plot instead: a number nudged
+       two pixels is still the right number, and half a number is not a number. */
+    const clampY=(p,y,fs)=> Math.min(Math.max(y, p.plotTop+(fs||FS.val)), p.plotBot-2);
 
-    /* domains from the data actually plotted */
-    (function(){
-      const temps=[], winds=[], chances=[];
-      H.forEach(r=>{ temps.push(r.temp); temps.push(r.dewpoint); if(r.heatIndex!=null) temps.push(r.heatIndex);
-        winds.push(r.gustMph); winds.push(r.windMph); chances.push(r.pop); chances.push(r.thunder); });
-      PANELS[0].dom=domain(temps,10); PANELS[0].ticks=ticksOf(PANELS[0].dom,20);
-      PANELS[1].dom=domain(winds,10,true); PANELS[1].ticks=ticksOf(PANELS[1].dom,10);
-      PANELS[2].dom=[0,100]; PANELS[2].ticks=[0,50,100];
-      PANELS[3].dom=domain(chances,20,true); PANELS[3].ticks=ticksOf(PANELS[3].dom, PANELS[3].dom[1]/2 || 20);
-    })();
+    /* Domains, taken off the data actually plotted. Temperature rounds out to the next
+       ten either way and then sits five inside it, which is the NWS's own habit and what
+       keeps the gutter numbers on round tens. */
+    const tempDom=(()=>{ let lo=999, hi=-999;
+      for(let i=0;i<NH;i++){ [H[i].temp,H[i].dewpoint,H[i].heatIndex].forEach(v=>{
+        if(v==null) return; if(v<lo) lo=v; if(v>hi) hi=v; }); }
+      if(lo>hi) return [30,90];
+      return [Math.floor(lo/10)*10-5, Math.ceil(hi/10)*10+5]; })();
+    const gustMax=(()=>{ let m=0; for(let i=0;i<NH;i++){ const g=H[i].gustMph, w=H[i].windMph;
+      if(g!=null && g>m) m=g; if(w!=null && w>m) m=w; } return Math.max(10, Math.ceil(m/5)*5); })();
+    const windDom=[0,gustMax], wetDom=[0,100], humDom=[0,100];
+    const yTemp=scale(P.temp,tempDom), yWind=scale(P.wind,windDom),
+          yWet=scale(P.wet,wetDom), yHum=scale(P.hum,humDom);
 
-    /* town positions on the shared clock (hf = hours from day-0 midnight) */
-    const towns=TOWNS_.map(t=>{
-      let di=0; for(let i=0;i<DC;i++){ if(DAYS[i].date===t.arrive.slice(0,10)) di=i; }
+    /* Towns on the shared clock. The plan says which hour it puts you at each one, so a
+       town lands on the graph at the hour you would reach it rather than at its milepost. */
+    const towns=TOWNLIST.map(t=>{
+      let di=0; for(let i=0;i<DCFULL;i++){ if(DAYS[i].date===t.arrive.slice(0,10)) di=i; }
       const hh=+t.arrive.slice(11,13), mm=+t.arrive.slice(14,16);
-      return {name:t.name, tm:t.tm, services:t.services, start:t.start, di, hf:di*24+hh+mm/60};
-    });
+      return {name:t.name, tm:t.tm, lat:t.lat, lng:t.lng, hf:di*24+hh+mm/60, start:t.start};
+    }).filter(t=>t.hf>=0 && t.hf<NH).sort((a,b)=>a.hf-b.hf);
 
-    const isZero=di=> di>=0 && di<DC && !!DAYS[di].zero;
-    const riding=i=> i>=0 && i<NH && !!H[i].riding;
-    const x=hf=>LEFT+hf*PPH;
-    const yOf=(p,v)=>{ let t=(v-p.dom[0])/(p.dom[1]-p.dom[0]); if(t<0)t=0; else if(t>1)t=1; return p.bot-t*p.h; };
-    const clampY=(p,y)=>Math.min(Math.max(y,p.top+9),p.bot-3);
-    const dayLabel=di=> (DAYS[di]?DAYS[di].label:'').toUpperCase();
+    const nwsFor=(lat,lng,hour)=>'https://forecast.weather.gov/MapClick.php?lat='+lat+'&lon='+lng
+      +'&unit=0&lg=english&FcstType=graphical&AheadHour='+Math.max(0,Math.round(hour)-3);
+    const nearestTownTo=mile=>{ if(!towns.length){ const t=this.nearestTown(mile); return t?{lat:t.t.lat,lng:t.t.lng}:{lat:42.652,lng:-73.757}; }
+      return towns.reduce((a,t)=> abs(t.tm-mile)<abs(a.tm-mile) ? t : a); };
 
-    /* ---- build the DOM shell ---- */
-    el.innerHTML='';
-    const root=EL('div','pd-root'); el.appendChild(root);
+    /* ══ the strip ══ */
+    const S=WX_SCALES.indexOf(app.wxScale)>=0 ? app.wxScale : 1;
+    const strip=E('svg',{width:Math.round(SW*S), height:Math.round(GH*S),
+      viewBox:'0 0 '+SW+' '+GH, class:'ok-svg'});
+    (function buildStrip(){
+      const g=strip;
+      /* ── rail: the ride, not the weather ── */
+      for(let dd=0; dd<DC; dd++){
+        const info=DAYS[dd]; if(!info) continue;
+        const spec={start:info.rideStart, end:info.rideEnd};
+        if(info.zero){
+          TX(g,x(dd*24+12),10.5,'ZERO DAY',{fs:FS.rail, fw:700, fill:'#8a6a1e', anchor:'middle'});
+        }else{
+          const w=(spec.end-spec.start)*PPH;
+          E('rect',{x:x(dd*24+spec.start), y:1, width:Math.max(2,w), height:13,
+            fill:RIDE, stroke:'#9ec4d4', 'stroke-width':.8, rx:1.5},g);
+          TX(g,x(dd*24+(spec.start+spec.end)/2),10.6,
+            tick(spec.start)+'–'+tick(Math.round(spec.end))+' · '+Math.round(abs(info.endMile-info.startMile))+' mi',
+            {fs:FS.rail, fw:700, fill:'#2b6a84', anchor:'middle'});
+          /* the moon goes where the day ends, named by the town you sleep in — the one
+             answer planDayTown gives, so the graph, the plan tab and the map agree */
+          const ex=x(dd*24+spec.end), t=app.planDayTown(dd);
+          const named=(t?t.n:'between towns').toUpperCase();
+          const mg=E('g',{transform:'translate('+(ex+2)+',1) scale(0.55)'},g);
+          E('path',{d:'M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z', fill:MOON},mg);
+          TX(g,ex+17,10.6,'OVERNIGHT · '+named,{fs:FS.moon, fw:700, fill:MOON, halo:true});
+        }
+      }
+      /* the spine runs the whole ridden stretch, so a town dot has a line to sit on */
+      const SPINE=64;
+      let firstRide=-1, lastRide=-1;
+      for(let i=0;i<NH;i++){ if(H[i].onBike){ if(firstRide<0) firstRide=i; lastRide=i; } }
+      if(firstRide>=0) E('line',{x1:x(firstRide), y1:SPINE, x2:x(lastRide), y2:SPINE,
+        stroke:'#000', 'stroke-width':.9, opacity:.55},g);
 
-    /* controls */
-    const ctl=EL('div','pd-ctl');
-    const r1=EL('div','pd-row');
-    r1.appendChild(EL('span','pd-lab','Ride window'));
-    const selStart=document.createElement('select'), selEnd=document.createElement('select');
-    for(let hh=4; hh<=12; hh++) selStart.appendChild(new Option(clockLabel(hh), String(hh)));
-    for(let hh=12; hh<=22; hh++) selEnd.appendChild(new Option(clockLabel(hh), String(hh)));
-    selStart.value=String(app.wxRideStart); selEnd.value=String(app.wxRideEnd);
-    r1.appendChild(selStart); r1.appendChild(EL('span','pd-dash','–')); r1.appendChild(selEnd);
-    const durNote=EL('span','pd-note'); r1.appendChild(durNote); ctl.appendChild(r1);
+      /* town names, stacked into four rows so a cluster of stops doesn't overprint */
+      /* Three rows of names above the spine, and a name that cannot be placed within a
+         lead-line's reach of its own dot is DROPPED rather than shoved along the row.
+         Same rule the map's town labels follow: a label that has walked away from its
+         mark is worse than no label, because it is then a label for the wrong place.
+         The dot and the dashed drop-line stay either way, so the town is still on the
+         graph and the readout still names it when you scrub onto it. */
+      const rowEnd=[0,0,0], LEAD=64;
+      towns.forEach((t,i)=>{
+        const tx=x(t.hf), label=t.name, meta='TM '+mi0(t.tm);
+        const lw=label.length*6.4+6, mw=meta.length*5.4, w=lw+mw+12;
+        E('line',{x1:tx, y1:SPINE, x2:tx, y2:GH-8, stroke:'#000', 'stroke-width':.5,
+          'stroke-dasharray':'1.5 3', opacity:.22},g);
+        E('circle',{cx:tx, cy:SPINE, r:t.start?3.6:2.9, fill:t.start?'#fff':'#000',
+          stroke:t.start?'#000':null, 'stroke-width':t.start?1.4:null},g);
+        let row=-1, lx=0;
+        for(let q=0;q<rowEnd.length;q++){
+          const want=Math.max(tx+6, rowEnd[q]+12);
+          if(want-tx<=LEAD && want+w<=SW-6){ row=q; lx=want; break; }
+        }
+        if(row<0) return;
+        rowEnd[row]=lx+w;
+        const ry=27+row*12;
+        E('line',{x1:tx, y1:SPINE-3, x2:lx, y2:ry+3, stroke:'#000', 'stroke-width':.5, opacity:.35},g);
+        const a=E('a',{href:nwsFor(t.lat,t.lng,t.hf), target:'_blank', rel:'noopener'},g);
+        TX(a,lx,ry,label,{fs:FS.town, fw:700, fill:'#0f6a8b', halo:true});
+        E('line',{x1:lx, y1:ry+1.8, x2:lx+lw-6, y2:ry+1.8, stroke:'#0f6a8b', 'stroke-width':.6, opacity:.45},a);
+        TX(a,lx+lw,ry,meta,{fs:FS.townMi, fill:'#7d7979', halo:true});
+      });
 
-    const r2=EL('div','pd-row');
-    r2.appendChild(EL('span','pd-lab','Day 1'));
-    const dateIn=document.createElement('input'); dateIn.type='date'; dateIn.value=META.startDate;
-    r2.appendChild(dateIn);
-    r2.appendChild(EL('span','pd-lab','Zero'));
-    const selZero=document.createElement('select'); r2.appendChild(selZero);
-    ctl.appendChild(r2);
+      /* a green flag where the riding starts, a red one where it stops */
+      const flag=(i,fill,label)=>{
+        if(i<0) return;
+        const fg=E('g',{transform:'translate('+(x(i)-4)+','+(SPINE-15)+') scale(0.62)'},g);
+        E('path',{d:'M2 22V2', stroke:fill, 'stroke-width':2.6, fill:'none', 'stroke-linecap':'round'},fg);
+        E('path',{d:'M2 3h13l-2.4 4.5L15 12H2Z', fill:fill},fg);
+        TX(g,x(i)+9,SPINE-4,label,{fs:FS.flag, fw:700, fill:fill, halo:true});
+      };
+      flag(firstRide, START, 'START');
+      if(lastRide>firstRide) flag(lastRide, FINISH, 'FINISH');
 
-    const r3=EL('div','pd-days');
-    const dayBtns=DAYS.map((dd,i)=>{ const b=document.createElement('button'); b.className='pd-day'; b.type='button';
-      b.addEventListener('click',()=>{ scroller.scrollTo({left:Math.max(0,LEFT+i*24*PPH-4), behavior:'smooth'}); });
-      r3.appendChild(b); return b; });
-    ctl.appendChild(r3);
-    root.appendChild(ctl);
+      /* the mile rail: a tick at every hour, a heavier mark and a bare number wherever
+         the ride crosses a round ten miles. Bare, because no label may be wider than the
+         gap it marks — the gutter says what the numbers are. */
+      const refs=[];
+      for(let i=0;i<NH-1;i++){
+        if(!H[i].riding) continue;
+        const a=H[i].mile, b=H[i+1].mile;
+        const lo=Math.min(a,b), hi=Math.max(a,b);
+        for(let m=Math.ceil(lo/10)*10; m<hi; m+=10) refs.push({m, px:x(i+(m-a)/(b-a))});
+      }
+      for(let i=0;i<NH;i++){ const rid=H[i].onBike;
+        E('line',{x1:x(i), y1:RAIL-16, x2:x(i), y2:rid?RAIL-12:RAIL-14,
+          stroke:rid?'#000':'#c4c1c1', 'stroke-width':rid?.8:.6, opacity:rid?.75:1},g); }
+      refs.forEach(r=>{
+        E('line',{x1:r.px, y1:RAIL-19, x2:r.px, y2:RAIL-12, stroke:'#000', 'stroke-width':1.2},g);
+        E('line',{x1:r.px, y1:RAIL-2, x2:r.px, y2:GH-8, stroke:'#7d7979', 'stroke-width':.5,
+          'stroke-dasharray':'1 4', opacity:.26},g);
+        TX(g,Math.max(11,r.px),RAIL-3,String(r.m),{fs:FS.mile, fw:700, anchor:'middle', fill:'#000', halo:true});
+      });
 
-    const read=EL('div','pd-read'); root.appendChild(read);
-    const scroller=EL('div','pd-scroll');
-    const svg=E('svg',{width:SVG_W, height:TOTAL_H, viewBox:'0 0 '+SVG_W+' '+TOTAL_H});
-    scroller.appendChild(svg); root.appendChild(scroller);
-    root.appendChild(EL('div','pd-hint','Drag sideways · tap an hour'));
-    const foot=EL('div','pd-foot'); root.appendChild(foot);
+      /* ── panel frames, night shading, hour ticks ── */
+      PANELS.forEach(p=>{
+        for(let dd=-1; dd<DC; dd++){
+          const s=dd*24+20, e=dd*24+31;
+          const a=Math.max(0,s), b=Math.min(NH,e);
+          if(b<=a) continue;
+          E('rect',{x:x(a), y:p.top+1, width:(b-a)*PPH, height:p.h-2, fill:NIGHT},g);
+        }
+        for(let i=0;i<NH;i++){
+          if(!H[i].onBike) continue;
+          E('rect',{x:x(i)-PPH/2, y:p.top+1, width:PPH, height:p.h-2, fill:RIDE},g);
+        }
+        E('rect',{x:0, y:p.top, width:NH*PPH, height:p.h, fill:'none', stroke:'#000', 'stroke-width':1},g);
+        for(let dd=1; dd<DC; dd++) E('line',{x1:x(dd*24), y1:p.top, x2:x(dd*24), y2:p.bot,
+          stroke:'#000', 'stroke-width':1},g);
+        for(let i=0;i<NH;i+=3){
+          E('line',{x1:x(i), y1:p.plotBot, x2:x(i), y2:p.plotBot+3, stroke:'#000', 'stroke-width':.6, opacity:.6},g);
+          TX(g,x(i),p.bot-4,tick(i),{fs:FS.hour, anchor:'middle', italic:true, fill:'#000'});
+        }
+      });
 
-    /* fill the zero dropdown */
-    (function(){
-      selZero.appendChild(new Option('no zero','-1'));
-      DAYS.forEach((dd,i)=> selZero.appendChild(new Option(dd.label, String(i))));
-      selZero.value=String(app.wxZeroDay);
+      /* a line, its per-hour dots, and a value every so often — the NWS's own idiom */
+      const series=(p,ys,key,color,o)=>{
+        o=o||{};
+        let dd='', pen=false, dots='';
+        for(let i=0;i<NH;i++){
+          const v=H[i][key];
+          if(v==null || (o.only && !o.only(H[i]))){ pen=false; continue; }
+          dd+=(pen?'L':'M')+x(i).toFixed(1)+' '+ys(v).toFixed(1)+' '; pen=true;
+          dots+='M'+(x(i)-1.1)+' '+(ys(v)-1.1)+'h2.2v2.2h-2.2Z';
+        }
+        if(dd) E('path',{d:dd, fill:'none', stroke:color, 'stroke-width':o.w||1.2,
+          'stroke-dasharray':o.dash},g);
+        if(dots) E('path',{d:dots, fill:o.dotColor||'#000'},g);
+        if(o.every) for(let i=0;i<NH;i+=o.every){
+          const v=H[i][key];
+          if(v==null || (o.only && !o.only(H[i]))) continue;
+          if(o.minLabel!=null && v<o.minLabel) continue;
+          TX(g,x(i),clampY(p,ys(v)+(o.below?13:-6)),String(Math.round(v))+(o.suffix||''),
+            {fs:FS.val, fill:color, anchor:'middle', halo:true});
+        }
+      };
+
+      /* ── temperature ── */
+      for(let v=tempDom[0]+5; v<tempDom[1]; v+=10)
+        E('line',{x1:0, y1:yTemp(v), x2:NH*PPH, y2:yTemp(v), stroke:'#000', 'stroke-width':.4, opacity:.16},g);
+      series(P.temp,yTemp,'heatIndex',C_HI,{every:6, suffix:'°', w:1.1});
+      series(P.temp,yTemp,'dewpoint',C_DEW,{every:6, below:true, suffix:'°', w:1.1});
+      series(P.temp,yTemp,'temp',C_TEMP,{every:3, suffix:'°', w:1.4});
+
+      /* ── wet: rain chance and thunder chance, with the amount on the axis ──
+         Thunder is drawn only where there is thunder. A flat zero line running the width
+         of the graph is a line saying nothing, and it reads as data. */
+      [0,25,50,75,100].forEach(v=> E('line',{x1:0, y1:yWet(v), x2:NH*PPH, y2:yWet(v),
+        stroke:'#000', 'stroke-width':.4, opacity:v%50?.08:.16},g));
+      series(P.wet,yWet,'pop',C_RAIN,{every:3, suffix:'%', w:1.6, minLabel:10});
+      series(P.wet,yWet,'thunder',C_THU,{w:1.4, dash:'4 2.5', only:r=>r.thunder>0});
+      (function thunderPeak(){
+        let bi=-1, bv=0;
+        for(let i=0;i<NH;i++){ const v=H[i].thunder; if(v!=null && v>bv){ bv=v; bi=i; } }
+        if(bi<0 || bv<=0) return;
+        TX(g,x(bi),clampY(P.wet,yWet(bv)-7,FS.note),'thunder '+Math.round(bv)+'%',
+          {fs:FS.note, fw:700, fill:C_THU, anchor:'middle', halo:true});
+      })();
+      (function rainBanner(){
+        let s0=-1, tot=0;
+        for(let i=0;i<=NH;i++){
+          const wet=i<NH && H[i].rainIn>0;
+          if(wet){ if(s0<0){ s0=i; tot=0; } tot+=H[i].rainIn; }
+          else if(s0>=0){
+            const x0=x(s0)-10, x1=Math.max(x0+46, x(i-1)+10);
+            E('line',{x1:x0, y1:P.wet.plotBot-3, x2:x1, y2:P.wet.plotBot-3, stroke:C_RAIN,
+              'stroke-width':2.6, 'stroke-linecap':'round', opacity:.5},g);
+            TX(g,(x0+x1)/2,P.wet.plotBot-7,'Rain: '+tot.toFixed(2)+' in',
+              {fs:FS.note, fill:'#0a6f28', anchor:'middle', fw:700, halo:true});
+            s0=-1;
+          }
+        }
+      })();
+
+      /* ── wind: the one modification ── */
+      for(let v=0; v<=windDom[1]; v+=5)
+        E('line',{x1:0, y1:yWind(v), x2:NH*PPH, y2:yWind(v), stroke:'#000', 'stroke-width':.4, opacity:.16},g);
+      series(P.wind,yWind,'gustMph',C_GUST,{every:6, w:1.1});
+      /* the wind line, recoloured along its length by what it does to the rider; off the
+         bike there is no heading, so those stretches go neutral grey */
+      const seg={head:'',cross:'',tail:'',off:''};
+      for(let i=0;i<NH-1;i++){
+        const a=H[i].windMph, b=H[i+1].windMph;
+        if(a==null || b==null) continue;
+        const k=(H[i].onBike && H[i+1].onBike) ? H[i].kind : 'off';
+        seg[k]+='M'+x(i).toFixed(1)+' '+yWind(a).toFixed(1)+'L'+x(i+1).toFixed(1)+' '+yWind(b).toFixed(1)+' ';
+      }
+      Object.keys(seg).forEach(k=>{ if(!seg[k]) return;
+        E('path',{d:seg[k], fill:'none', stroke:k==='off'?K_OFF:kColor(k),
+          'stroke-width':k==='off'?1.6:2},g); });
+      /* the kind, said flatly in a band along the top of the panel, so a borderline
+         arrow is never the only evidence of what the wind is doing */
+      /* Only where you are on the bike. A grey block for every other hour drew a heavy
+         rule the width of the graph that said nothing — off the bike there is no head or
+         tail to report, and the absence of the band is the clearest way to say so. */
+      for(let i=0;i<NH;i++){
+        const r=H[i];
+        if(!r.onBike) continue;
+        E('rect',{x:x(i)-PPH/2, y:P.wind.top+13, width:PPH, height:12, fill:kColor(r.kind)},g);
+        /* the word goes ON the block, reversed out of it, so the colour and the word are
+           one mark — and so it cannot be read as part of the legend chips just above */
+        if(i%3===0) TX(g,x(i),P.wind.top+21.6,kWord(r.kind).replace('wind','').toUpperCase(),
+          {fs:FS.kind, fw:700, anchor:'middle', fill:'#fff'});
+      }
+      for(let i=0;i<NH;i+=2){
+        const r=H[i];
+        if(r.windMph==null || r.fromDeg==null) continue;
+        const col=r.onBike?kColor(r.kind):K_OFF;
+        const rot=r.heading==null ? (r.fromDeg+180) : (r.fromDeg+180-r.heading);
+        const ag=E('g',{transform:'translate('+x(i)+','+(yWind(r.windMph)-16)+') rotate('+rot.toFixed(1)+')'},g);
+        E('path',{d:'M0 6.5L0 -6.5M-3.8 -2L0 -6.5L3.8 -2', fill:'none', stroke:col,
+          'stroke-width':1.8, 'stroke-linecap':'round', 'stroke-linejoin':'round'},ag);
+        if(i%3===0) TX(g,x(i),clampY(P.wind,yWind(r.windMph)+13),String(Math.round(r.windMph)),
+          {fs:FS.val, anchor:'middle', fill:'#000', halo:true});
+      }
+
+      /* ── humidity and sky cover ── */
+      [0,20,40,60,80,100].forEach(v=> E('line',{x1:0, y1:yHum(v), x2:NH*PPH, y2:yHum(v),
+        stroke:'#000', 'stroke-width':.4, opacity:.16},g));
+      series(P.hum,yHum,'rh',C_RH,{every:6, suffix:'%', w:1.1});
+      series(P.hum,yHum,'sky',C_SKY,{every:6, below:true, suffix:'%', w:1.1});
+
+      /* the scrubbed hour, over everything */
+      PANELS.forEach(p=> E('line',{x1:x(sel), y1:p.top+1, x2:x(sel), y2:p.bot-1,
+        stroke:'#0088b0', 'stroke-width':1.1, opacity:.6},g));
     })();
 
-    /* value labels + series drawing (closures over the groups set up in render) */
-    let gFade,gStrong,gLbl;
-    function linePath(p,vals){ let dd='',pen=false;
-      for(let i=0;i<NH;i++){ const v=vals[i]; if(v==null){ pen=false; continue; }
-        dd+=(pen?'L':'M')+x(i).toFixed(1)+' '+yOf(p,v).toFixed(1)+' '; pen=true; } return dd; }
-    function markPath(p,vals,shape,r,every){ let dd='';
-      for(let i=0;i<NH;i++){ if(every && i%every!==0) continue; const v=vals[i]; if(v==null) continue;
-        dd+=glyph(shape,x(i),yOf(p,v),r); } return dd; }
-    function series(p,vals,color,opt){ opt=opt||{}; const dd=linePath(p,vals); if(!dd) return;
-      const base={d:dd, fill:'none', stroke:color, 'stroke-width':opt.w||1.4, 'stroke-linejoin':'round', 'stroke-linecap':'round'};
-      if(opt.dash) base['stroke-dasharray']=opt.dash;
-      const a=E('path',base,gFade); a.setAttribute('opacity',opt.fadeOp||.3);
-      E('path',base,gStrong);
-      if(opt.shape){ const md=markPath(p,vals,opt.shape,opt.r||1.4,opt.every||1);
-        if(md){ const mf=E('path',{d:md, fill:opt.hollow?'none':color, stroke:color, 'stroke-width':.8},gFade); mf.setAttribute('opacity',.28);
-          E('path',{d:md, fill:opt.hollow?'#f3f2f2':color, stroke:color, 'stroke-width':.8},gStrong); } } }
-    function valueLabels(p,vals,every,dy,color,offset,skipZero){
-      for(let i=(offset||0); i<NH; i+=every){ const v=vals[i]; if(v==null) continue; if(skipZero && v<=0) continue;
-        const t=TX(gLbl,x(i),clampY(p,yOf(p,v)+dy),String(Math.round(v)),'val',{'text-anchor':'middle', fill:color});
-        t.setAttribute('opacity', riding(i)?1:.42); } }
-    function seriesTagOnce(p,vals,dy,color,label,preferHour){
-      let i0=-1;
-      for(let i=(preferHour||app.wxRideStart); i<NH; i++){ if(Math.floor(i/24)>0) break; if(!isZero(0) && riding(i) && vals[i]!=null){ i0=i; break; } }
-      if(i0<0){ for(let j=0;j<NH;j++){ if(vals[j]!=null){ i0=j; break; } } }
-      if(i0<0) return;
-      TX(gLbl,x(i0)+3,clampY(p,yOf(p,vals[i0])+dy),label,'tag',{fill:color, 'text-anchor':'start'}); }
-
-    let stickyG=null, stickyDay=null, stickyDayBg=null, gCurRef=null;
-
-    function render(){
-      while(svg.firstChild) svg.removeChild(svg.firstChild);
-      const vw=scroller.clientWidth||346;
-
-      const defs=E('defs',null,svg);
-      /* clip strong ink to the hours actually on the bike — recessive = off the bike */
-      const clip=E('clipPath',{id:'pd-ride-'+app._wxN},defs);
-      let runS=-1;
-      for(let i=0;i<=NH;i++){ const on=i<NH && riding(i);
-        if(on && runS<0) runS=i;
-        else if(!on && runS>=0){ E('rect',{x:x(runS)-PPH/2, y:0, width:(i-runS)*PPH, height:TOTAL_H},clip); runS=-1; } }
-      const hatch=E('pattern',{id:'pd-hatch-'+app._wxN, width:6, height:6, patternUnits:'userSpaceOnUse', patternTransform:'rotate(45)'},defs);
-      E('rect',{width:6, height:6, fill:'#e6e3e3'},hatch);
-      E('line',{x1:0,y1:0,x2:0,y2:6, stroke:'#d0cbcb', 'stroke-width':1.6},hatch);
-      const gl=E('linearGradient',{id:'pd-fadeL-'+app._wxN, x1:0,y1:0,x2:1,y2:0},defs);
-      E('stop',{offset:0,'stop-color':'#f3f2f2','stop-opacity':1},gl); E('stop',{offset:1,'stop-color':'#f3f2f2','stop-opacity':0},gl);
-      const gr=E('linearGradient',{id:'pd-fadeR-'+app._wxN, x1:0,y1:0,x2:1,y2:0},defs);
-      E('stop',{offset:0,'stop-color':'#f3f2f2','stop-opacity':0},gr); E('stop',{offset:1,'stop-color':'#f3f2f2','stop-opacity':1},gr);
-
-      const gBg=E('g',null,svg), gRail=E('g',null,svg);
-      gFade=E('g',null,svg); gStrong=E('g',{'clip-path':'url(#pd-ride-'+app._wxN+')'},svg);
-      gLbl=E('g',null,svg); const gCur=E('g',null,svg);
-
-      /* washes: the zero day hatched, off-window hours knocked back */
-      for(let d0=0; d0<DC; d0++){ const s=d0*24, zero=isZero(d0);
-        for(const p of PANELS){
-          if(zero){ E('rect',{x:x(s), y:p.top, width:24*PPH, height:p.h+p.extra, fill:'url(#pd-hatch-'+app._wxN+')', opacity:.75},gBg); }
-          else{ E('rect',{x:x(s), y:p.top, width:app.wxRideStart*PPH, height:p.h+p.extra, fill:'#e6e3e3', opacity:.62},gBg);
-            E('rect',{x:x(s+app.wxRideEnd), y:p.top, width:(24-app.wxRideEnd)*PPH, height:p.h+p.extra, fill:'#e6e3e3', opacity:.62},gBg); } } }
-
-      /* grid + hour ticks */
-      for(const pp of PANELS){
-        for(const tv of pp.ticks){ const yy=yOf(pp,tv);
-          E('line',{x1:LEFT, y1:yy, x2:LEFT+NH*PPH, y2:yy, stroke:INK, 'stroke-width':.5, opacity:.1},gBg); }
-        E('line',{x1:LEFT, y1:pp.bot, x2:LEFT+NH*PPH, y2:pp.bot, stroke:INK, 'stroke-width':.8, opacity:.32},gBg);
-        for(let hx=0; hx<=NH; hx+=6){ E('line',{x1:x(hx), y1:pp.top, x2:x(hx), y2:pp.bot, stroke:INK, 'stroke-width':.5, opacity: hx%24===0?0:.07},gBg); }
-        for(let hx=0; hx<NH; hx+=3){ E('line',{x1:x(hx), y1:pp.bot+pp.extra, x2:x(hx), y2:pp.bot+pp.extra+3, stroke:INK, 'stroke-width':.6, opacity:.3},gBg);
-          const lt=TX(gBg,x(hx),pp.tickY,hourLabel(hx%24),'ax',{'text-anchor':'middle'}); if(riding(hx)) lt.setAttribute('fill','#605d5d'); } }
-
-      /* day rules */
-      for(let db=0; db<DC; db++) E('line',{x1:x(db*24), y1:2, x2:x(db*24), y2:TOTAL_H-16, stroke:INK, 'stroke-width':db===0?.8:1, opacity:db===0?.25:.38},gBg);
-
-      /* ---- town rail: dates, town stack, trail miles ---- */
-      const order=towns.slice().sort((a,b)=>a.hf-b.hf);
-      const GAP=5, MAXROW=4;
-      const rowBaseline=r=>SPINE_Y-6-r*10;
-      const rowsEnd=[];
-      order.forEach(t=>{
-        const label=t.name+(t.start?'  ← start':'');
-        const tt=TX(gRail,0,0,label,'town',{'text-anchor':'start'});
-        const w=tt.getComputedTextLength(), dotX=x(t.hf); let wantX=dotX+2, row=0;
-        while(row<rowsEnd.length && rowsEnd[row]+GAP>wantX) row++;
-        if(row>MAXROW){ row=0; for(let q=1;q<rowsEnd.length;q++) if(rowsEnd[q]<rowsEnd[row]) row=q; wantX=Math.max(wantX,rowsEnd[row]+GAP); }
-        if(row>=rowsEnd.length) rowsEnd.push(0);
-        rowsEnd[row]=wantX+w; t._el=tt; t._lx=wantX; t._row=row; t._dotX=dotX; t._w=w;
-      });
-      for(let dl=0; dl<DC; dl++){ const lab=dayLabel(dl);
-        const dt=TX(gRail,x(dl*24)+5,10,lab,'dayl'); const dw=dt.getComputedTextLength();
-        if(isZero(dl)){ const zt=TX(gRail,x(dl*24)+5+dw+7,10,'· ZERO DAY','dayl'); zt.setAttribute('fill','#a86a00'); } }
-      if(order.length) E('line',{x1:x(order[0].hf), y1:SPINE_Y, x2:x(order[order.length-1].hf), y2:SPINE_Y, stroke:INK, 'stroke-width':1.3, opacity:.5},gBg);
-      order.forEach(t=>{ const dim=isZero(t.di), dotX=t._dotX, by=rowBaseline(t._row);
-        E('line',{x1:dotX, y1:SPINE_Y, x2:dotX, y2:TOTAL_H-16, stroke:INK, 'stroke-width':.6, 'stroke-dasharray':'1.5 2.5', opacity:dim?.09:.2},gBg);
-        E('line',{x1:dotX, y1:SPINE_Y-2.5, x2:t._lx+.5, y2:by+1.5, stroke:INK, 'stroke-width':.5, opacity:dim?.2:.42},gBg);
-        if(t.start) E('circle',{cx:dotX, cy:SPINE_Y, r:3, fill:'#f3f2f2', stroke:INK, 'stroke-width':1.3, opacity:dim?.3:1},gBg);
-        else E('circle',{cx:dotX, cy:SPINE_Y, r:2.4, fill:INK, opacity:dim?.3:1},gBg); });
-      order.forEach(t=>{ const dim=isZero(t.di), by=rowBaseline(t._row);
-        t._el.setAttribute('x',t._lx); t._el.setAttribute('y',by);
-        if(dim){ t._el.setAttribute('opacity',.5);
-          E('line',{x1:t._lx, y1:by-2.5, x2:t._lx+t._w, y2:by-2.5, stroke:INK, 'stroke-width':.8, opacity:.5},gRail); } });
-      for(let zi=0; zi<DC; zi++){ if(!isZero(zi)) continue;
-        if(towns.some(t=>t.di===zi)) continue;
-        let here=null; for(let ti=0;ti<towns.length;ti++){ if(towns[ti].hf<zi*24) here=towns[ti]; }
-        const msg=here?'ZERO — RESTING AT '+here.name.toUpperCase()+' · TM '+n1(here.tm):'ZERO — NO MILES';
-        TX(gRail,x(zi*24+12),rowBaseline(0)-12,msg,'zero',{'text-anchor':'middle'}); }
-      let lastTM=null;
-      for(let mi=0; mi<NH; mi+=3){ const val=Math.round(H[mi].mile), moving=riding(mi);
-        if(val===lastTM && !(mi%24===0)) continue; lastTM=val;
-        const mt=TX(gRail,x(mi),RAIL_H-6,String(val),'tmv',{'text-anchor':'middle', fill:moving?INK:'#9b9797'});
-        E('line',{x1:x(mi), y1:SPINE_Y+3, x2:x(mi), y2:SPINE_Y+6, stroke:INK, 'stroke-width':.6, opacity:moving?.4:.18},gRail);
-        if(!moving) mt.setAttribute('opacity',.85); }
-      E('line',{x1:LEFT, y1:RAIL_H-2.5, x2:LEFT+NH*PPH, y2:RAIL_H-2.5, stroke:INK, 'stroke-width':.6, opacity:.22},gBg);
-
-      /* ---- P1 temperature ---- */
-      const P1=PANELS[0];
-      const vTemp=H.map(r=>r.temp), vDew=H.map(r=>r.dewpoint), vHI=H.map(r=>r.heatIndex);
-      series(P1,vHI,C_HI,{w:1.2, dash:'4 2.5', shape:'diamond', r:1.6, hollow:true, every:2});
-      series(P1,vDew,C_DEW,{w:1.2, shape:'tri', r:1.6, every:2});
-      series(P1,vTemp,C_TEMP,{w:1.9, shape:'sq', r:1.6});
-      valueLabels(P1,vTemp,4,-5.5,C_TEMP,0); valueLabels(P1,vDew,8,10,C_DEW,0);
-
-      /* ---- P2 wind on the rider ---- */
-      const P2=PANELS[1];
-      const vGust=H.map(r=>r.gustMph), vWind=H.map(r=>r.windMph);
-      let areaD='M'+x(0).toFixed(1)+' '+P2.bot, opened=false;
-      for(let i=0;i<NH;i++){ if(vWind[i]==null) continue; areaD+='L'+x(i).toFixed(1)+' '+yOf(P2,vWind[i]).toFixed(1); opened=true; }
-      areaD+='L'+x(NH-1).toFixed(1)+' '+P2.bot+'Z';
-      if(opened){ const fa=E('path',{d:areaD, fill:NEUTRAL_FILL, stroke:'none'},gFade); fa.setAttribute('opacity',.28);
-        const fs=E('path',{d:areaD, fill:NEUTRAL_FILL, stroke:'none'},gStrong); fs.setAttribute('opacity',.55); }
-      const kstyle={ head:{c:C_HEAD,w:2.3,dash:null,shape:'sq',r:1.9},
-        cross:{c:C_CROSS,w:1.7,dash:'5 2.6',shape:'diamond',r:2.0},
-        tail:{c:C_TAIL,w:1.6,dash:'1.4 3.2',shape:'tri',r:2.0} };
-      const kinds=['head','cross','tail'], segd={head:'',cross:'',tail:''};
-      for(let si=0; si<NH-1; si++){ if(vWind[si]==null || vWind[si+1]==null) continue;
-        const k=H[si].kind; segd[k]+='M'+x(si).toFixed(1)+' '+yOf(P2,vWind[si]).toFixed(1)+'L'+x(si+1).toFixed(1)+' '+yOf(P2,vWind[si+1]).toFixed(1)+' '; }
-      series(P2,vGust,C_GUST,{w:1, dash:'1.5 2', shape:null, fadeOp:.26});
-      kinds.forEach(kk=>{ if(!segd[kk]) return; const st=kstyle[kk];
-        const attr={d:segd[kk], fill:'none', stroke:st.c, 'stroke-width':st.w, 'stroke-linecap':'round'}; if(st.dash) attr['stroke-dasharray']=st.dash;
-        const a=E('path',attr,gFade); a.setAttribute('opacity',.3); E('path',attr,gStrong); });
-      const mk={head:'',cross:'',tail:''};
-      for(let mi=0; mi<NH; mi++){ if(vWind[mi]==null) continue; const kkm=H[mi].kind, stk=kstyle[kkm]; mk[kkm]+=glyph(stk.shape,x(mi),yOf(P2,vWind[mi]),stk.r); }
-      kinds.forEach(kk=>{ if(!mk[kk]) return; const a=E('path',{d:mk[kk], fill:kstyle[kk].c, stroke:'none'},gFade); a.setAttribute('opacity',.3); E('path',{d:mk[kk], fill:kstyle[kk].c, stroke:'none'},gStrong); });
-      valueLabels(P2,vWind,4,-6,INK,0);
-      for(let gi=0; gi<NH; gi+=8){ if(vGust[gi]==null) continue; const gt=TX(gLbl,x(gi),clampY(P2,yOf(P2,vGust[gi])-4.5),String(Math.round(vGust[gi])),'val',{'text-anchor':'middle', fill:C_GUST}); gt.setAttribute('opacity',riding(gi)?.95:.4); }
-      seriesTagOnce(P2,vGust,-5,C_GUST,'Gusts',10);
-      const arrowY=P2.bot+10;
-      for(let ari=0; ari<NH; ari+=2){ const rr=H[ari]; if(rr.fromDeg==null||rr.heading==null) continue;
-        const theta=(rr.fromDeg-rr.heading)+180, col=kstyle[rr.kind].c;
-        const ag=E('g',{transform:'translate('+x(ari)+','+arrowY+') rotate('+theta.toFixed(1)+')'},gBg);
-        const ap=E('path',{d:'M0 4.4L0 -4.4M-2.3 -1.6L0 -4.4L2.3 -1.6', fill:'none', stroke:col, 'stroke-width':1.1, 'stroke-linecap':'round', 'stroke-linejoin':'round'},ag);
-        ap.setAttribute('opacity',riding(ari)?.95:.3); }
-
-      /* ---- P3 humidity & sky ---- */
-      const P3=PANELS[2];
-      const vRH=H.map(r=>r.rh), vSky=H.map(r=>r.sky);
-      series(P3,vSky,C_SKY,{w:1.2, dash:'4 2.5', shape:'diamond', r:1.5, hollow:true, every:2});
-      series(P3,vRH,C_RH,{w:1.6, shape:'sq', r:1.5, every:1});
-      valueLabels(P3,vRH,8,-5.5,C_RH,0); valueLabels(P3,vSky,8,10,C_SKY,4);
-
-      /* ---- P4 rain & thunder chance, rain amount folded in ---- */
-      const P4=PANELS[3];
-      const vPop=H.map(r=>r.pop), vThu=H.map(r=>r.thunder), vRain=H.map(r=>r.rainIn);
-      series(P4,vThu,C_THU,{w:1.3, dash:'4 2.5', shape:'tri', r:1.7, every:2});
-      series(P4,vPop,C_POP,{w:1.7, shape:'sq', r:1.6});
-      valueLabels(P4,vPop,4,-6,C_POP,0,true); valueLabels(P4,vThu,8,10,C_THU,4,true);
-      let run=-1, runMax=0, runIdx=-1; const boxBase=P4.bot-2.5; let boxRight=-1e9;
-      for(let wi=0; wi<=NH; wi++){ const wet=wi<NH && vRain[wi]>0;
-        if(wet){ if(vRain[wi]>runMax){ runMax=vRain[wi]; runIdx=wi; } if(run<0) run=wi; }
-        else if(run>=0){ const ax0=x(runIdx), on=riding(runIdx);
-          const txt=runMax.toFixed(2).replace(/^0/,'')+'″';
-          const lab=TX(gLbl,-999,boxBase,txt,'val',{fill:'#7a5a00'}); const tw=lab.getComputedTextLength();
-          let bx=Math.max(ax0-4, boxRight+2); if(bx+tw+12>LEFT+NH*PPH) bx=LEFT+NH*PPH-tw-12; boxRight=bx+tw+12;
-          E('line',{x1:ax0, y1:yOf(P4,vPop[runIdx])+2, x2:ax0, y2:boxBase-8, stroke:C_POP, 'stroke-width':.7, 'stroke-dasharray':'1 1.6', opacity:on?.6:.3},gLbl);
-          const box=E('rect',{x:bx, y:boxBase-9.5, width:tw+12, height:11, rx:1.5, fill:'#f6eec5', stroke:'#d9c88a', 'stroke-width':.7},gLbl); box.setAttribute('opacity',on?1:.55);
-          const dx=bx+5, dy=boxBase-4;
-          const dp=E('path',{d:'M'+dx+' '+(dy+2.6)+'c-1.9 -2.1 -1.9 -3.9 0 -6 c1.9 2.1 1.9 3.9 0 6Z', fill:'#7a5a00', stroke:'none'},gLbl); dp.setAttribute('opacity',on?1:.55);
-          lab.setAttribute('x',bx+9); lab.setAttribute('opacity',on?1:.55);
-          run=-1; runMax=0; runIdx=-1; } }
-
-      /* ---- sticky gutter, titles, legends ---- */
-      stickyG=E('g',null,svg);
-      E('rect',{x:LEFT, y:0, width:24, height:TOTAL_H-8, fill:'url(#pd-fadeL-'+app._wxN+')'},stickyG);
-      E('rect',{x:vw-20, y:0, width:20, height:TOTAL_H-8, fill:'url(#pd-fadeR-'+app._wxN+')'},stickyG);
-      E('rect',{x:0, y:0, width:LEFT, height:TOTAL_H, fill:'#f3f2f2'},stickyG);
-      E('line',{x1:LEFT-.5, y1:SPINE_Y-2, x2:LEFT-.5, y2:TOTAL_H-16, stroke:INK, 'stroke-width':.5, opacity:.18},stickyG);
-      TX(stickyG,1,44,'Towns','cap',{'text-anchor':'start'});
-      TX(stickyG,1,RAIL_H-6,'TM','cap',{'text-anchor':'start'});
-      stickyDayBg=E('rect',{x:0, y:0, width:0, height:14, fill:'#f3f2f2'},stickyG);
-      stickyDay=TX(stickyG,1,11,'','dayl');
-
-      const legends={
-        temp:[{c:C_TEMP,w:1.9,shape:'sq',label:'Temp'},{c:C_DEW,w:1.2,shape:'tri',label:'Dew'},{c:C_HI,w:1.2,dash:'4 2.5',shape:'diamond',label:'Heat idx'}],
-        hum:[{c:C_RH,w:1.6,shape:'sq',label:'Humidity'},{c:C_SKY,w:1.2,dash:'4 2.5',shape:'diamond',label:'Sky cover'}],
-        chance:[{c:C_POP,w:1.7,shape:'sq',label:'Rain %'},{c:C_THU,w:1.3,dash:'4 2.5',shape:'tri',label:'Thunder %'}]
+    /* ══ the gutter: axis numbers that don't scroll away ══ */
+    const gutter=E('svg',{width:Math.round(GW*S), height:Math.round(GH*S),
+      viewBox:'0 0 '+GW+' '+GH, class:'ok-gut'});
+    (function buildGutter(){
+      const lab=(p,ys,dom,step,sfx)=>{
+        for(let v=dom[0]; v<=dom[1]+.001; v+=step)
+          TX(gutter,GW-5,ys(v)+3.5,Math.round(v)+(sfx||''),{fs:FS.gut, anchor:'end', fill:'#333'});
       };
-      const LINE=15, PRE=3, POST=9;
-      PANELS.forEach(p=>{
-        E('rect',{x:0, y:p.titleY-1, width:vw, height:p.titleH, fill:'#f3f2f2'},stickyG);
-        const titleT=TX(stickyG,1,p.titleY+8,p.title,'ttl');
-        const items=(legends[p.key]||[]).slice();
-        if(items.length){
-          items.forEach(it=>{ it._t=TX(stickyG,-999,p.titleY+8,it.label,'lg',{fill:it.c}); it._w=LINE+PRE+it._t.getComputedTextLength()+POST; });
-          const titleMin=1+titleT.getComputedTextLength()+10;
-          const total=()=>items.reduce((a,it)=>a+it._w,0);
-          while(items.length>1 && (vw-5-total())<titleMin){ const drop=items.pop(); stickyG.removeChild(drop._t); }
-          let cx=Math.max(titleMin, vw-5-total());
-          items.forEach(it=>{ const at={x1:cx, y1:p.titleY+5.4, x2:cx+LINE, y2:p.titleY+5.4, stroke:it.c, 'stroke-width':it.w, 'stroke-linecap':'round'}; if(it.dash) at['stroke-dasharray']=it.dash;
-            E('line',at,stickyG); E('path',{d:glyph(it.shape,cx+7.5,p.titleY+5.4,1.7), fill:it.c},stickyG);
-            it._t.setAttribute('x',cx+LINE+PRE); cx+=it._w; }); }
-        E('line',{x1:1, y1:p.titleY+11.5, x2:vw-4, y2:p.titleY+11.5, stroke:INK, 'stroke-width':.5, opacity:.16},stickyG);
-        p.ticks.forEach(tv=> TX(stickyG,LEFT-5,yOf(p,tv)+2.8,String(tv),'ax',{'text-anchor':'end'})); });
-      const lg=E('g',{transform:'translate(1,'+(PANELS[1].titleY+23)+')'},stickyG); let lx=0;
-      [['head','Headwind (red)'],['cross','Crosswind (amber)'],['tail','Tailwind (green)']].forEach(pair=>{
-        const st=kstyle[pair[0]]; const at={x1:lx, y1:-2.5, x2:lx+15, y2:-2.5, stroke:st.c, 'stroke-width':st.w, 'stroke-linecap':'round'}; if(st.dash) at['stroke-dasharray']=st.dash;
-        E('line',at,lg); E('path',{d:glyph(st.shape,lx+7.5,-2.5,st.r), fill:st.c},lg);
-        const wt=TX(lg,lx+19,0,pair[1],'lg',{fill:st.c, 'font-weight':600}); lx+=19+wt.getComputedTextLength()+9; });
-      TX(stickyG,vw-5,PANELS[1].titleY+8,'↑ = your heading · ▼ into your face','cap',{'text-anchor':'end'});
+      lab(P.temp,yTemp,[tempDom[0]+5,tempDom[1]-5],10,'°');
+      lab(P.wind,yWind,windDom,5,'');
+      lab(P.hum,yHum,humDom,20,'%');
+      lab(P.wet,yWet,wetDom,25,'%');
+      TX(gutter,GW-5,RAIL-3,'TRAIL MI',{fs:FS.rail, fw:700, anchor:'end', fill:'#605d5d'});
+    })();
 
-      drawCursor(gCur); syncSticky(); paintChrome();
+    /* ══ the readout ══
+       Collapsed it is one line you can read while moving; open it is the whole hour. */
+    const r=H[sel];
+    const aheadT=towns.filter(t=>(t.tm-r.mile)*sgn>0.2);
+    const nx=aheadT.length ? aheadT.reduce((a,t)=> abs(t.tm-r.mile)<abs(a.tm-r.mile)?t:a) : null;
+    const behindT=towns.filter(t=>(t.tm-r.mile)*sgn<=0.2);
+    const bk=behindT.length ? behindT.reduce((a,t)=> abs(t.tm-r.mile)<abs(a.tm-r.mile)?t:a) : null;
+    const di=Math.floor(sel/24);
+    const dayLong=(DAYS[di]?DAYS[di].label:'');
+    const windTxt=(r.windMph==null) ? '—'
+      : (r.onBike ? kWord(r.kind).replace('wind','') : 'Wind')+' '+Math.round(r.windMph);
+    const windCol=(r.onBike && r.windMph!=null) ? kColor(r.kind) : '#605d5d';
+
+    el.innerHTML='';
+    const root=el;
+    const sticky=EL('div','ok-sticky'); root.appendChild(sticky);
+    const read=EL('div','ok-read'); sticky.appendChild(read);
+    const r1=EL('div','ok-read-1'); read.appendChild(r1);
+    r1.appendChild(EL('span','ok-time',clock(r.hour)));
+    const lineTxt=this.wxReadOpen
+      ? dayLong+(r.onBike?' · riding':(r.zero?' · zero day':' · off the bike'))
+      : (nx?nx.name+' '+Math.round(abs(nx.tm-r.mile))+' mi · ':'')+'TM '+mi0(r.mile)
+        +(r.temp!=null?' · '+r.temp+'°':'')+(r.pop!=null?' · rain '+r.pop+'%':'');
+    r1.appendChild(EL('span','ok-line',lineTxt));
+    const wv=EL('span','ok-windv',windTxt); wv.style.color=windCol; r1.appendChild(wv);
+    const caret=EL('button','ok-caret'); caret.type='button';
+    caret.setAttribute('aria-label','Expand or collapse the readout');
+    caret.setAttribute('aria-expanded', this.wxReadOpen?'true':'false');
+    caret.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
+      +(this.wxReadOpen?'':' style="transform:rotate(180deg)"')+'><path d="M6 15l6-6 6 6"></path></svg>';
+    caret.addEventListener('click',()=>{ app.wxReadOpen=!app.wxReadOpen;
+      app.savePrefs(); app.renderOutlook(); });
+    r1.appendChild(caret);
+
+    if(this.wxReadOpen){
+      const cells=EL('div','ok-cells'); read.appendChild(cells);
+      const cell=(cls,lbl,val,sub,subcls)=>{ const c=EL('div',cls);
+        c.appendChild(EL('div','ok-k',lbl)); c.appendChild(EL('div','ok-v',val));
+        if(sub!=null) c.appendChild(EL('div',subcls||'ok-sub',sub)); cells.appendChild(c); };
+      cell('ok-c1','Trail mile','TM '+mi0(r.mile));
+      cell('ok-c2','Next town', nx?nx.name:'—',
+        nx?Math.round(abs(nx.tm-r.mile))+' mi on · TM '+mi0(nx.tm):'end of the plan','ok-sub ok-link');
+      cell('ok-c3','Passed', bk?bk.name:'nothing yet', bk?Math.round(abs(r.mile-bk.tm))+' mi back':null);
+      const grid=EL('div','ok-grid'); read.appendChild(grid);
+      const g4=(lbl,val,cls)=>{ const c=EL('div'); c.appendChild(EL('div','ok-k',lbl));
+        const v=EL('div','ok-v4 '+(cls||''),val); c.appendChild(v); grid.appendChild(c); };
+      g4('Temp', r.temp==null?'—':r.temp+'°','ok-temp');
+      g4('Dew', r.dewpoint==null?'—':r.dewpoint+'°','ok-dew');
+      g4('Heat ix', r.heatIndex?r.heatIndex+'°':'—','ok-hi');
+      g4('Gusts', r.gustMph==null?'—':Math.round(r.gustMph)+' mph','ok-gust');
+      g4('From', r.fromDeg==null?'—':dirName(r.fromDeg));
+      g4('Rain', (r.pop==null?'—':r.pop+'%')+(r.rainIn>0?' · '+r.rainIn.toFixed(2)+' in':''),'ok-rain');
+      g4('Thunder', r.thunder?r.thunder+'%':'—','ok-thu');
+      g4('RH / sky', (r.rh==null?'—':r.rh+'%')+' / '+(r.sky==null?'—':r.sky+'%'),'ok-rh');
     }
 
-    function drawCursor(g){ gCurRef=g; while(g.firstChild) g.removeChild(g.firstChild);
-      const i=app.wxCur==null?0:app.wxCur;
-      E('line',{x1:x(i), y1:RAIL_H-20, x2:x(i), y2:TOTAL_H-12, stroke:'#0088b0', 'stroke-width':1, opacity:.85},g);
-      E('path',{d:'M'+(x(i)-3.4)+' '+(RAIL_H-20)+'L'+(x(i)+3.4)+' '+(RAIL_H-20)+'L'+x(i)+' '+(RAIL_H-15)+'Z', fill:'#0088b0'},g);
-      PANELS.forEach(p=>{ const v=valueFor(p,i); if(v==null) return; E('circle',{cx:x(i), cy:yOf(p,v), r:2.6, fill:'none', stroke:'#0088b0', 'stroke-width':1.2},g); }); }
-    function valueFor(p,i){ const r=H[i]; if(!r) return null;
-      if(p.key==='temp') return r.temp; if(p.key==='wind') return r.windMph; if(p.key==='hum') return r.rh; return r.pop; }
+    /* the day strip — whatever day is scrolled into view, and a way out to the office */
+    const dayBar=EL('div','ok-day'); sticky.appendChild(dayBar);
+    const dLab=EL('span','ok-day-l'); dayBar.appendChild(dLab);
+    const dTM=EL('span','ok-day-tm'); dayBar.appendChild(dTM);
+    const dNote=EL('span','ok-day-h'); dayBar.appendChild(dNote);
+    /* Straight through to the day being looked at. The graph is a reading of the ride
+       plan, so "why does Tuesday stop there" has to be one tap from the answer — and it
+       opens that day, not the top of the list. */
+    /* Text size, stepped. Sat with the day strip rather than buried in More, because
+       the moment you want it is the moment you are squinting at the graph. */
+    const zoomBtn=(lbl,dir,title)=>{
+      const bt=EL('button','ok-zoom',lbl); bt.type='button'; bt.title=title;
+      const i=WX_SCALES.indexOf(S), n=i+dir;
+      if(n<0 || n>=WX_SCALES.length) bt.disabled=true;
+      bt.addEventListener('click',()=>{ app.wxScale=WX_SCALES[n]; app._wxScroll=null;
+        app.savePrefs(); app.renderOutlook(); });
+      return bt;
+    };
+    dayBar.appendChild(zoomBtn('A', -1, 'Smaller text'));
+    dayBar.appendChild(zoomBtn('A', 1, 'Bigger text'));
+    const toPlan=EL('button','ok-plan'); toPlan.type='button';
+    toPlan.innerHTML='<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"></path><path d="M8 12h13"></path><path d="M8 18h13"></path><path d="M3.5 6h.01"></path><path d="M3.5 12h.01"></path><path d="M3.5 18h.01"></path></svg>Plan';
+    toPlan.addEventListener('click',()=>{ app.planOpenDay=app.wxViewDay||0;
+      app.showTab('plan'); app.renderPlan(); });
+    dayBar.appendChild(toPlan);
+    const nws=document.createElement('a');
+    nws.className='ok-nws'; nws.target='_blank'; nws.rel='noopener';
+    nws.innerHTML='NWS <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg>';
+    dayBar.appendChild(nws);
 
-    function paintReadout(){ const i=app.wxCur==null?0:app.wxCur, r=H[i]; if(!r){ read.textContent=''; return; }
-      const di=Math.floor(i/24); read.innerHTML='';
-      const sep=()=>read.appendChild(EL('span','sep','·'));
-      read.appendChild(EL('b',null,dayLabel(di)+' '+clockLabel(r.hour)));
-      sep(); read.appendChild(EL('span','tm','TM '+n1(r.mile)));
-      if(r.temp!=null){ sep(); read.appendChild(EL('span',null,r.temp+'°'+(r.heatIndex?' feels '+r.heatIndex+'°':''))); }
-      if(r.windMph!=null){ sep(); const kw=r.kind==='head'?'Head':(r.kind==='tail'?'Tail':'Cross');
-        read.appendChild(EL('span','k-'+r.kind, kw+' '+Math.round(Math.abs(r.kind==='cross'?r.crossMph:r.headMph))+' mph'+(r.gustMph!=null?' · gust '+Math.round(r.gustMph):''))); }
-      if(r.pop!=null){ sep(); read.appendChild(EL('span',null,'rain '+r.pop+'%'+(r.rainIn>0?' / '+r.rainIn.toFixed(2)+'"':''))); }
-      if(!riding(i)){ sep(); read.appendChild(EL('span','off', isZero(di)?'zero day — off the bike':'outside the ride window')); } }
+    const graph=EL('div','ok-graph'); root.appendChild(graph);
+    /* legend chips: white bold on solid colour, one set per panel, pinned to the plot
+       and out of the scroller. This is the NWS look and it is not a place to be clever. */
+    const chipSets={
+      temp:[['Heat Index (°F)',C_HI],['Dewpoint (°F)',C_DEW],['Temperature (°F)',C_TEMP]],
+      wet:[['Rain',C_RAIN],['Thunder',C_THU]],
+      wind:[['Gusts (mph)',C_GUST],['Head',K_HEAD],['Cross',K_CROSS],['Tail',K_TAIL]],
+      hum:[['Rel. Humidity (%)',C_RH],['Sky Cover (%)',C_SKY]]
+    };
+    PANELS.forEach(p=>{
+      const box=EL('div','ok-chips');
+      box.style.top=((p.top+2)*S)+'px'; box.style.left=((GW+5)*S)+'px'; box.style.fontSize=(9*S)+'px';
+      chipSets[p.k].forEach(([t,c])=>{ const s=EL('span','ok-chip',t); s.style.background=c; box.appendChild(s); });
+      graph.appendChild(box);
+    });
+    const gutWrap=EL('div','ok-gutwrap'); gutWrap.appendChild(gutter); graph.appendChild(gutWrap);
+    const scroller=EL('div','ok-strip'); scroller.appendChild(strip); graph.appendChild(scroller);
 
-    function paintChrome(){
-      const hrs=app.wxRideEnd-app.wxRideStart;
-      durNote.textContent=hrs+' h · '+(hrs*META.avgSpeed)+' mi';
-      dayBtns.forEach((b,i)=>{ b.innerHTML=''; b.appendChild(document.createTextNode((DAYS[i].label||'').replace(/,.*/,'')+' '+DAYS[i].date.slice(8)));
-        b.appendChild(EL('span','z', isZero(i)?'zero':' ')); });
-      highlightDay();
-      const gotNote = data.got<data.of ? ' · '+data.got+' of '+data.of+' points answered' : '';
-      foot.textContent='Source: api.weather.gov · '+META.milesPerDay+' mi/day at '+META.avgSpeed+' mph, TM '+n1(META.startMile)+'–'+n1(META.endMile)
-        +'. Recessive hours are the ones you are not on the bike; rain amount rides on the chance panel as a callout on the floor'+gotNote
-        +'. Read at '+new Date(data.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})+'.'; }
+    const loadNote=EL('div','ok-loading','Loading next day…');
+    loadNote.hidden=true; root.appendChild(loadNote);
 
-    function highlightDay(){ const centre=(scroller.scrollLeft+(scroller.clientWidth||346)/2-LEFT)/PPH;
-      const di=Math.max(0,Math.min(DC-1,Math.floor(centre/24)));
-      dayBtns.forEach((b,i)=>{ b.className='pd-day'+(i===di?' on':''); }); }
+    const foot=EL('div','ok-foot');
+    const gotNote=data.got<data.of ? ' · '+data.got+' of '+data.of+' points answered' : '';
+    foot.textContent='api.weather.gov, read at '
+      +new Date(data.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})
+      +' · '+META.avgSpeed+' mph along the ride plan'+gotNote
+      +'. Night is shaded; grey wind is time off the bike, when a head or a tail means nothing.';
+    root.appendChild(foot);
 
-    function syncSticky(){ const sl=scroller.scrollLeft;
-      if(stickyG) stickyG.setAttribute('transform','translate('+sl+',0)');
-      if(!stickyDay) return;
-      const di=Math.max(0,Math.min(DC-1,Math.floor((sl+6)/PPH/24))), ownLabelX=x(di*24)+5;
-      if(ownLabelX<sl+LEFT+2){ const txt=dayLabel(di)+(isZero(di)?' · ZERO':'');
-        stickyDay.textContent=txt; stickyDay.setAttribute('opacity',1); stickyDayBg.setAttribute('width',txt.length*5.7+8); }
-      else{ stickyDay.setAttribute('opacity',0); stickyDayBg.setAttribute('width',0); } }
+    /* ── behaviour ── */
+    const setSel=i=>{ i=Math.max(0,Math.min(NH-1,i)); if(i===app.wxSel) return;
+      app.wxSel=i; app.renderOutlook(); };
+    const scrub=ev=>{ const box=scroller.getBoundingClientRect();
+      setSel(Math.round((ev.clientX-box.left+scroller.scrollLeft)/(PPH*S))); };
+    graph.addEventListener('pointerdown',ev=>{ if(ev.target.closest('a')) return;
+      app._wxDrag=true; scrub(ev); });
+    graph.addEventListener('pointermove',ev=>{ if(!app._wxDrag) return;
+      if(ev.buttons || ev.pointerType==='touch') scrub(ev); });
+    const endDrag=()=>{ app._wxDrag=false; };
+    graph.addEventListener('pointerup',endDrag); graph.addEventListener('pointercancel',endDrag);
+    graph.addEventListener('dblclick',()=>{ const near=nearestTownTo(H[app.wxSel].mile);
+      window.open(nwsFor(near.lat,near.lng,app.wxSel), '_blank', 'noopener'); });
 
-    /* events */
-    scroller.addEventListener('scroll',()=>{ app._wxScroll=scroller.scrollLeft; syncSticky(); highlightDay(); });
-    svg.addEventListener('click',ev=>{ const box=svg.getBoundingClientRect();
-      let i=Math.round((ev.clientX-box.left-LEFT)/PPH); if(i<0)i=0; if(i>NH-1)i=NH-1;
-      app.wxCur=i; if(gCurRef) drawCursor(gCurRef); paintReadout(); });
-    selStart.addEventListener('change',()=>{ app.wxRideStart=+selStart.value;
-      if(app.wxRideEnd<=app.wxRideStart+1){ app.wxRideEnd=Math.min(22,app.wxRideStart+2); }
-      app.savePrefs(); app.wxReplan(); });
-    selEnd.addEventListener('change',()=>{ app.wxRideEnd=+selEnd.value;
-      if(app.wxRideEnd<=app.wxRideStart+1){ app.wxRideStart=Math.max(4,app.wxRideEnd-2); }
-      app.savePrefs(); app.wxReplan(); });
-    dateIn.addEventListener('change',()=>{ if(!dateIn.value) return;
-      const a=dateIn.value.split('-'), chosen=new Date(+a[0],+a[1]-1,+a[2],0,0,0,0).getTime();
-      const now=new Date(), midnight=new Date(now.getFullYear(),now.getMonth(),now.getDate(),0,0,0,0).getTime();
-      app.wxStartShift=Math.round((chosen-midnight)/86400000); app.wxCur=null; app.buildOutlook(); });
-    selZero.addEventListener('change',()=>{ app.wxZeroDay=+selZero.value; app.wxReplan(); });
-
-    /* go */
-    app._wxN=(app._wxN||0)+1;
-    render(); paintReadout();
-    scroller.scrollLeft = app._wxScroll!=null ? app._wxScroll : Math.max(0,LEFT+app.wxRideStart*PPH-8);
-    syncSticky(); highlightDay();
-    // one re-measure once the tab has laid out (legend fit / sticky widths need clientWidth)
-    if(!app._wxLaidOut){ app._wxLaidOut=true; setTimeout(()=>{ if(app.wxData===data) render(); },0); }
+    const syncDay=()=>{
+      const vd=Math.max(0, Math.min(DC-1, Math.floor((scroller.scrollLeft/(PPH*S)+2)/24)));
+      app.wxViewDay=vd;
+      const info=DAYS[vd];
+      dLab.textContent=(info?info.label:'').toUpperCase()+(info&&info.zero?' · ZERO':'');
+      dTM.textContent=info ? 'TM '+mi0(Math.min(info.startMile,info.endMile))+'–'+mi0(Math.max(info.startMile,info.endMile)) : '';
+      dNote.textContent=NH>=FULL ? DCFULL+' days · the forecast ends here'
+        : Math.round(NH/24)+' of '+DCFULL+' days loaded';
+      const near=nearestTownTo(H[Math.min(NH-1, vd*24+app.wxRideStart)].mile);
+      nws.href=nwsFor(near.lat, near.lng, vd*24+app.wxRideStart);
+    };
+    scroller.addEventListener('scroll',()=>{
+      app._wxScroll=scroller.scrollLeft;
+      syncDay();
+      /* another day, when you scroll to the end of this one. The whole horizon was
+         fetched in one pass, so this widens the strip rather than going back out.
+         Not while the strip is settling onto its opening position: that scroll is the
+         render's, not the rider's, and it would flash "loading" before they touched it. */
+      if(NH>=FULL || app.wxGrowing || app._wxSettling) return;
+      if(scroller.scrollLeft+scroller.clientWidth < scroller.scrollWidth-240) return;
+      app.wxGrowing=true; loadNote.hidden=false;
+      requestAnimationFrame(()=>{ app.wxGrowing=false;
+        app.wxHours=Math.min(FULL, NH+24); app.renderOutlook(); });
+    });
+    /* Open on the hour the readout is showing, not on hour eight of day zero: a plan
+       opened at lunchtime has its first riding hour tomorrow, and a day strip naming a
+       day the readout isn't on is two answers to one question. */
+    app._wxSettling=true;
+    scroller.scrollLeft = app._wxScroll!=null ? app._wxScroll : Math.max(0, x(sel)*S-70);
+    requestAnimationFrame(()=>{ app._wxSettling=false; });
+    syncDay();
   }
 
   /* ---------- map + live data ---------- */
@@ -6964,10 +8142,26 @@ class TrailApp {
        the state's ArcGIS service; now that the line is a ridden plan rather than the
        published centreline, there is nothing upstream to refresh it from, and the
        array in this file is the only answer. */
+    /* The ride plan, in three rows because they answer three different questions: which
+       ground each day covers, where you sleep, and what the weather will be doing when
+       you are at each mile. The legs carry the colour key under their own row.
+
+       Registered BEFORE the route on purpose: the layers control stacks in registration
+       order, so a leg registered after it would be drawn underneath the very line it is
+       meant to be colouring in. */
+    this.planNightLayer=L.layerGroup().addTo(map);
+    this.planWxLayer=L.layerGroup();
+    this.planLayer=L.layerGroup().addTo(map);
+    this.regLayer('plannight', this.planNightLayer, 'Overnight stops');
+    this.regLayer('planwx', this.planWxLayer, 'Weather along the plan');
+    this.regLayer('plan', this.planLayer, 'Ride plan<div class="plan-key"></div>');
     this.routeLayer=L.layerGroup(this.embLines).addTo(map);
     this.regLayer('route', this.routeLayer,
       this.lyrSrc('Empire State Trail', EST_SRC, EST_NAME+' on RideWithGPS — opens the route this line was drawn on')
       +' <span class="lyr-ct">'+Math.round(TOTAL)+' mi</span>');
+    // Thinning the pins is a function of zoom, so the set has to be rebuilt at each one.
+    map.on('zoomend',()=>{ if(this.planLayerOn('planwx')) this.drawPlanLayer(); });
+    this.drawPlanLayer();
     // Names first, always: the mileposts are the ones that give way, and they can only
     // do that against boxes that have already been worked out for this view.
     map.on('moveend',()=>{ this.renderTownLabels(); this.renderMileposts(); this.loadAadt(); this.queueCycle(); this.wxPanRefresh(); this.syncRangeToMap(); this.elevPanRefresh(); });
@@ -7122,6 +8316,10 @@ class TrailApp {
         stat.textContent = pmsg+nmsg+cmsg+rmsg+'.';
       }
       this.renderNext(); this.renderCategories(); this.renderNearby();
+      // The plan decides where a day ends by the beds pinned there, and until this
+      // promise lands there are none — so a plan auto-built before it is a plan built
+      // blind, and gets rebuilt now that the towns can answer.
+      this.planPoisReady();
     });
   }
   popupHtml(t){

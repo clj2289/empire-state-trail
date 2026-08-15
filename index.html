@@ -318,7 +318,7 @@
   .mp-dot{width:5px;height:5px;border-radius:50%;background:currentColor;
     box-shadow:0 0 0 1.5px var(--color-bg)}
   .mp-tick{opacity:.9}
-  /* The multi-day chart is now the meteogram Outlook (styles under .pd-root, further
+  /* The multi-day chart is now the meteogram Outlook (styles under .ok-root, further
      down). What remains here is the map's own forecast pins. */
   /* The map's forecast: one dial per riding-hour, readable without a tap. */
   .wx-ic{background:none;border:0;overflow:visible}
@@ -353,64 +353,264 @@
     font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .sheet-line b{color:var(--color-text);font-size:13px}
   .sheet-dot{color:var(--color-neutral-400)}
-  /* Outlook — the continuous meteogram ("Broadsheet re-cut"). One scrolled strip in the
-     app's serif: sticky y-gutter and hour readout, the towns and mileposts on the shared
-     clock, and a wind line recoloured by what the wind does to the rider. Scoped under
-     .pd-root; the custom props below mirror the Broadsheet tokens so the block is
-     self-contained. */
-  .pd-root{--pbg:var(--color-bg);--ptext:var(--color-text);--paccent:var(--color-accent);
-    --pdiv:var(--color-divider);--pn500:var(--color-neutral-500);--pn600:var(--color-neutral-600);--pn700:var(--color-neutral-700);
-    margin-top:var(--space-2);background:var(--pbg);color:var(--ptext);
-    font-family:ui-serif,Georgia,"Times New Roman",serif;font-variant-numeric:tabular-nums;line-height:1.35;color-scheme:light}
-  .pd-root *{box-sizing:border-box}
-  .pd-ctl{padding:8px 0 9px;border-bottom:1px solid var(--pdiv);display:flex;flex-direction:column;gap:6px}
-  .pd-row{display:flex;align-items:center;gap:7px;flex-wrap:nowrap}
-  .pd-lab{font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--pn600);white-space:nowrap}
-  .pd-root select,.pd-root input[type=date]{font-family:inherit;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ptext);
-    background:#fff;border:1px solid var(--pdiv);border-bottom-color:var(--paccent);border-bottom-width:1.5px;
-    border-radius:2px;padding:6px 7px;line-height:1.1;min-height:30px;-webkit-appearance:none;appearance:none}
-  .pd-root select{padding-right:20px;background-image:linear-gradient(45deg,transparent 50%,var(--pn600) 50%),linear-gradient(135deg,var(--pn600) 50%,transparent 50%);
-    background-position:calc(100% - 11px) 54%,calc(100% - 7px) 54%;background-size:4px 4px,4px 4px;background-repeat:no-repeat}
-  .pd-root select:focus,.pd-root input[type=date]:focus{outline:1.5px solid var(--paccent);outline-offset:0}
-  .pd-dash{color:var(--pn500);font-size:12px}
-  .pd-note{font-size:10.5px;color:var(--pn600);margin-left:auto;white-space:nowrap;overflow:hidden}
-  .pd-root input[type=date]{min-width:120px;max-width:150px}
-  .pd-days{display:flex;gap:0;border:1px solid var(--pdiv);border-radius:2px;overflow:hidden}
-  .pd-day{flex:1 1 0;font-family:inherit;font-size:11px;letter-spacing:.02em;color:var(--pn700);
-    background:#fff;border:0;border-right:1px solid var(--pdiv);padding:6px 0;cursor:pointer;min-height:31px;font-variant-numeric:tabular-nums}
-  .pd-day:last-child{border-right:0}
-  .pd-day.on{background:var(--ptext);color:#f8f4f4}
-  .pd-day .z{display:block;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:#a86a00;line-height:1.1}
-  .pd-day.on .z{color:#f5c518}
-  /* readout — sticky so a tapped hour stays named while the panels scroll */
-  .pd-read{position:sticky;top:0;z-index:6;padding:7px 0;background:var(--pbg);border-bottom:1px solid var(--ptext);
-    box-shadow:0 1px 2px rgba(45,43,43,.10);font-size:12px;display:flex;flex-wrap:wrap;gap:0 6px;align-items:baseline;min-height:46px}
-  .pd-read b{font-weight:600;letter-spacing:.02em}
-  .pd-read .sep{color:var(--color-neutral-400)}
-  .pd-read .tm{color:var(--paccent)}
-  .pd-read .k-head{color:#7a1410;font-weight:600}
-  .pd-read .k-cross{color:#9a6b00;font-weight:600}
-  .pd-read .k-tail{color:#279a52;font-weight:600}
-  .pd-read .off{color:var(--pn600);font-style:italic}
-  .pd-scroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;
-    border-bottom:1px solid var(--pdiv);background:var(--pbg);scrollbar-width:none;-ms-overflow-style:none}
-  .pd-scroll::-webkit-scrollbar{display:none}
-  .pd-scroll svg{display:block}
-  .pd-hint{padding:6px 0 0;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--pn500)}
-  .pd-foot{padding:9px 0 0;font-size:10px;color:var(--pn600);border-top:1px solid var(--pdiv);margin-top:9px}
-  .pd-root svg text{font-family:ui-serif,Georgia,"Times New Roman",serif;font-variant-numeric:tabular-nums}
-  .pd-root text.ax{font-size:8.5px;fill:#8f8b8b}
-  .pd-root text.ttl{font-size:9px;letter-spacing:.13em;fill:#201e1d;text-transform:uppercase}
-  .pd-root text.cap{font-size:8.5px;letter-spacing:.03em;fill:#8f8b8b;text-transform:uppercase}
-  .pd-root text.val{font-size:8.5px}
-  .pd-root text.tag{font-size:8.5px;letter-spacing:.07em;text-transform:uppercase}
-  .pd-root text.town{font-size:9px;fill:#201e1d}
-  .pd-root text.tmv{font-size:8.5px}
-  .pd-root text.val,.pd-root text.tag,.pd-root text.town,.pd-root text.tmv,
-  .pd-root text.dayl,.pd-root text.zero{paint-order:stroke;stroke:#f3f2f2;stroke-width:2.6px;stroke-linejoin:round}
-  .pd-root text.dayl{font-size:9px;letter-spacing:.1em;fill:#201e1d;text-transform:uppercase}
-  .pd-root text.zero{font-size:8.5px;letter-spacing:.14em;fill:#7d7979;text-transform:uppercase}
-  .pd-root text.lg{font-size:8.5px;fill:#201e1d}
+  /* ══ Outlook ══ The NWS hourly graphical forecast, panel for panel. The tokens below
+     are the design's own, held locally rather than mapped onto the app's palette,
+     because the whole point of the screen is that it reads as the NWS graph a rider
+     already knows how to read. The type is the app's serif, not the mock's webfont: the
+     app is a PWA that has to draw on a towpath with no signal, and a graph that waits on
+     fonts.googleapis.com is a graph that is blank when you need it. */
+  .ok-root{--ok-bg:#f3f2f2;--ok-ink:#201e1d;--ok-mute:#7d7979;--ok-faint:#9b9797;
+    --ok-sec:#605d5d;--ok-link:#006786;--ok-hair:rgba(32,30,29,.12);
+    min-height:100%;background:var(--ok-bg);color:var(--ok-ink);color-scheme:light;
+    font-family:ui-serif,Georgia,"Times New Roman",serif;font-variant-numeric:tabular-nums;
+    padding-top:env(safe-area-inset-top);padding-bottom:calc(var(--tabbar-h) + var(--space-6))}
+  .ok-root *{box-sizing:border-box}
+  .ok-blank{padding:var(--space-6) var(--space-4)}
+  .ok-blank p{font-size:13px;line-height:1.55;color:var(--ok-sec);margin:0 0 var(--space-3)}
+  .ok-go{font-family:inherit;font-size:13px;padding:9px 16px;border-radius:999px;
+    background:#201e1d;color:#f8f4f4;border:1px solid #201e1d;cursor:pointer;min-height:40px}
+  /* Readout and day strip pin together. One sticky wrapper rather than two sticky
+     children, because the readout's height changes when it opens and a second top:0
+     would then sit under it. */
+  .ok-sticky{position:sticky;top:0;z-index:6}
+  .ok-read{background:var(--ok-bg);padding:7px 16px 8px;border-bottom:1px solid #201e1d}
+  .ok-read-1{display:flex;align-items:baseline;gap:7px}
+  .ok-time{font-size:16.5px;font-weight:600;white-space:nowrap}
+  .ok-line{font-size:13px;color:var(--ok-mute);flex:1;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ok-windv{font-size:13px;font-weight:600;white-space:nowrap}
+  .ok-caret{flex:none;width:22px;height:22px;margin:-3px -4px -3px 0;display:grid;
+    place-items:center;background:transparent;border:0;color:var(--ok-faint);cursor:pointer}
+  .ok-caret:focus-visible{color:#0088b0;outline:none}
+  .ok-cells{display:flex;margin-top:6px;border-top:1px solid var(--ok-hair);padding-top:6px}
+  .ok-c1{flex:1}
+  .ok-c2{flex:2;border-left:1px solid var(--ok-hair);padding-left:9px;min-width:0}
+  .ok-c3{flex:1;border-left:1px solid var(--ok-hair);padding-left:9px;min-width:0}
+  .ok-k{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ok-mute)}
+  .ok-cells .ok-v{font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ok-c1 .ok-v{font-size:15.5px}
+  .ok-c3 .ok-v{font-weight:400;color:var(--ok-sec)}
+  .ok-sub{font-size:12.5px;color:var(--ok-sec);margin-top:-1px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ok-sub.ok-link{color:var(--ok-link)}
+  .ok-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 6px;margin-top:7px;
+    border-top:1px solid var(--ok-hair);padding-top:6px}
+  .ok-v4{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ok-temp{color:#c00000} .ok-dew{color:#008000} .ok-hi{color:#8a6a1e}
+  .ok-gust{color:#000080} .ok-rain{color:#0a8f2f} .ok-thu{color:#c00000} .ok-rh{color:#605d5d}
+  .ok-day{display:flex;align-items:center;gap:9px;padding:5px 16px 6px;background:var(--ok-bg);
+    border-bottom:1px solid rgba(32,30,29,.16);font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--ok-sec)}
+  .ok-day-l{font-weight:600;white-space:nowrap}
+  .ok-day-tm{color:var(--ok-faint);letter-spacing:.06em;white-space:nowrap}
+  .ok-day-h{color:#bab6b6;letter-spacing:.06em;flex:1;min-width:0;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .ok-nws,.ok-plan{display:inline-flex;align-items:center;gap:4px;color:var(--ok-link);
+    font-size:11px;letter-spacing:.07em;text-decoration:none;white-space:nowrap;
+    font-family:inherit;text-transform:uppercase;background:transparent;border:0;
+    padding:3px 0;cursor:pointer;min-height:26px}
+  .ok-plan{margin-left:auto}
+  /* The two text-size steps. Same glyph at two weights, which is the convention every
+     reader app already taught people, and it costs eleven pixels of the day strip. */
+  .ok-zoom{font-family:inherit;background:transparent;border:0;color:var(--ok-link);
+    cursor:pointer;padding:0 2px;min-height:26px;line-height:1}
+  .ok-zoom:first-of-type{font-size:11px}
+  .ok-zoom:nth-of-type(2){font-size:15px}
+  .ok-zoom:disabled{color:#bab6b6;cursor:default}
+  /* The graph proper: a gutter that never scrolls and a strip that only scrolls sideways. */
+  .ok-graph{position:relative;display:flex;align-items:flex-start;background:#fff;touch-action:pan-x}
+  .ok-gutwrap{flex:none}
+  .ok-gut{display:block;background:#fff;border-right:1px solid #000}
+  .ok-strip{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
+    overscroll-behavior-x:contain;scrollbar-width:none;-ms-overflow-style:none}
+  .ok-strip::-webkit-scrollbar{display:none}
+  .ok-svg{display:block;background:#fff}
+  /* White bold on solid colour, sitting on the plot. This is the NWS's own legend and it
+     is not a place to be inventive — a rider who knows that graph knows these. */
+  .ok-chips{position:absolute;left:37px;z-index:3;display:flex;gap:3px;pointer-events:none}
+  .ok-chip{font-family:Helvetica,Arial,sans-serif;font-size:9px;font-weight:700;color:#fff;
+    padding:2px 5px;line-height:1.1;white-space:nowrap}
+  .ok-root svg text{font-family:Helvetica,Arial,sans-serif}
+  .ok-loading{padding:4px 16px 0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#0088b0}
+  .ok-foot{padding:10px 16px 0;font-size:12px;line-height:1.55;color:var(--ok-faint)}
+
+  /* ══ Ride plan ══ Day rows, one open at a time. The left rail carries the date and a
+     hairline in the day's own map colour, so a row and a leg on the map name each other
+     without a legend. */
+  .pl-root{--pl-bg:#f3f2f2;--pl-ink:#201e1d;--pl-mute:#7d7979;--pl-faint:#9b9797;
+    --pl-sec:#605d5d;--pl-link:#006786;--pl-hair:rgba(32,30,29,.1);--pl-line:rgba(32,30,29,.22);
+    min-height:100%;background:var(--pl-bg);color:var(--pl-ink);color-scheme:light;
+    font-family:ui-serif,Georgia,"Times New Roman",serif;
+    padding-top:env(safe-area-inset-top);padding-bottom:calc(var(--tabbar-h) + var(--space-6))}
+  .pl-root *{box-sizing:border-box}
+  .pl-head{position:sticky;top:0;z-index:6;background:var(--pl-bg);padding:8px 18px 10px;
+    border-bottom:1px solid #201e1d}
+  .pl-head-1{display:flex;align-items:flex-end;gap:10px}
+  .pl-title-wrap{flex:1;min-width:0}
+  .pl-title{font-size:22px;font-weight:600;letter-spacing:-.015em;line-height:1.1}
+  .pl-sum{font-size:11.5px;color:var(--pl-mute);margin-top:1px;font-variant-numeric:tabular-nums}
+  .pl-auto{flex:none;font-family:inherit;font-size:11.5px;padding:5px 10px;background:transparent;
+    color:var(--pl-mute);border:0;cursor:pointer;min-height:32px}
+  .pl-save{flex:none;font-family:inherit;font-size:12px;padding:6px 14px;background:#201e1d;
+    color:#f8f4f4;border:1px solid #201e1d;border-radius:999px;cursor:pointer;min-height:32px}
+  .pl-head-2{display:flex;align-items:center;gap:14px;margin-top:9px;flex-wrap:wrap}
+  .pl-field{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
+  .pl-k{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--pl-faint);flex:none}
+  .pl-unit{font-size:11.5px;color:var(--pl-mute)}
+  .pl-note{font-size:10px;color:var(--pl-mute);letter-spacing:.06em;text-transform:uppercase}
+  /* Underlined fields on a transparent ground: the row reads as a sentence with blanks
+     in it rather than as a form, which is what a plan is. */
+  .pl-root select,.pl-root input[type=number]{font-family:inherit;font-size:13.5px;color:var(--pl-ink);
+    padding:2px 2px 3px;background:transparent;border:0;border-bottom:1px solid rgba(32,30,29,.4);
+    border-radius:0;cursor:pointer;font-variant-numeric:tabular-nums;-webkit-appearance:none;appearance:none}
+  .pl-root select:focus-visible,.pl-root input:focus-visible{outline:1.5px solid #0088b0;outline-offset:2px}
+  .pl-root input[type=number]{width:38px;text-align:center;cursor:text}
+  .pl-root .pl-num[data-plan=speed]{width:34px}
+  /* The anchor list carries long town names; left to size itself it pushes the pace and
+     the map button onto rows of their own. Capped and ellipsised so the header stays the
+     one line the design asks for. */
+  .pl-head-2 select{max-width:120px;text-overflow:ellipsis}
+  .pl-to{flex:1;min-width:0;font-size:14px}
+  .pl-pin{flex:none;margin-left:auto;display:inline-flex;align-items:center;justify-content:center;
+    width:32px;height:32px;background:#fff;color:var(--pl-link);border:1px solid var(--pl-line);
+    border-radius:999px;cursor:pointer}
+  .pl-day{display:flex;gap:12px;padding:10px 18px 11px;border-bottom:1px solid var(--pl-hair)}
+  .pl-day:has(.pl-row){padding:14px 18px 16px}
+  .pl-day.pl-zero{background:#eae9e9}
+  .pl-rail{flex:none;width:34px;text-align:center;display:flex;flex-direction:column;align-items:center}
+  .pl-dw{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--pl-faint)}
+  .pl-dn{font-size:23px;font-weight:600;line-height:1;margin-top:1px}
+  .pl-dc{font-size:9px;letter-spacing:.07em;text-transform:uppercase;color:var(--pl-faint);
+    margin-top:2px;white-space:nowrap}
+  .pl-hair{width:2px;flex:1;min-height:26px;margin-top:8px;opacity:.55;border-radius:2px}
+  .pl-body{flex:1;min-width:0}
+  .pl-top{display:flex;align-items:flex-start;gap:8px}
+  .pl-toggle{flex:1;min-width:0;text-align:left;background:transparent;border:0;padding:0;
+    font-family:inherit;color:var(--pl-ink);cursor:pointer}
+  .pl-tl{display:flex;align-items:baseline;gap:6px}
+  .pl-tl svg{align-self:center;flex:none}
+  .pl-t{font-size:17px;font-weight:600;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pl-s{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--pl-mute);margin-top:2px;
+    font-variant-numeric:tabular-nums}
+  .pl-moon{flex:none}
+  /* The day's distance, sitting in the room the title row already had. */
+  .pl-mi{flex:none;align-self:flex-start;margin-left:6px;font-size:17px;font-weight:600;
+    line-height:1.15;color:var(--pl-sec);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pl-mi i{font-size:10px;font-style:normal;font-weight:400;color:var(--pl-faint);margin-left:2px;
+    letter-spacing:.06em;text-transform:uppercase}
+  .pl-pill{flex:none;font-family:inherit;font-size:11.5px;padding:5px 11px;border:1px dashed var(--pl-line);
+    border-radius:999px;background:#fff;color:var(--pl-mute);cursor:pointer;min-height:30px;white-space:nowrap}
+  .pl-pill.on{background:#8a6a1e;color:#fff;border:1px solid #8a6a1e}
+  .pl-row{display:flex;align-items:baseline;gap:8px;margin-top:10px}
+  .pl-row-w{gap:14px;flex-wrap:wrap;margin-top:9px}
+  .pl-right{margin-left:auto}
+  .pl-nobed{margin-top:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .pl-nobed-k{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#b3261e}
+  .pl-nobed-none{font-size:11.5px;color:var(--pl-mute)}
+  .pl-chip{font-family:inherit;font-size:11.5px;padding:3px 9px;background:#fff;color:var(--pl-link);
+    border:1px solid var(--pl-line);border-radius:999px;cursor:pointer;min-height:28px}
+  .pl-disc{margin-top:10px;border-top:1px solid var(--pl-hair);padding-top:8px}
+  .pl-disc-h{display:flex;align-items:center;gap:8px}
+  .pl-disc-b{flex:1;text-align:left;display:flex;align-items:center;gap:5px;background:transparent;
+    border:0;padding:0;font-family:inherit;font-size:11.5px;color:var(--pl-link);cursor:pointer;min-height:26px}
+  .pl-maplink{flex:none;display:inline-flex;align-items:center;gap:4px;font-size:11.5px;
+    color:var(--pl-link);text-decoration:none;font-family:inherit;background:transparent;
+    border:0;padding:0 2px;cursor:pointer;min-height:26px}
+  .pl-maplink.on{font-weight:600}
+  /* The map inside the list. Two heights and a bar of three actions — the whole point is
+     that it opens where the beds are listed and gets out of the way again. */
+  .pl-minibox{margin-top:8px}
+  .pl-mini{height:180px;border:1px solid var(--pl-line);border-radius:3px;overflow:hidden;
+    background:#e9e5df;transition:height .12s ease}
+  .pl-mini.big{height:340px}
+  .pl-mini-canvas{width:100%;height:100%}
+  .pl-mini .leaflet-container{width:100%;height:100%;background:#e9e5df;
+    font-family:ui-serif,Georgia,serif}
+  .pl-mini-bar{display:flex;gap:14px;align-items:center;padding:5px 2px 0}
+  .pl-mini-bar button{font-family:inherit;font-size:11.5px;color:var(--pl-link);
+    background:transparent;border:0;padding:2px 0;cursor:pointer;min-height:26px}
+  .pl-mini-bar .pl-mini-x{margin-left:auto;color:var(--pl-mute)}
+  .pl-lodge{margin-top:8px;display:flex;flex-direction:column;gap:7px}
+  .pl-lrow{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;background:#fff;
+    border:1px solid rgba(32,30,29,.14);border-radius:3px}
+  .pl-lrow.on{background:#eef6f9;border-color:rgba(0,136,176,.5)}
+  /* The control that books the bed — a radio, because one night is one bed. Sized in
+     both axes explicitly: it has no text to hold it open, and a flex row will otherwise
+     squash an empty button into a dash. */
+  .pl-ltick{flex:0 0 18px;width:18px;height:18px;min-width:18px;min-height:18px;
+    margin-top:2px;padding:0;display:grid;place-items:center;background:#fff;
+    border:1.5px solid rgba(32,30,29,.35);border-radius:999px;cursor:pointer;
+    font-family:inherit;-webkit-appearance:none;appearance:none}
+  .pl-ltick i{display:block;width:8px;height:8px;border-radius:999px;background:transparent}
+  .pl-ltick.on{border-color:#0088b0}
+  .pl-ltick.on i{background:#0088b0}
+  .pl-ltick:focus-visible{outline:2px solid #0088b0;outline-offset:2px}
+  .pl-lrow>.pl-bic{margin-top:2px;flex:none;display:grid;place-items:center}
+  .pl-lbody{flex:1;min-width:0}
+  .pl-lname{font-size:12.5px;font-weight:600}
+  .pl-laddr{font-size:11px;color:var(--pl-mute)}
+  .pl-lacts{display:flex;gap:12px;margin-top:3px;align-items:center;flex-wrap:wrap}
+  .pl-lacts a,.pl-lacts button{display:inline-flex;align-items:center;gap:4px;font-family:inherit;
+    font-size:11.5px;color:var(--pl-link);background:transparent;border:0;padding:0;
+    text-decoration:none;cursor:pointer;min-height:26px}
+  .pl-stops{margin-top:7px;display:flex;flex-direction:column;gap:4px}
+  .pl-stop{display:flex;align-items:flex-start;gap:8px;width:100%;text-align:left;font-family:inherit;
+    padding:6px 8px;background:#fff;border:1px solid rgba(32,30,29,.14);border-radius:3px;
+    cursor:pointer;min-height:38px}
+  .pl-stop.on{background:#eef6f9;border-color:rgba(0,136,176,.45)}
+  .pl-tick{flex:none;width:15px;height:15px;min-width:15px;min-height:15px;margin-top:2px;
+    display:grid;place-items:center;font-size:10px;color:#fff;background:#fff;
+    border:1.5px solid rgba(32,30,29,.3);border-radius:3px}
+  .pl-stop.on .pl-tick{background:#0088b0;border-color:#0088b0}
+  .pl-sic{flex:none;margin-top:1px;display:grid;place-items:center}
+  .pl-sbody{flex:1;min-width:0}
+  .pl-sname{display:block;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* What it is and where it is, together on one line under the name — the two facts you
+     are weighing against each other, so they must not be at opposite ends of the row. */
+  .pl-smeta{display:block;font-size:10.5px;color:var(--pl-mute);margin-top:1px;
+    font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pl-scat{font-weight:700;letter-spacing:.07em;text-transform:uppercase;font-size:9.5px}
+  .pl-foot{padding:12px 18px 18px;font-size:11px;color:var(--pl-faint);line-height:1.5}
+
+  /* ══ The plan on the map ══ Markers and the day card. Everything here is transient or
+     lives inside the layers control — no band of its own over the map. */
+  .plan-key{display:flex;flex-direction:column;gap:3px;margin:4px 0 2px 2px}
+  .plan-key-row{display:flex;align-items:center;gap:6px}
+  .plan-key-sw{flex:none;width:14px;height:3px;border-radius:2px}
+  .plan-key-row span:last-child{font-size:10.5px;color:var(--color-neutral-600);white-space:nowrap}
+  .plan-night{display:flex;align-items:center;gap:4px;white-space:nowrap;
+    font:600 11px/1 ui-serif,Georgia,serif}
+  .plan-ring{width:22px;height:22px;display:grid;place-items:center;background:#f8f7f5;
+    border:2px solid #3b3a6a;border-radius:999px}
+  .plan-ring.plan-fin{border-color:#7a1410}
+  .plan-lb{background:#f8f7f5;border:1px solid rgba(32,30,29,.2);padding:2px 5px;border-radius:2px}
+  .plan-flag{width:24px;height:24px;display:grid;place-items:center;background:#f8f7f5;
+    border:2px solid #178040;border-radius:999px}
+  .plan-stopdot{display:block;width:10px;height:10px;border-radius:999px;background:#0088b0;
+    border:2px solid #fff;box-shadow:0 0 0 1px rgba(32,30,29,.35)}
+  .plan-wx{display:flex;flex-direction:column;width:62px;background:#f8f7f5;border:1.6px solid;
+    border-radius:2px;overflow:hidden;font-family:ui-serif,Georgia,serif;font-variant-numeric:tabular-nums}
+  .plan-wx-1{display:flex;align-items:baseline;gap:4px;padding:1px 4px}
+  .plan-wx-1 b{font-size:12px}
+  .plan-wx-1 i{font-size:8px;color:#7d7979;font-style:normal}
+  .plan-wx-2{font-size:8px;font-weight:700;color:#fff;text-align:center;padding:1px 0}
+  .plan-card{font-variant-numeric:tabular-nums}
+  .plan-card-h{display:flex;align-items:flex-start;gap:10px}
+  .plan-card-bar{flex:none;width:8px;height:32px;border-radius:2px}
+  .plan-card-k{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--color-neutral-500)}
+  .plan-card-t{font-size:17px;line-height:1.2;margin-top:2px}
+  .plan-card-p{margin-top:8px;font-size:12.5px;color:var(--color-neutral-600)}
+  .plan-card-b{margin-top:2px;font-size:12.5px;color:var(--color-neutral-700)}
+  .plan-card-l{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+  .plan-card-lr{padding:6px 8px;background:#fff;border:1px solid rgba(32,30,29,.14);border-radius:3px}
+  .plan-card-ln{font-size:12.5px;font-weight:600}
+  .plan-card-la{font-size:11px;color:var(--color-neutral-600);margin-bottom:2px}
+  .plan-card-lr a{font-size:11.5px;color:#0f6a8b;text-decoration:none;margin-right:10px}
+  .plan-card-btns{display:flex;gap:9px;margin-top:12px}
+  .plan-card-go,.plan-card-iso{flex:1;font-family:inherit;font-size:12.5px;padding:9px 0;
+    border-radius:2px;cursor:pointer;min-height:38px}
+  .plan-card-go{background:#201e1d;color:#f8f4f4;border:1px solid #201e1d}
+  .plan-card-iso{background:transparent;color:#201e1d;border:1px solid rgba(32,30,29,.3)}
   /* Zoom is one control in two halves, so it sits tighter than the gap between the
      independent FABs above it. */
   .fab-pair{display:flex;flex-direction:column;gap:4px}
@@ -1665,16 +1865,18 @@
       </div>
     </section>
 
+    <!-- Ride plan. Its own tab because it is a decision, not a setting: it decides where
+         every day ends, and the Outlook graph and the map's day legs are both readings of
+         it. Rendered whole by renderPlan on the way in. -->
+    <section data-screen="plan" class="screen">
+      <div id="planOut" class="pl-root"></div>
+    </section>
+
+    <!-- Outlook. Deliberately chrome-free: the readout, the day strip and the graph, and
+         nothing else on the screen to steal width from a 48-hour scroll. The controls that
+         used to live here are the ride plan now, which is a tab of its own. -->
     <section data-screen="wx" class="screen">
-      <div class="screen-pad">
-        <h1 class="screen-title">Outlook</h1>
-        <div class="poi-band">
-          <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
-        </div>
-        <button id="wxGo" type="button" class="poi-band-view">Get the outlook</button>
-        <div id="wxOut"></div>
-        <p class="poi-band-note">The next four days along the route ahead of you, on one NWS-style graph, from the US National Weather Service (api.weather.gov). <b>Miles a day</b> and your riding speed (in More, currently <b id="wxSpeedEcho">12</b> mph) decide where you’d be at each forecast hour; the <b>ride window</b>, <b>start date</b> and a <b>zero</b> (rest) day are set on the graph itself. Drag the strip sideways for later hours; tap an hour to read it. The wind line is coloured by what the wind does to <em>you</em> — red headwind, amber crosswind, green tailwind.</p>
-      </div>
+      <div id="wxOut" class="ok-root"></div>
     </section>
 
     <section data-screen="settings" class="screen">
@@ -1688,8 +1890,9 @@
         <div class="feat-list-lbl">Average riding speed</div>
         <div class="poi-band">
           <label>Speed <input id="avgSpeed" type="number" min="4" max="30" step="1" inputmode="numeric" placeholder="12"> mph</label>
+          <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
         </div>
-        <p class="poi-band-note">Moving average over a day, not what the computer flashes on a downhill — 10 to 13 is honest for a loaded touring bike. It decides where you’d be at each forecast hour, so the weather layer and the Outlook both hang off it.</p>
+        <p class="poi-band-note">An <b>overall</b> average, wheels-out to wheels-in, with the stops already inside it — not the moving average a bike computer shows. Lunch, locks, photographs and a puncture all come out of it, so it sits well below your road speed: 10 to 13 is honest for a loaded touring bike, and 12 on the road is more like 9 all-in. It decides where you’d be at each forecast hour, so the weather layer and the Outlook both hang off it — and it is also on the <b>Ride plan</b> tab, which is where it matters most. <b>Miles a day</b> is only the target <b>Auto-plan</b> aims at; once a plan exists, each day’s distance is that day’s own. Speed is currently <b id="wxSpeedEcho">12</b> mph.</p>
         <div class="set-lbl">Direction of travel</div>
         <button type="button" class="dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span class="dir-lbl">Buffalo → NYC</span></button>
         <div class="set-lbl"><label for="simSel">Simulate a location</label></div>
@@ -1711,6 +1914,7 @@
     <button data-tab="map" type="button" class="tab active" aria-current="page" title="Map" aria-label="Map"><span class="tab-ic" data-ic="map"></span></button>
     <button data-tab="next" type="button" class="tab" aria-current="false" title="Next up" aria-label="Next up"><span class="tab-ic" data-ic="next"></span></button>
     <button data-tab="itin" type="button" class="tab" aria-current="false" title="Trip" aria-label="Trip" hidden><span class="tab-ic" data-ic="list"></span></button>
+    <button data-tab="plan" type="button" class="tab" aria-current="false" title="Ride plan" aria-label="Ride plan"><span class="tab-ic" data-ic="plan"></span></button>
     <button data-tab="nearby" type="button" class="tab" aria-current="false" title="Nearby" aria-label="Nearby"><span class="tab-ic" data-ic="near"></span></button>
     <button data-tab="wx" type="button" class="tab" aria-current="false" title="Outlook" aria-label="Outlook"><span class="tab-ic" data-ic="fcast"></span></button>
     <button data-tab="settings" type="button" class="tab" aria-current="false" title="More" aria-label="More"><span class="tab-ic" data-ic="gear"></span></button>
