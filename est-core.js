@@ -6701,6 +6701,7 @@ class TrailApp {
      only useful if you can step forward again without doing it a second time by hand. */
   undoPlan(){
     const h=this.planHist.pop(); if(!h) return null;
+    this.planPreview=null;   // a proposal measured against a plan that is about to change
     const now=this.planSnapshot();
     if(!this.planRestore(h.snap)) return null;
     this.planRedo.push({snap:now, label:h.label});
@@ -6709,6 +6710,7 @@ class TrailApp {
   }
   redoPlan(){
     const r=this.planRedo.pop(); if(!r) return null;
+    this.planPreview=null;
     const now=this.planSnapshot();
     if(!this.planRestore(r.snap)) return null;
     this.planHist.push({snap:now, label:r.label});
@@ -7041,8 +7043,12 @@ class TrailApp {
           +(pvN ? pvN+(pvN===1?' day changes':' days change') : 'nothing changes')
           +(pvD>0 ? ' · '+pvD+' more day'+(pvD>1?'s':'')+' on the end' : '')
           +(pvD<0 ? ' · '+(-pvD)+' day'+(pvD<-1?'s':'')+' dropped' : '')+'</span>'
-        +'<button type="button" class="pl-ub" data-plan="applyprev">Apply</button>'
+        +'<button type="button" class="pl-ub pl-ub-go" data-plan="applyprev">Apply</button>'
         +'<button type="button" class="pl-ub" data-plan="cancelprev">Cancel</button>'
+        /* Undo and redo stay reachable underneath a proposal: cancelling gets you out of
+           the preview, undo gets you out of the edit that made you want one. */
+        +(this.planHist.length ? '<button type="button" class="pl-ub" data-plan="undo">Undo</button>' : '')
+        +(this.planRedo.length ? '<button type="button" class="pl-ub" data-plan="redo">Redo</button>' : '')
       +'</div>'
       : (dirty || this.planRedo.length) ? '<div class="pl-unsaved'+(dirty?'':' clean')+'">'
         +'<span class="pl-uk">'+(dirty?'Not saved':'Saved')+'</span>'
@@ -7156,7 +7162,7 @@ class TrailApp {
       if(chg) h.push('<div class="pl-chg"><span class="pl-chg-d"></span>'+esc(chg)+'</div>');
       if(gone) h.push('<div class="pl-chg pl-chg-x"><span class="pl-chg-d"></span>this day goes</div>');
       /* A day an earlier one rode past, with the two ways out of it right there. */
-      if(idle) h.push('<div class="pl-idle">'+warnSvg
+      if(idle && !prev) h.push('<div class="pl-idle">'+warnSvg
         +'<span>Day '+d+' already rides all the way to '+esc(fromN)+', so there are no miles left for this one.</span>'
         +'<button type="button" class="pl-fix" data-plan="pull" data-d="'+d+'"'
           +' title="Delete this empty day: every day after it happens one date earlier, and a new day is planned onto the end">'
@@ -7182,8 +7188,10 @@ class TrailApp {
         const ahead=this.bedTowns()
           .filter(t=>{ const m=(t.tm-b.start)*sgn; return m>2 && m<=PLAN_DAY_MAX_MI; })
           .sort((p,q)=>(p.tm-q.tm)*sgn);
-        let opts=ahead.map(t=>'<option value="'+t.tm+'"'+(atT&&t.tm===atT.tm?' selected':'')+'>'
-            +esc(t.n)+' · '+Math.round(abs(t.tm-b.start))+' mi · '+esc(this.bedWord(t))+'</option>').join('');
+        let sel=false;
+        let opts=ahead.map(t=>{ const on=!!(atT && t.tm===atT.tm && b.miles>0.5); if(on) sel=true;
+          return '<option value="'+t.tm+'"'+(on?' selected':'')+'>'
+            +esc(t.n)+' · '+Math.round(abs(t.tm-b.start))+' mi · '+esc(this.bedWord(t))+'</option>'; }).join('');
         /* The end of the trail, always — it is the one destination that is a destination
            whether or not anything is pinned at it, and the list was leaving it out
            because it is chosen by beds. Skipped only when a place already sits on it. */
@@ -7191,13 +7199,20 @@ class TrailApp {
           const term=sgn<0 ? 0 : TOTAL, gone=(term-b.start)*sgn;
           if(gone<=2 || gone>PLAN_DAY_MAX_MI) return;
           if(ahead.some(t=>abs(t.tm-term)<=3)) return;
-          const nt=nearestTown(term);
-          opts+='<option value="'+term+'"'+(!atT && abs(b.end-term)<3?' selected':'')+'>'
+          const nt=nearestTown(term), on=!sel && !atT && abs(b.end-term)<3;
+          if(on) sel=true;
+          opts+='<option value="'+term+'"'+(on?' selected':'')+'>'
             +esc(nt?this.shortTown(nt.n):'the end')+' · '+Math.round(abs(gone))+' mi · end of the trail</option>';
         })();
-        // a day that ends nowhere named still has to be able to show what it is
-        if(!atT) opts+='<option value="'+Math.round(b.end)+'" selected>⚠ '
-              +Math.round(b.miles)+' mi · between towns, no beds</option>';
+        /* When nothing in the list is what the day currently does, the list needs to SAY
+           so. Without this the browser quietly shows the first option as chosen, and a day
+           with no miles in it read as "Brockport · 8 mi" — so picking Brockport fired no
+           change event at all and the row sat there refusing to move. Disabled, because it
+           is a description of the day rather than somewhere you can ride to. */
+        if(!sel) opts='<option value="" selected disabled>'
+            +(b.miles<0.5 ? 'Nowhere yet — pick a town'
+              : '⚠ '+Math.round(b.miles)+' mi · between towns, no beds')
+          +'</option>'+opts;
 
         h.push('<div class="pl-row"><span class="pl-k">Ride to</span>'
           +'<select class="pl-sel pl-to" data-plan="to" data-d="'+d+'"'+(pd.zero?' disabled':'')+'>'+opts+'</select></div>');
@@ -7220,14 +7235,38 @@ class TrailApp {
            that are left, finishing where you were always going to finish; or keep their
            distances and move every town along. The fourth is to hand the rest back to the
            planner. All four are reversible, which is why they can sit on the row. */
-        if(d<days.length-1) h.push('<div class="pl-after"><span class="pl-k">The rest of the trip</span>'
-          +'<button type="button" class="pl-fix" data-plan="spread" data-d="'+d+'"'
-            +' title="Give every remaining day the same distance. You still finish where you finish now.">Even daily miles</button>'
-          +'<button type="button" class="pl-fix" data-plan="cascade" data-d="'+d+'"'
-            +' title="Keep each remaining day the length it was, so every town after this one moves further along the trail.">Shift every town along</button>'
-          +'<button type="button" class="pl-fix" data-plan="replan" data-d="'+d+'"'
-            +' title="Throw the remaining days away and plan them again from the end of this one.">Auto-plan the rest</button>'
-        +'</div>');
+        /* Only here when there is something to place. Three buttons offering abstract
+           policies for "the rest of the trip" meant nothing sitting under an untouched
+           day; the same three under a sentence with the actual numbers in it — you made
+           this day 33 miles longer and tomorrow is carrying all of it — are three answers
+           to a question the rider has just asked. Gone entirely while a preview is up,
+           when the only decision left is Apply or Cancel. */
+        const wasB=was&&was.bounds[d], wasD=was&&was.days[d];
+        const delta=(wasB&&wasD&&!wasD.zero&&!pd.zero) ? Math.round(b.miles)-Math.round(wasB.miles) : 0;
+        const laterRides=days.slice(d+1).some((x,i)=>!x.zero && bounds[d+1+i].miles>0.5);
+        /* Only while the next day is still standing where it was — that is the signature
+           of it having absorbed the change. Once you have spread the difference or shifted
+           the towns along, the sentence would be describing a plan that no longer exists,
+           so the row goes. */
+        const nb1=bounds[d+1], wb1=was && was.bounds[d+1];
+        const absorbed=!!(nb1 && wb1 && abs(nb1.end-wb1.end)<1);
+        if(!prev && delta!==0 && laterRides && absorbed){
+          const nextT=this.planDayTown(d+1), nextN=nextT?nextT.n:'the next day';
+          h.push('<div class="pl-after">'
+            +'<div class="pl-after-t">You made this day <b>'+abs(delta)+' mi '
+              +(delta>0?'longer':'shorter')+'</b>. Right now the next day has absorbed all of it — '
+              +'it still ends at '+esc(nextN)+', just '+abs(delta)+' mi '+(delta>0?'shorter':'longer')+'. Instead:</div>'
+            +'<button type="button" class="pl-fix" data-plan="spread" data-d="'+d+'"'
+              +' title="Give every remaining day the same distance. You still finish where you finish now.">'
+              +'Spread it over all the days left</button>'
+            +'<button type="button" class="pl-fix" data-plan="cascade" data-d="'+d+'"'
+              +' title="Keep each remaining day the length it was, so every town after this one moves further along the trail.">'
+              +'Move every later town on by '+abs(delta)+' mi</button>'
+            +'<button type="button" class="pl-fix" data-plan="replan" data-d="'+d+'"'
+              +' title="Throw the remaining days away and plan them again from the end of this one.">'
+              +'Auto-plan the rest</button>'
+          +'</div>');
+        }
 
         if(noBed){
           const near=this.bedTowns().filter(t=>abs(t.tm-b.end)<=14)
@@ -7490,6 +7529,8 @@ class TrailApp {
     el.addEventListener('change',e=>{
       const s=e.target.closest('[data-plan]'); if(!s) return;
       const act=s.dataset.plan, d=+s.dataset.d, v=+s.value;
+      // the "nowhere yet" placeholder carries no milepost; it is a label, not a choice
+      if(s.value==='' || !isFinite(v)) return;
       if(act==='anchor'){ this.planAnchor=Math.max(0,Math.min(TOTAL,v)); this.planSnap();
         this.savePlan(); this.planChanged(); this.renderPlan(); }
       else if(act==='speed'){ const n=Math.max(4,Math.min(25,v||12));
