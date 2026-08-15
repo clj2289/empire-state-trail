@@ -1356,12 +1356,25 @@ function poiCat(p){ return (p.asset==='Campground' && /\block\b|lock\s*\d+/i.tes
    there was no city field to begin with — what's left is a street line, and a road
    name in a Town column is worse than an empty cell. */
 const ADDR_ZIP=/^\d{5}(-\d{4})?(;.*)?$/, ADDR_ST=/^[A-Z]{2}$/;
+/* The route runs down the Niagara, so a few hundred pins are Canadian and their trailing
+   field is "L0S 1J0", not "12210". Left unstripped the whole address failed to yield a
+   city and fell back to the nearest trail town — which is how the hotels of
+   Niagara-on-the-Lake came to be listed as places to sleep in Lockport, forty miles off.
+   The combined form ("NY 13339") is stripped too; the canal locks are addressed that way. */
+const ADDR_CA_ZIP=/^[A-Z]\d[A-Z]\s?\d[A-Z]\d$/i;
+const ADDR_ST_ZIP=/^[A-Z]{2}\s+\d{5}(-\d{4})?$/;
 const ADDR_STREET=/\b(st|street|rd|road|ave|avenue|blvd|boulevard|ln|lane|dr|drive|way|hwy|highway|route|rt|pkwy|parkway|tpke|turnpike|pike|ct|court|cir|circle|ter|terrace|plaza|pl|place|sq|square|trail|row|walk|commons)\.?$/i;
 function poiCity(p){
   const a=p&&p.addr; if(!a) return '';
-  const parts=String(a).split(',').map(s=>s.trim()).filter(Boolean), had=parts.length;
-  while(parts.length && (ADDR_ZIP.test(parts[parts.length-1]) || ADDR_ST.test(parts[parts.length-1]))) parts.pop();
-  if(!parts.length || parts.length===had) return '';
+  const parts=String(a).split(',').map(s=>s.trim()).filter(Boolean);
+  const tail=()=>parts[parts.length-1];
+  while(parts.length && (ADDR_ZIP.test(tail()) || ADDR_CA_ZIP.test(tail())
+        || ADDR_ST.test(tail()) || ADDR_ST_ZIP.test(tail()))) parts.pop();
+  /* No longer requires that something WAS stripped. "278 Mary Street, Niagara-on-the-Lake"
+     carries a city and no postcode at all, and the old rule read the absence of a zip as
+     the absence of a city. The guards below are what keep a street line out, and they do
+     that job on their own. */
+  if(!parts.length) return '';
   // A handful of OSM records carry two towns in one field ("West Seneca;Buffalo").
   const c=parts[parts.length-1].split(';')[0].trim();
   if(!c || /^\d/.test(c) || /\d{3}/.test(c) || ADDR_STREET.test(c) || c.length>30) return '';
@@ -6251,22 +6264,42 @@ class TrailApp {
       if(a==='Campground' || a==='Lock camping' || a==='nb-camp') return 'camp';
       return null;
     };
-    const groups=new Map();
+    const groups=new Map(), homeless=[];
+    const add=(name,p,kind,lock)=>{
+      const key=normKey(name);
+      let g=groups.get(key);
+      if(!g){ g={n:name, beds:[], hotel:0, camp:0}; groups.set(key,g); }
+      g.beds.push({p, kind, lock}); g[kind]++;
+    };
+    /* Pass one: every pin that names its own town. That is the name on the road sign and
+       the name a rider would say, and it is the only source that is never a guess. */
     this.POIS.forEach(p=>{
       const kind=bedKind(p);
       if(!kind || p.mile==null || p.off>PLAN_BED_OFF_MI) return;
       // poiCat is the app's own reading of a lock camp; reuse it rather than re-deciding
       const lock=poiCat(p)==='Lock camping';
-      /* Its own address city first — that is the name on the road sign and the name a
-         rider would say. The nearest trail town is the fallback, for the pins (mostly
-         campgrounds) that carry no address at all. */
-      const near=nearestTown(p.mile);
-      const name=poiCity(p) || (near ? this.shortTown(near.n) : '');
-      if(!name) return;
-      const key=normKey(name);
-      let g=groups.get(key);
-      if(!g){ g={n:name, beds:[], hotel:0, camp:0}; groups.set(key,g); }
-      g.beds.push({p, kind, lock}); g[kind]++;
+      const city=poiCity(p);
+      if(city) add(city,p,kind,lock); else homeless.push({p, kind, lock});
+    });
+    /* Pass two: the pins with no address to give — a campground, a hotel listed by
+       postcode alone. They join the nearest place that DID name itself, because the pins
+       around you are better evidence of where you are than a table of trail towns is:
+       falling straight back to the nearest trail town put the hotels of
+       Niagara-on-the-Lake in Lockport, twenty-five miles down the canal, purely because
+       no other town in the table was nearer. The trail town is still the last resort, and
+       only when it is close enough to be credible. */
+    const named=[...groups.values()].map(g=>{
+      const ms=g.beds.map(b=>b.p.mile).sort((a,b)=>a-b);
+      return {g, tm:ms[Math.floor(ms.length/2)]};
+    });
+    homeless.forEach(h=>{
+      let best=null, bd=Infinity;
+      named.forEach(n=>{ const d=abs(n.tm-h.p.mile); if(d<bd){ bd=d; best=n; } });
+      if(best && bd<=PLAN_SNAP_MI) return add(best.g.n, h.p, h.kind, h.lock);
+      const near=nearestTown(h.p.mile);
+      if(near && abs(near.mi-h.p.mile)<=PLAN_BED_OFF_MI+PLAN_SNAP_MI)
+        return add(this.shortTown(near.n), h.p, h.kind, h.lock);
+      add(PLACE_LIKE.test(h.p.name||'') ? h.p.name : mpTxt(h.p.mile), h.p, h.kind, h.lock);
     });
     const rows=[];
     groups.forEach(g=>{
@@ -6304,11 +6337,17 @@ class TrailApp {
          a place — a lock, a state park, a refuge. Everything else folds back into the
          city, however far along the trail it sits. */
       clusters.sort((a,b)=>b.core.length-a.core.length);
-      const main=[];
+      const main=[], hub=clusters.length?clusters[0].mid:0;
       clusters.forEach((c,rank)=>{
-        if(rank>0 && PLACE_LIKE.test(c.seat.p.name||'')){
-          rows.push({n:c.seat.p.name, full:c.seat.p.name, tm:c.mid,
-            lat:c.seat.p.lat, lng:c.seat.p.lng, beds:c.core,
+        const far=abs(c.mid-hub)>PLAN_PLACE_SPREAD_MI*2;
+        if(rank>0 && (PLACE_LIKE.test(c.seat.p.name||'') || far)){
+          /* Far enough away to be somewhere else. A lock names itself; anything else is
+             named for the trail town nearest IT rather than for the city whose postcode
+             it happens to share, so a stray never inherits a name from twenty miles off. */
+          const nt=!PLACE_LIKE.test(c.seat.p.name||'') && nearestTown(c.mid);
+          const nm=PLACE_LIKE.test(c.seat.p.name||'') ? c.seat.p.name
+            : nt ? this.shortTown(nt.n)+' · '+mpTxt(c.mid) : g.n+' · '+mpTxt(c.mid);
+          rows.push({n:nm, full:nm, tm:c.mid, lat:c.seat.p.lat, lng:c.seat.p.lng, beds:c.core,
             hotel:c.core.filter(b=>b.kind==='hotel').length,
             camp:c.core.filter(b=>b.kind==='camp').length});
         } else main.push(...c.core);
@@ -6580,10 +6619,21 @@ class TrailApp {
            reading "Here" did not — two rows for one spot, disagreeing about which was
            chosen. So: name it, and when it IS one of them, drop the duplicate. */
         +(()=>{
-          const at=planTownAt(bedded, anchor, 0.5);
-          const near=at ? null : planTownAt(bedded, anchor);
-          const where=at ? ' · '+esc(at.n)
-            : near ? ' · '+Math.round(abs(near.tm-anchor))+' mi from '+esc(near.n) : '';
+          /* Whichever is genuinely closest — a bedded place OR a trail town. Asking the
+             bedded places alone answered "6 mi from Tonawanda" while standing in Buffalo,
+             because Buffalo's hotels are spread across the city and its cluster's median
+             sits miles from the terminus. The name of where you ARE beats the name of the
+             nearest bed. */
+          const bp=planTownAt(bedded, anchor);
+          const tn=nearestTown(anchor);
+          const tnGap=tn?abs(tn.mi-anchor):Infinity, bpGap=bp?abs(bp.tm-anchor):Infinity;
+          const best=Math.min(tnGap,bpGap)>PLAN_SNAP_MI ? null
+            : (tnGap<=bpGap ? {n:this.shortTown(tn.n), gap:tnGap, tm:tn.mi}
+                            : {n:bp.n, gap:bpGap, tm:bp.tm});
+          const at=(best && best.gap<=0.5) ? bp && abs(bp.tm-anchor)<=0.5 ? bp : null : null;
+          const where=!best ? ''
+            : best.gap<=0.5 ? ' · '+esc(best.n)
+            : ' · '+Math.round(best.gap)+' mi from '+esc(best.n);
           return '<select class="pl-sel" data-plan="anchor">'
             +'<option value="'+esc(String(anchor))+'" selected>Here'+where+' · '+mpTxt(anchor)+'</option>'
             /* In the order you would ride past them, not in milepost order — riding to
