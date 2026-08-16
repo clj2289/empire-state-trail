@@ -1546,6 +1546,8 @@ class TrailApp {
        edit — and the last saved copy, which is both what Discard goes back to and what
        every "was 55 mi" note on the screen is measured against. */
     this.planHist=[]; this.planRedo=[]; this.planSavedSnap=null; this.planPreview=null;
+    // The plan as it stood before the last change — see planWas.
+    this.planWasSnap=null;
     /* Off-device sync — see the FB_URL block up top. 'off' means no account on this device,
        which is the state a fresh install is in: this app works with no account and no
        network and must go on doing that. `remote` holds a newer plan only for the moment
@@ -2655,6 +2657,10 @@ class TrailApp {
     // A panorama over the map is map-screen chrome: it cannot follow you to the Trip
     // table, and it must not still be there in front of the map when you come back.
     if(name!=='map' && (this.svOpenNow() || this.svArmed)){ this.svClose(); this.svArm(false); }
+    /* Leaving the plan clears "what the last change did". Coming back to eight rows still
+       ruled through from an edit made yesterday would be reading a diff against a plan
+       nobody remembers making. */
+    if(this.screen==='plan' && name!=='plan') this.planWasSnap=null;
     this.screen=name;
     this.tabs.forEach(b=>{ const on=b.dataset.tab===name; b.classList.toggle('active',on); b.setAttribute('aria-current', on?'page':'false'); });
     this.screens.forEach(s=>{ s.classList.toggle('active', s.dataset.screen===name); });
@@ -6817,6 +6823,7 @@ class TrailApp {
   planEdit(label, fn){
     const before=this.planSnapshot();
     fn();
+    this.planWasSnap=before;
     this.planHist.push({snap:before, label:label||'that change'});
     if(this.planHist.length>40) this.planHist.shift();
     this.planRedo=[];   // a fresh edit is a new branch; there is nothing to go forward to
@@ -6843,6 +6850,7 @@ class TrailApp {
     this.planPreview=null;   // a proposal measured against a plan that is about to change
     const now=this.planSnapshot();
     if(!this.planRestore(h.snap)) return null;
+    this.planWasSnap=now;
     this.planRedo.push({snap:now, label:h.label});
     // Undo is an edit like any other now: it saves, and it goes up.
     this.savePlan(); this.planChanged();
@@ -6853,6 +6861,7 @@ class TrailApp {
     this.planPreview=null;
     const now=this.planSnapshot();
     if(!this.planRestore(r.snap)) return null;
+    this.planWasSnap=now;
     this.planHist.push({snap:now, label:r.label});
     this.savePlan(); this.planChanged();
     return r.label;
@@ -7171,6 +7180,7 @@ class TrailApp {
     this.planPicked=(p.picked && typeof p.picked==='object') ? {...p.picked} : {};
     this.planSnap();
     if(this.planSnapshot()!==before){
+      this.planWasSnap=before;
       this.planHist.push({snap:before, label:'the plan from '+(rec.device||'the other device')});
       if(this.planHist.length>40) this.planHist.shift();
     }
@@ -7374,7 +7384,12 @@ class TrailApp {
     return {days:s.d, stay:s.s||{},
       bounds:planDayBounds(s.d, isFinite(s.a)?s.a:this.planStartMile(), this.dirSign(), TOTAL)};
   }
-  planWas(){ return this.planSavedSnap==null ? null : this.planViewOf(this.planSavedSnap); }
+  /* What the plan looked like before the last change — not before the last save, which is
+     now always "a moment ago" and so never differs from anything. This is what the ruled
+     through towns on the rows are measured against, and what tells the row under a day
+     that tomorrow just absorbed forty miles. Cleared on the way out of the screen: it
+     answers "what did that do", and once you have looked away, you are not asking. */
+  planWas(){ return this.planWasSnap==null ? null : this.planViewOf(this.planWasSnap); }
   /* Run an edit, keep its result, and put the plan back the way it was. Nothing has
      happened yet: the rows draw what they are now with a line under each saying what this
      would make it, and the bar carries Apply and Cancel. Cheaper than modelling a
@@ -7938,17 +7953,20 @@ class TrailApp {
         const nb1=bounds[d+1], wb1=was && was.bounds[d+1];
         const absorbed=!!(nb1 && wb1 && abs(nb1.end-wb1.end)<1);
         if(!prev && delta!==0 && laterRides && absorbed){
-          const nextT=this.planDayTown(d+1), nextN=nextT?nextT.n:'the next day';
+          /* One line, then the three answers. The old version explained the situation in
+             four clauses before offering anything, which read as an interruption rather
+             than a choice — and the rider already knows what they just did. What they do
+             not know is the number this landed on the next day, so that is all it says. */
+          const nb=bounds[d+1], nextT=this.planDayTown(d+1);
           h.push('<div class="pl-after">'
-            +'<div class="pl-after-t">You made this day <b>'+abs(delta)+' mi '
-              +(delta>0?'longer':'shorter')+'</b>. Right now the next day has absorbed all of it — '
-              +'it still ends at '+esc(nextN)+', just '+abs(delta)+' mi '+(delta>0?'shorter':'longer')+'. Instead:</div>'
+            +'<div class="pl-after-t">Day '+(d+2)+' took the '+abs(delta)+' mi — '
+              +'<b>'+Math.round(nb.miles)+' mi</b> to '+esc(nextT?this.bedName(nextT):'its end')+'.</div>'
             +'<button type="button" class="pl-fix" data-plan="spread" data-d="'+d+'"'
               +' title="Give every remaining day the same distance. You still finish where you finish now.">'
-              +'Spread it over all the days left</button>'
+              +'Spread it</button>'
             +'<button type="button" class="pl-fix" data-plan="cascade" data-d="'+d+'"'
-              +' title="Keep each remaining day the length it was, so every town after this one moves further along the trail.">'
-              +'Move every later town on by '+abs(delta)+' mi</button>'
+              +' title="Keep each remaining day the length it was, so every town after this one moves '
+              +abs(delta)+' mi along the trail.">Move the towns on</button>'
             +'<button type="button" class="pl-fix" data-plan="replan" data-d="'+d+'"'
               +' title="Throw the remaining days away and plan them again from the end of this one.">'
               +'Auto-plan the rest</button>'
