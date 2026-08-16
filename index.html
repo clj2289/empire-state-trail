@@ -306,6 +306,14 @@
     background:var(--color-neutral-100);border-radius:var(--radius-md);padding:6px 8px}
   .poi-state.on{color:#1d6b3f;background:rgba(29,107,63,.09)}
   /* The two buttons a place of your own carries: put it on a day, or take it off the map. */
+  /* What one of your own places is, on the pin itself. Sits above the buttons because it
+     describes the place, and they act on it. */
+  .poi-kind{display:flex;align-items:center;gap:7px;margin-top:8px}
+  .poi-kind label{flex:none;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--color-neutral-500)}
+  .poi-kind-s{flex:1;min-width:0;font-family:inherit;font-size:12.5px;padding:4px 6px;
+    color:var(--color-text);background:var(--color-surface);
+    border:1px solid var(--color-neutral-400);border-radius:4px}
   .poi-mine{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
   .poi-mine button{flex:1 1 auto;font-family:inherit;font-size:12.5px;font-weight:600;
     cursor:pointer;padding:8px 10px;border-radius:var(--radius-md);
@@ -473,18 +481,79 @@
   .pl-sum{font-size:11.5px;color:var(--pl-mute);margin-top:1px;font-variant-numeric:tabular-nums}
   .pl-auto{flex:none;font-family:inherit;font-size:11.5px;padding:5px 10px;background:transparent;
     color:var(--pl-mute);border:0;cursor:pointer;min-height:32px}
+  /* Undo and redo, up in the header with the other controls. They used to sit in a band
+     across the plan that appeared after every edit to narrate what had just happened;
+     the way back is worth keeping, the running commentary is not. */
+  .pl-hb{flex:none;font-family:inherit;font-size:11.5px;padding:4px 10px;background:transparent;
+    color:var(--pl-ink);border:1px solid var(--pl-line);border-radius:999px;cursor:pointer;
+    min-height:28px}
+  .pl-hb:hover{background:rgba(32,30,29,.07)}
   .pl-head-2{display:flex;align-items:center;gap:14px;margin-top:9px;flex-wrap:wrap}
-  /* The bar under the header. Amber is kept for the preview, which IS a pending state;
-     the last-change row wears .clean because nothing is at stake there — the work is
-     already saved and this is only the way back. */
+  /* One day's GPX, on the day's own row. Quieter than the header's — that one is the
+     whole trip and this is one line of it — and last in the row, so a rest day losing it
+     just shortens the row instead of moving the controls beside it. */
+  .pl-gpxb{font-size:10.5px;padding:3px 9px;min-height:26px;color:var(--pl-mute)}
+  /* ---- the plan's own search ----
+     In the same hand as the fields above it: a blank in a sentence, not a widget. A
+     filled white pill with a rounded border reads as somebody else's search box dropped
+     onto the page — there is not one boxed control anywhere else on this screen. */
+  .pl-find{display:flex;align-items:center;gap:7px;margin-top:10px;
+    border-bottom:1px solid rgba(32,30,29,.4)}
+  .pl-find:focus-within{border-bottom-color:#0088b0}
+  .pl-find-ic{flex:none;display:flex;color:var(--pl-faint)}
+  .pl-find input{flex:1;min-width:0;font-family:inherit;font-size:14px;color:var(--pl-ink);
+    padding:3px 0 4px;background:transparent;border:0;-webkit-appearance:none;appearance:none}
+  .pl-find input::placeholder{color:var(--pl-faint)}
+  .pl-find input:focus{outline:none}
+  /* The browser draws its own × inside a type=search field, which put two of them side by
+     side — one ours, one the platform's, doing the same thing. */
+  .pl-find input::-webkit-search-cancel-button,
+  .pl-find input::-webkit-search-decoration{-webkit-appearance:none;display:none}
+  .pl-find-x{flex:none;width:22px;font-family:inherit;font-size:16px;line-height:1;
+    background:transparent;border:0;color:var(--pl-faint);cursor:pointer}
+  .pl-find-x:hover{color:var(--pl-ink)}
+  /* What just happened. Teal rather than amber: amber on this screen means "not saved
+     yet", and this is the opposite — a thing that is already done. */
+  .pl-say{margin-top:7px;padding:5px 8px;font-size:11.5px;line-height:1.35;color:#0b5f79;
+    background:#eef6f9;border-left:2px solid #0088b0;border-radius:2px}
+  /* Full-bleed to the header's own edges and ruled with the same hairline the day list
+     uses, so the answer reads as a section of the page rather than a card floating over
+     it. Capped and scrolling inside itself: the plan underneath is what the rider came
+     for, and a panel that fills the phone is a second screen. */
+  .pl-find-out{margin:9px -18px -10px;max-height:44vh;overflow:auto;
+    border-top:1px solid var(--pl-line)}
+  .pl-find-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+    padding:8px 18px 3px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--pl-faint)}
+  .pl-find-h span{letter-spacing:.06em;font-variant-numeric:tabular-nums}
+  /* Name and what it is on the left, the number flush right — the same shape as a day
+     row, which is the row directly underneath it. */
+  .pl-find-r{display:grid;grid-template-columns:1fr auto;column-gap:10px;width:100%;
+    min-width:0;text-align:left;background:transparent;border:0;
+    border-top:1px solid var(--pl-hair);padding:7px 18px;font-family:inherit;
+    color:inherit;cursor:pointer}
+  .pl-find-h + .pl-find-r,.pl-find-h + .pl-find-p .pl-find-r{border-top:0}
+  .pl-find-r b{grid-column:1;font-size:14.5px;font-weight:600;line-height:1.2;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pl-find-r em{grid-column:1;font-style:normal;font-size:10.5px;color:var(--pl-mute);
+    margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pl-find-r i{grid-column:2;grid-row:1/3;align-self:center;font-style:normal;
+    font-size:11px;color:var(--pl-mute);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .pl-find-r:hover{background:rgba(32,30,29,.05)}
+  /* A row that is both something to look at and something to add: the name is the button
+     that shows it on the map, the Stop control is its own target beside it. */
+  .pl-find-p{display:flex;align-items:center;gap:8px;border-top:1px solid var(--pl-hair)}
+  .pl-find-p .pl-find-r{flex:1;border-top:0;padding-right:0}
+  .pl-find-p .poi-add{flex:none;margin-right:18px}
+  .pl-find-n{padding:7px 18px;font-size:11px;color:var(--pl-mute);
+    border-top:1px solid var(--pl-hair)}
+  /* The day a search jumped to, said for a second and then gone. */
+  .pl-day-hit{animation:pl-flash 1.4s ease-out}
+  @keyframes pl-flash{0%,50%{background:#eef6f9}100%{background:transparent}}
+  /* The bar under the header, and now only for a preview — the one genuinely pending
+     thing on this screen. Amber says "not committed". */
   .pl-unsaved{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;
     padding:5px 8px;background:#fdf3e0;border:1px solid #e0b872;border-radius:3px}
-  /* Quiet grey: a bar that appears after every edit must not shout after every edit. */
-  .pl-unsaved.clean{background:#eceaea;border-color:rgba(32,30,29,.2)}
-  .pl-unsaved.clean .pl-uk{color:var(--pl-sec)}
-  .pl-unsaved.clean .pl-ut{color:var(--pl-mute)}
-  .pl-unsaved.clean .pl-ub{color:var(--pl-ink);border-color:var(--pl-line)}
-  .pl-unsaved.clean .pl-ub:hover{background:rgba(32,30,29,.07)}
   .pl-uk{flex:none;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
     color:#8a5a00}
   .pl-ut{flex:1;min-width:0;font-size:11px;color:#6b4a10;overflow:hidden;text-overflow:ellipsis}
@@ -648,11 +717,23 @@
      than as another panel bolted under the row. The milepost leads, because that is the
      column the eye runs down when you are working out how far to the next one. */
   .pl-picked{list-style:none;margin:4px 0 2px;padding:0;counter-reset:none}
-  .pl-picked li{display:flex;align-items:baseline;gap:7px;padding:2px 0;font-size:11.5px}
+  .pl-picked li{display:block}
+  /* The row itself is the button — the whole line is the target, which is what a thumb
+     needs, and it keeps the four columns lining up down the list. */
+  .pl-picked-b{display:flex;align-items:baseline;gap:7px;width:100%;padding:3px 0;
+    font-family:inherit;font-size:11.5px;text-align:left;color:inherit;
+    background:transparent;border:0;cursor:pointer;border-radius:2px}
+  .pl-picked-b:hover{background:rgba(32,30,29,.06)}
   .pl-picked-m{flex:none;min-width:62px;color:var(--pl-ink);font-weight:600;
     font-variant-numeric:tabular-nums}
-  .pl-picked-n{color:var(--pl-ink)}
-  .pl-picked-k{color:var(--pl-mute);font-size:10.5px}
+  .pl-picked-n{flex:1;min-width:0;color:var(--pl-ink);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* How far into the day, beside the milepost rather than across the row from it: the
+     two are one thought, and a name between them made reading either one a trip past the
+     other. Tabular and fixed-width, so the pair reads as a column down the day. */
+  .pl-picked-i{flex:none;min-width:60px;color:var(--pl-sec);font-size:10.5px;
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pl-picked-k{flex:none;min-width:74px;text-align:right;color:var(--pl-mute);font-size:10.5px}
   .pl-disc{margin-top:10px;border-top:1px solid var(--pl-hair);padding-top:8px}
   .pl-disc-h{display:flex;align-items:center;gap:8px}
   .pl-disc-b{flex:1;text-align:left;display:flex;align-items:center;gap:5px;background:transparent;
@@ -705,6 +786,18 @@
     font-family:inherit;padding:6px 8px;background:transparent;border:0;cursor:pointer}
   /* Looking at a place and choosing it are two different acts, so they are two different
      targets — and an anchor inside a button is markup a browser may simply drop. */
+  /* Your own places carry their kind as a control rather than a caption. Sized and
+     coloured exactly like the caption it replaces on the corridor's rows, so a column of
+     stops still reads as one column — it is the same fact, and on these rows it happens
+     to be one you can change.
+     Two classes deep on purpose: `.pl-root select` above sets the underlined-field look
+     every other control on this screen wants, and it would otherwise outrank a single
+     class here and strip the border back off. */
+  .pl-root .pl-skind{flex:none;max-width:112px;font-family:inherit;font-size:9.5px;
+    font-weight:700;letter-spacing:.07em;text-transform:uppercase;padding:3px 2px 3px 6px;
+    background:transparent;border:1px solid var(--pl-line);border-radius:3px;cursor:pointer;
+    -webkit-appearance:none;appearance:none}
+  .pl-root .pl-skind:hover{background:rgba(32,30,29,.05)}
   .pl-sacts{flex:none;display:flex;align-items:center;gap:2px;padding-right:5px}
   .pl-sacts a,.pl-sacts button{display:grid;place-items:center;width:30px;height:30px;
     color:var(--pl-link);background:transparent;border:0;padding:0;cursor:pointer;
@@ -1061,10 +1154,18 @@
      One field, above the filters rather than inside them: this asks a different
      question from the ones below it ("where is a Walmart" rather than "what is around
      me"), and it answers across the whole route regardless of how they are set. */
-  .poi-search{display:flex;align-items:center;gap:6px;margin-bottom:var(--space-3);
+  /* Stuck to the top of the screen it searches. The results run to hundreds of rows, and
+     a box that scrolls away means every change of mind is a scroll back up — which is
+     most of what searching a list of 9,000 places actually is. Opaque, not translucent:
+     table rows passing under a see-through bar read as a rendering fault. */
+  .poi-search{position:sticky;top:0;z-index:6;
+    display:flex;align-items:center;gap:6px;margin-bottom:var(--space-3);
     padding:0 var(--space-2);background:var(--color-surface);
     border:1px solid var(--color-divider);border-radius:var(--radius-md)}
   .poi-search:focus-within{border-color:var(--color-accent)}
+  /* The gap the sticky bar would otherwise show through as it leaves the top. */
+  .poi-search::before{content:"";position:absolute;left:-4px;right:-4px;top:-10px;height:10px;
+    background:var(--color-bg)}
   .poi-search-ic{display:flex;flex:none;color:var(--color-neutral-500)}
   .poi-search input{flex:1;min-width:0;font-family:inherit;font-size:13px;padding:9px 0;
     background:transparent;color:var(--color-text);border:0}
@@ -1073,6 +1174,41 @@
   .poi-search-x{flex:none;width:26px;font-family:inherit;font-size:18px;line-height:1;cursor:pointer;
     padding:4px 0;background:transparent;color:var(--color-neutral-600);border:0}
   .poi-search-x:hover{color:var(--color-text)}
+  /* The add-a-place form. Labels above their boxes rather than beside them: five fields
+     of very different lengths side by side is a ragged left edge and a lot of horizontal
+     hunting on a phone. */
+  .ap-form{display:flex;flex-direction:column;gap:9px;padding:2px 0 4px}
+  .ap-f{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
+  .ap-f>span{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--color-neutral-600)}
+  .ap-f>input{width:100%;box-sizing:border-box;font-family:var(--font-body);font-size:14px;
+    padding:8px 9px;color:var(--color-text);background:var(--color-surface);
+    border:1px solid var(--color-neutral-400);border-radius:var(--radius-md)}
+  .ap-f>input:focus{outline:2px solid var(--color-accent);outline-offset:-1px}
+  .ap-row{display:flex;gap:9px}
+  .ap-hint{font-size:11px;color:var(--color-neutral-500);margin-top:-5px}
+  .ap-go{align-self:flex-start;font-family:var(--font-body);font-size:14px;font-weight:600;
+    line-height:1;cursor:pointer;padding:10px 18px;color:var(--color-bg);
+    background:var(--color-accent);border:1px solid var(--color-accent);
+    border-radius:var(--radius-md)}
+  .ap-go:hover{background:var(--color-accent-700)}
+  .ap-go[disabled]{opacity:.55;cursor:default}
+  /* Empty until it has something to say, so the form does not carry a reserved strip of
+     blank space for a message that has not happened yet. */
+  .ap-stat:empty{display:none}
+  .ap-stat{font-size:12px;line-height:1.45;color:var(--color-neutral-700)}
+  .ap-stat.bad{color:#b3261e}
+  /* The Stop button on a search row. Narrow, right-aligned, and quiet until it means
+     something: an outline while the place is only addable, filled once it is on a day. */
+  .stopcell{width:1%;white-space:nowrap;text-align:right}
+  .poi-add{font-family:inherit;font-size:11.5px;font-weight:600;line-height:1;cursor:pointer;
+    padding:5px 9px;color:var(--color-accent);background:transparent;
+    border:1px solid var(--color-accent);border-radius:999px;white-space:nowrap}
+  .poi-add:hover{background:color-mix(in srgb,var(--color-accent) 10%,transparent)}
+  .poi-add.on{color:var(--color-bg);background:var(--color-accent);border-color:var(--color-accent)}
+  .poi-add[disabled]{color:var(--color-neutral-500);border-color:var(--color-neutral-400);
+    cursor:default;opacity:.7}
+  .poi-add[disabled]:hover{background:transparent}
   /* The result header restates the query, because on the map screen the box that set
      it is a bar that has since closed — and carries the only Clear there is over there. */
   .hit-head{display:flex;align-items:baseline;gap:8px;margin-bottom:4px;padding-bottom:4px;
@@ -1383,6 +1519,23 @@
   .mv-ll{margin-top:3px;font-size:11.5px;color:var(--color-neutral-500);
     font-variant-numeric:tabular-nums}
   .mv-lk{justify-content:center;margin-top:var(--space-2)}
+  /* Keeping a nameless spot. Ruled off above like the forecast is, because it is a
+     decision rather than a reading, and the field sits on top of its own button so the
+     name is read before it is committed. */
+  .mv-keep{margin-top:var(--space-3);padding-top:var(--space-3);
+    border-top:1px solid var(--color-divider);text-align:left}
+  /* A darker rule than the dialog's own: at --color-border this read as a caption
+     rather than as something you could type into, and the name is the one thing here
+     worth changing before you commit it. */
+  .mv-keep-n{width:100%;box-sizing:border-box;font-family:var(--font-body);font-size:13.5px;
+    padding:8px 9px;color:var(--color-text);background:var(--color-surface);
+    border:1px solid var(--color-neutral-400);border-radius:var(--radius-md)}
+  .mv-keep-n:focus{outline:2px solid var(--color-accent);outline-offset:-1px}
+  .mv-keep-b{margin-top:5px;width:100%;cursor:pointer;padding:9px var(--space-3);
+    font-family:var(--font-body);font-size:13.5px;font-weight:600;line-height:1;
+    color:var(--color-bg);background:var(--color-accent);
+    border:1px solid var(--color-accent);border-radius:var(--radius-md)}
+  .mv-keep-b:hover{background:var(--color-accent-700)}
   /* Chips are a left-reading list, so they opt out of the dialog's centred column. */
   .mv-find{text-align:left}
   .mv-find .pa-row{justify-content:flex-start}
@@ -1977,6 +2130,45 @@
             aria-label="Search every place on or near the trail by name or town">
           <button id="poiQX" type="button" class="poi-search-x" aria-label="Clear the search" hidden>&times;</button>
         </div>
+        <!-- Adding a place without going through the map. The map is the fast way when you
+             can see the spot; this is the way when you have an address off a website, or a
+             pair of coordinates from someone else, or you just want to type the phone
+             number in while you have it. Same <details> chassis as the filters, folded by
+             default, because most visits to this screen are not about adding anything. -->
+        <details id="addPlace" class="filters">
+          <summary class="filters-sum">
+            <span class="filters-caret" aria-hidden="true"></span>
+            <span class="filters-t">Add one of my places</span>
+            <span class="filters-state"></span>
+          </summary>
+          <form id="apForm" class="ap-form" autocomplete="off">
+            <label class="ap-f"><span>Name</span>
+              <input id="apName" type="text" maxlength="60" required
+                placeholder="Ruthie’s Diner"></label>
+            <!-- One box for both, because "where is it" has two honest answers and making
+                 the rider pick the right field first is a question they cannot answer
+                 until they know which one they have. -->
+            <label class="ap-f"><span>Where</span>
+              <input id="apWhere" type="text" maxlength="160"
+                placeholder="Address, town, or 43.05, -76.15"></label>
+            <div class="ap-hint">Leave it empty to use the middle of the map.</div>
+            <!-- What it is, not who chose it. Filled in by est-core from MY_KINDS so the
+                 form, the pin's popup and the planner's stop list can never drift into
+                 offering three different vocabularies for one field. -->
+            <label class="ap-f"><span>This is</span>
+              <select id="apKind"></select></label>
+            <div class="ap-row">
+              <label class="ap-f"><span>Phone</span>
+                <input id="apPhone" type="tel" maxlength="32" placeholder="Optional"></label>
+              <label class="ap-f"><span>Link</span>
+                <input id="apUrl" type="url" inputmode="url" maxlength="200" placeholder="Optional"></label>
+            </div>
+            <label class="ap-f"><span>Note</span>
+              <input id="apNote" type="text" maxlength="200" placeholder="Optional — pie, open till 8"></label>
+            <button id="apGo" type="submit" class="ap-go">Save it</button>
+            <div id="apStat" class="ap-stat" role="status"></div>
+          </form>
+        </details>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
         <!-- Class-keyed, not id-keyed, all the way down: the map sheet carries a second

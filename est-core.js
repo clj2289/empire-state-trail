@@ -1170,8 +1170,23 @@ const PLAN_STOP_COL={'your pick':'#6a4fae', 'resupply':'#0f6a8b', 'food':'#a2551
    there is another coffee up the road, there is not another aqueduct. */
 const PLAN_STOP_RANK={'your pick':0, 'sight':1, 'water':2, 'bike shop':3, 'pharmacy':4,
   'resupply':5, 'food':6, 'shop':7};
+/* What one of your own places actually IS. "Your pick" says who chose it, not what it is,
+   and a day listing four of them in the same violet says nothing about which one is
+   lunch. Every kind here is one the planner already knows, so a place you call water gets
+   the corridor's water colour and its drop, and none of this is a second taxonomy.
+   'your pick' stays first because it is the honest answer before you have said anything. */
+const MY_KINDS=['your pick','food','water','resupply','shop','bike shop','pharmacy','sight'];
+const KIND_ICON={'your pick':'target', 'food':'food', 'water':'drop', 'resupply':'cart',
+  'shop':'store', 'bike shop':'bike', 'pharmacy':'med', 'sight':'star'};
 const PLAN_STOP_OFF_MI=1.5;
+/* Below this a stop is on the route for all practical purposes, and asking a router to
+   trace two hundred yards is a network call to be told what you can already see. */
+const PLAN_DETOUR_MIN_MI=0.2;
 const PLAN_STOP_MAX=14;
+/* How many matches the plan's own search box shows before it stops. It sits under a
+   sticky header on the screen it edits, so it has to leave the plan visible — a panel
+   that fills the phone is a second screen, and the rider came here to see their days. */
+const PLAN_FIND_MAX=8;
 /* The longest a day in the dropdown is allowed to be. Without a ceiling the "longer day"
    band ran to the end of the trail and offered a 457-mile Tuesday — every town ahead is
    technically reachable if you never stop, which is not what the question was asking.
@@ -1554,6 +1569,9 @@ class TrailApp {
     /* Plan tab: which day is open (one at a time), whose lodging and whose stops lists
        are showing, and the waypoints ticked on those lists. Only `picked` is saved. */
     this.planOpenDay=null; this.planOpenLodge=null; this.planOpenStops=null; this.planPicked={};
+    /* The plan's own search. Not saved with the plan and not shared with the map's box:
+       it is a question you are asking right now, not a setting. */
+    this.planQ=''; this._planGeo=null; this._planGeoQ=null; this._planGeoT=null;
     /* Which days have had their bed list opened out past the first few. */
     this.planLodgeAll={};
     /* The undo stack — a snapshot of the whole plan before each edit, with a name for the
@@ -2744,7 +2762,10 @@ class TrailApp {
     });
     // delegated: any [data-lat] element zooms the map
     document.addEventListener('click',e=>{
-      const el=e.target.closest('[data-lat]'); if(!el || e.target.closest('a')) return;
+      // .poi-add sits inside a row whose job is "show me where this is". It has its own
+      // job, so the row must not also fire and throw the rider onto the map.
+      const el=e.target.closest('[data-lat]');
+      if(!el || e.target.closest('a') || e.target.closest('.poi-add')) return;
       this.markReturn(el);
       if(el.closest('#panelList') && this.panelSnap==='full') this.setPanelSnap('half');
       const pi=el.dataset.poi;
@@ -2764,7 +2785,8 @@ class TrailApp {
     if(fq) fq.addEventListener('input',()=>{ this.setQuery(fq.value,'findQ'); this.renderFind([], ''); });
     document.addEventListener('click',e=>{
       const r=e.target.closest('.find-r'); if(!r) return;
-      this.gotoFound(+r.dataset.flat, +r.dataset.flng, +r.dataset.fz, r.dataset.ftown||'');
+      this.gotoFound(+r.dataset.flat, +r.dataset.flng, +r.dataset.fz, r.dataset.ftown||'',
+        r.dataset.fname||'');
     });
     /* A route place in the Find bar is a POI, not a coordinate: the shared [data-lat]
        row handler above does the flying and the popup, so this only has to get the bar
@@ -2792,6 +2814,45 @@ class TrailApp {
     if(pqx) pqx.addEventListener('click',()=>{ this.setQuery('',''); const el=this.$('poiQ'); if(el) el.focus(); });
     // Popup markup is a string handed to Leaflet, so the confirm button is delegated.
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
+    // The spot dialog's own keep button — its coordinate is the one the tap armed.
+    document.addEventListener('click',e=>{
+      const k=e.target.closest('.mv-keep-b'); if(!k || !this.pendingLL) return;
+      const box=k.parentNode.querySelector('.mv-keep-n');
+      this.keepPlace({n:(box&&box.value.trim())||'A place',
+        y:this.pendingLL.lat, x:this.pendingLL.lng});
+    });
+    /* The Stop button on a search row. Same three outcomes as the map popup, and it goes
+       through the same two calls — a place kept from a list is not a different kind of
+       place from one kept off a pin. */
+    document.addEventListener('click',e=>{
+      const b=e.target.closest('.poi-add'); if(!b || b.disabled) return;
+      e.stopPropagation();
+      const [lat,lng]=String(b.dataset.at||'').split(',').map(Number);
+      const p=this.POIS.find(q=>(q.name||'')===b.dataset.poiadd
+        && abs(q.lat-lat)<0.0001 && abs(q.lng-lng)<0.0001);
+      if(!p) return;
+      const key=p.mile!=null ? this.poiStopKey(p) : '';
+      if(key && this.planPicked[key]){
+        this.planEdit('a stop off the plan', ()=>{ delete this.planPicked[key]; });
+        this.status('Took '+p.name+' off the plan.');
+      }
+      else if(p.asset==='chris'){
+        const r=this.addPoiAsStop(p);
+        this.status(r.ok ? 'Added '+p.name+' to day '+(r.d+1)+' · '
+          +this.planDayLabel(r.d).replace(',','')+'.' : 'Not added — '+r.why+'.');
+      }
+      else this.keepPlace({n:p.name, y:p.lat, x:p.lng, a:p.addr||'', p:p.phone||'',
+        u:p.url||'', d:p.note||''});
+      this.renderNearby();
+      if(this.screen==='plan') this.renderPlan();
+    });
+    // The typed way in: a form on Nearby, for a place you have an address for rather
+    // than a spot you can see. A form, so the phone keyboard's Go key submits it.
+    const apf=this.$('apForm');
+    if(apf) apf.addEventListener('submit',e=>{ e.preventDefault(); this.submitAddPlace(); });
+    // One vocabulary, written out in one place. See MY_KINDS.
+    const apk=this.$('apKind');
+    if(apk) apk.innerHTML=MY_KINDS.map(k=>'<option value="'+esc(k)+'">'+esc(k)+'</option>').join('');
     document.addEventListener('click',e=>{ const r=e.target.closest('.srch-rm'); if(r){ this.removeSearch(r.dataset.sk); if(this.map) this.map.closePopup(); } });
     document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
     /* Search a place, keep it, put it on a day. Three taps in three popups, and each one
@@ -2828,6 +2889,19 @@ class TrailApp {
       }
       if(this.map) this.map.closePopup();
       if(this.screen==='plan') this.renderPlan();
+    });
+    /* The same field the planner's picker writes, from the pin instead. On the document
+       because a Leaflet popup is outside every screen, and it does not close the popup:
+       saying what a place is is a thing you might do twice before you are happy. */
+    document.addEventListener('change',e=>{
+      const k=e.target.closest('[data-poikind]'); if(!k) return;
+      const [lat,lng]=String(k.dataset.at||'').split(',').map(Number);
+      if(!this.setMyPoiKind(k.dataset.poikind, lat, lng, k.value)) return;
+      this.status(k.dataset.poikind+(k.value==='your pick'
+        ? ' is back to just one of your places.' : ' is marked as '+k.value+'.'));
+      this.renderNearby();
+      if(this.screen==='plan') this.renderPlan();
+      this.drawPlanLayer();
     });
     document.addEventListener('click',e=>{
       const d=e.target.closest('[data-poidel]'); if(!d) return;
@@ -3014,7 +3088,26 @@ class TrailApp {
        there are three blocks now, so keeping it would have meant three writers for a
        value with no readers. */
   }
-  status(msg){ const el=this.$('locStatus'); if(el) el.textContent=msg; }
+  /* One line, said wherever the rider is standing. #locStatus lives on the map, so every
+     "Added X to day 3" spoken while the rider was on the plan was spoken to an empty
+     room: the Stop button flipped to "Day 3 ✓" and nothing else moved, which reads as a
+     tap that did not take. The plan gets the same sentence on its own header, cleared
+     after a few seconds because it is news, not state. */
+  status(msg){
+    const el=this.$('locStatus'); if(el) el.textContent=msg;
+    this.planSaid(msg);
+  }
+  planSaid(msg){
+    const el=this.$('planSay'); if(!el) return;
+    el.textContent=msg||'';
+    el.hidden=!msg;
+    clearTimeout(this._planSayT);
+    if(msg) this._planSayT=setTimeout(()=>{
+      const e=this.$('planSay'); if(e){ e.textContent=''; e.hidden=true; }
+      this._planSaidMsg='';
+    }, 7000);
+    this._planSaidMsg=msg||'';
+  }
   /* Something a layer row asked for is in flight, said on the control that row lives in:
      the layers button turns accent and its glyph spins. The layers card is where every
      one of these fetches was started from, so it is the honest place to say one is still
@@ -3626,6 +3719,16 @@ class TrailApp {
     root.innerHTML=
       '<div class="mv-k">This spot</div>'
       +'<div class="mv-v">Trail mile '+fmtMp(pr.mile)+'</div>'+off+delta
+      /* A bare patch of map is the one case with no name to read, which is why this
+         carries the field the other popups deliberately don't: a pin, a bridge, a place
+         to swim. Prefilled with the milepost so it still saves in one tap.
+         Above the forecast, not below it: the dialog is capped to the room over the
+         press and scrolls inside itself, so anything under a 54px weather block is
+         reliably out of sight — and a control you have to scroll to find is one the
+         rider never learns is there. */
+      +'<div class="mv-keep"><input type="text" class="mv-keep-n" maxlength="60" '
+        +'aria-label="Name for this place" value="Spot at TM '+fmtMp(pr.mile)+'">'
+      +'<button type="button" class="mv-keep-b">Save as one of my places</button></div>'
       /* Filled in by fillSpotWx once the forecast lands. It holds its own height from
          the start so the dialog doesn't jump out from under the thumb that opened it. */
       +'<div class="mv-wx"><div class="mv-wx-load">Reading the forecast…</div></div>'
@@ -3711,9 +3814,13 @@ class TrailApp {
     if(this.map && this.searchLayer && !this.map.hasLayer(this.searchLayer)) this.searchLayer.addTo(this.map);
     if(this.searchMarks[key]){ this.searchMarks[key].openPopup(); return; }
     if(!this.searches.some(x=>this.searchKey(x)===key)) this.searches.push(s);
-    this.addSearchMarker(s);
+    const mk=this.addSearchMarker(s);
     this.syncSearchLabel();
     this.savePrefs();
+    /* Open it. The pin is the answer to "where is this", and the button that keeps the
+       place is inside the popup — dropping the pin shut left the rider looking at the
+       thing they searched for with no way to do anything with it. */
+    if(mk) mk.openPopup();
     this.status('Marked your “'+s.label+'” search on the map — it’s in “My map searches” in the layers control.');
   }
   removeSearch(key){
@@ -4188,9 +4295,14 @@ class TrailApp {
      header says so, because a filter silently set aside is as bad as one silently on.
      Matches the town as well as the name: "kingston" is a thing you'd type into it.
      Normalised forms are cached on the POI — 9,000 of them per keystroke otherwise. */
-  searchHits(){
-    if(!this.qActive()) return [];
-    const q=normQ(this.q); if(!q) return [];
+  searchHits(){ return this.qActive() ? this.hitsFor(this.q) : []; }
+  /* Every place the app holds whose name or town matches a query. searchHits() is this
+     with the query the map and Nearby share; the plan tab passes its own, because typing
+     on the plan must not drop thirty magenta pins on a map nobody is looking at. */
+  hitsFor(raw){
+    const s=String(raw||'').trim();
+    if(s.length<2 || parseLL(s)) return [];
+    const q=normQ(s); if(!q) return [];
     const out=[];
     this.POIS.forEach(p=>{
       const nm=p._qn || (p._qn=normQ(p.name));
@@ -4214,6 +4326,34 @@ class TrailApp {
   }
   // 999 is the "couldn't be projected onto the route" sentinel, not a distance.
   offTxt(p){ const s=this.spurMi(p); return (s>=99) ? '—' : (s ? fmtMi(s)+' mi' : 'on trail'); }
+  /* One button, three states, said in the label rather than left to be inferred: on a
+     day already, addable, or not something a day can reach. The last one stays visible
+     and disabled with the reason on its tooltip — a missing button reads as a bug, and
+     "why can't I add this" is a fair question with a real answer. */
+  stopBtnHtml(p){
+    const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
+    const key=p.mile!=null ? this.poiStopKey(p) : '';
+    if(key && this.planPicked[key]){
+      const d=this.dayPast(p.mile);
+      /* "Added", not "Day 9 ✓". The word the rider is looking for after a tap is whether
+         it worked, and a button that answers with a day number is answering a question
+         they did not ask — they have to work out that the label changed at all, and that
+         the change means yes. The day comes after it, because it is the next thing they
+         want and it is on no other part of this row. */
+      return '<button type="button" class="poi-add on" data-poiadd="'+esc(p.name||'')+'"'
+        +' data-at="'+at+'" title="On your plan — tap to take it off">'
+        +'✓ Added'+(d>=0 ? ' · day '+(d+1) : '')+'</button>';
+    }
+    /* Every reason the planner would refuse, asked here rather than after the tap. It
+       used to ask three of the four, so a place a quarter-mile from where a day ends
+       offered a live "+ Stop", took the tap, and was turned down by addPoiAsStop into a
+       status line on another screen — the button stayed as it was, the day's list never
+       gained a row, and there was nothing anywhere to say why. */
+    const why=this.stopWhyNot(p).why;
+    if(why) return '<button type="button" class="poi-add" disabled title="'+esc(why)+'">+ Stop</button>';
+    return '<button type="button" class="poi-add" data-poiadd="'+esc(p.name||'')+'"'
+      +' data-at="'+at+'" title="Keep it and put it on the day that rides past it">+ Stop</button>';
+  }
   /* A table, because five numbers per row is a table and a flex row was already
      eliding names at four. Reuses table.itin, which the itinerary has been scrolling
      sideways on a phone since it shipped. The From-you column only exists when there
@@ -4236,6 +4376,10 @@ class TrailApp {
       +'mileage and map-view filters are all set aside while you’re searching.</div>';
     h+='<div class="table-wrap"><table class="itin poi-tbl"><thead><tr>'
       +'<th>Place</th><th>Town</th><th>TM</th><th>Off</th>'+(me?'<th class="frcell">From you</th>':'')
+      /* Tapping a row shows it on the map, which answers "where is it" and nothing else.
+         Deciding to stop there is the next thing a rider does with a search result, and
+         it used to mean going to the map, finding the pin and opening its popup. */
+      +'<th class="stopcell">Stop</th>'
       +'</tr></thead><tbody>';
     shown.forEach(p=>{
       const tw=this.poiTown(p);
@@ -4253,6 +4397,7 @@ class TrailApp {
         +'<td class="mi">'+esc(fmtMp(p.mile)||'—')+'</td>'
         +'<td class="mi off">'+esc(this.offTxt(p))+'</td>'
         +(me?'<td class="mi'+(back?' poi-back':'')+'">'+esc(from)+'</td>':'')
+        +'<td class="stopcell">'+this.stopBtnHtml(p)+'</td>'
         +'</tr>';
     });
     h+='</tbody></table></div>';
@@ -5111,15 +5256,19 @@ class TrailApp {
     let h=this.findHitsHTML();
     if(h && rows.length) h+='<div class="find-h">Elsewhere</div>';
     h+=rows.map(r=>'<button type="button" class="find-r" data-flat="'+r.lat+'" data-flng="'+r.lng+'"'
-      +' data-fz="'+r.z+'"'+(r.town?' data-ftown="'+esc(r.town)+'"':'')+'>'
+      +' data-fz="'+r.z+'"'+(r.town?' data-ftown="'+esc(r.town)+'"':'')
+      +' data-fname="'+esc(r.name||'')+'">'
       +'<b>'+esc(r.name)+'</b>'+(r.note?'<span>'+esc(r.note)+'</span>':'')+'</button>').join('');
     if(note) h+='<div class="find-n">'+esc(note)+'</div>';
     out.innerHTML=h;
   }
-  /* A found place gets the popup a map tap gets — the milepost, how far off the route
-     it sits, the two Google links — because "where is this" turns into exactly those
-     questions the moment you can see it. A trail stop opens its own, which is richer. */
-  gotoFound(lat,lng,z,town){
+  /* A trail stop opens its own popup, which is richer. Anything the geocoder found is a
+     place you looked up, so it lands as a search pin — the same pin the Find-nearby chips
+     drop, and the one whose popup carries "Save as one of my places". It used to get the
+     bare spot dialog instead: milepost, forecast, Google links, and no way to keep the
+     thing you had just gone looking for. Searching for a place in order to stop there is
+     most of why the search exists, so that dead end was the whole feature. */
+  gotoFound(lat,lng,z,town,name){
     if(!this.map || !isFinite(lat) || !isFinite(lng)) return;
     this.closeFind(true);
     this.showTab('map');
@@ -5127,7 +5276,8 @@ class TrailApp {
       this.centerVisible(lat,lng,z||14);
       this.markPick(lat,lng);
       if(town && this.townMarker[town]) this.townMarker[town].openPopup();
-      else this.tapPopup({lat,lng});
+      else this.dropSearch(lat, lng, name||(lat.toFixed(5)+', '+lng.toFixed(5)),
+        name||('Spot at '+lat.toFixed(4)+', '+lng.toFixed(4)));
     },80);
   }
 
@@ -6684,14 +6834,30 @@ class TrailApp {
      The day's own destination is never offered — you are sleeping there, not stopping. */
   planWayStops(d, a, b){
     const lo=Math.min(a,b)+2, hi=Math.max(a,b)-2;
-    if(!(hi>lo)) return [];
     const endT=planTownAt(this.bedTowns(), b);
     const out=[];
     this.POIS.forEach(p=>{
-      const kind=PLAN_STOP_CAT[p.asset];
-      if(!kind || p.mile==null || p.mile<lo || p.mile>hi || p.off>PLAN_STOP_OFF_MI) return;
-      const near=planTownAt(this.bedTowns(), p.mile, PLAN_SNAP_MI);
-      if(endT && near && near.n===endT.n) return;
+      /* What the rider called it beats what the app would have called it. Only your own
+         places can say — the corridor's categories come from OpenStreetMap and are not
+         yours to relabel. */
+      const mine=p.asset==='chris';
+      const kind=(mine && p.kind) || PLAN_STOP_CAT[p.asset];
+      if(!kind || p.mile==null || p.off>PLAN_STOP_OFF_MI) return;
+      if(mine){
+        /* Your own places go on whichever day rides past them and are not filtered any
+           further. The two rules below exist to keep the app from OFFERING you the town
+           you are already sleeping in as somewhere to stop; applied to a place you went
+           and saved they refuse it on your behalf — a museum three tenths of a mile from
+           where a day ends is exactly the kind of thing a rider saves, and being told it
+           "is the day rather than a stop along it" is the app arguing with a decision
+           already made. dayPast, so this and the Stop button cannot disagree about which
+           day it lands on, and so it can never be listed under two of them. */
+        if(this.dayPast(p.mile)!==d) return;
+      } else {
+        if(!(hi>lo) || p.mile<lo || p.mile>hi) return;
+        const near=planTownAt(this.bedTowns(), p.mile, PLAN_SNAP_MI);
+        if(endT && near && near.n===endT.n) return;
+      }
       /* Keyed by the place, NOT by the day it currently falls on. A stop you ticked is a
          thing you want to see, and re-planning the trip around it must not quietly untick
          it — when the days shift, the aqueduct simply turns up on whichever day now rides
@@ -6708,8 +6874,12 @@ class TrailApp {
       /* ?? and not ||, because "your pick" ranks 0 and `0 || 9` is 9 — which quietly gave
          the rider's own places the WORST rank and made them the first thing dropped when
          a day through a city filled the list. The exact opposite of what ranking them
-         first was for. */
-      const r=(PLAN_STOP_RANK[x.kind] ?? 9)-(PLAN_STOP_RANK[y.kind] ?? 9);
+         first was for.
+         A place of your own ranks first whatever you have called it. Its kind says what
+         it is; who chose it is a separate fact, and calling your own bakery "food" must
+         not push it behind the corridor's coffee shops or drop it off a busy day. */
+      const rk=s=>s.asset==='chris' ? -1 : (PLAN_STOP_RANK[s.kind] ?? 9);
+      const r=rk(x)-rk(y);
       return r || (x.mile-y.mile)*this.dirSign();
     });
     return out.slice(0, PLAN_STOP_MAX).sort((x,y)=>(x.mile-y.mile)*this.dirSign());
@@ -7728,6 +7898,17 @@ class TrailApp {
           +(zs?' · '+zs+' zero':'')
           +(short>0.5 ? '<span class="pl-shortk"> · '+Math.round(short)+' mi short of '
             +esc(this.destName())+'</span>' : '')+'</div></div>'
+        /* Undo lives up here with the other controls rather than in a band across the
+           plan. A band that says "LAST CHANGE · a stop on day 2" is telling the rider
+           something they just did and already saw in the status line — it holds a strip
+           of the screen open to narrate the past. The way back still has to exist, so it
+           is a button, and the label it would undo is on its tooltip. */
+        +(this.planHist.length ? '<button type="button" class="pl-hb" data-plan="undo" title="Undo '
+          +esc(this.planHist[this.planHist.length-1].label)+'">Undo</button>' : '')
+        +(this.planRedo.length ? '<button type="button" class="pl-hb" data-plan="redo" title="Redo '
+          +esc(this.planRedo[this.planRedo.length-1].label)+'">Redo</button>' : '')
+        +'<button type="button" class="pl-hb" data-plan="gpx" title="Download the whole trip '
+          +'as a GPX — the track, your stops, your places and every night’s town">GPX</button>'
         +'<button type="button" class="pl-auto" data-plan="auto">Auto-plan</button>'
         /* No Save. Every edit is already saved and already on its way up, and the cloud
            says how that is going — which is the only part a rider cannot see for
@@ -7785,13 +7966,32 @@ class TrailApp {
         +'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>'
         +'</button>'
       +'</div>'
-      /* Only there when there is something to say. It names the last thing you did, counts
-         the days that are no longer what was saved, and carries the two ways out — because
-         a rider who has just watched three days move needs to be able to take it back
-         without reconstructing what it used to be. */
-      /* There when there is something to say, and it stays for one beat after you undo
-         back to the saved plan — otherwise Redo would vanish with the bar and stepping
-         back to look at what a change did would be a one-way trip. */
+      /* Search, on the screen it gets answered on. Everything done here is "put that
+         place on this day", and that meant leaving for Nearby, finding the place, coming
+         back, and then hunting the list for the day it landed on. One box: it looks in
+         the plan you already have, at the places the route passes, and — last, because on
+         this app a search is nearly always about somewhere the trail goes — at the wider
+         world. Its own query, deliberately NOT the one the map and Nearby share: typing
+         here must not silently repaint the map. */
+      +'<div class="pl-find">'
+        +'<span class="pl-find-ic">'+icon('search',14)+'</span>'
+        +'<input id="planQ" type="search" inputmode="search" enterkeyhint="search"'
+          +' autocomplete="off" value="'+esc(this.planQ||'')+'"'
+          +' placeholder="A day, a town, or a place to add"'
+          +' aria-label="Search the plan, or find a place to add to it">'
+        +'<button type="button" id="planQX" class="pl-find-x" data-plan="qclear"'
+          +' aria-label="Clear the search"'+(this.planQ?'':' hidden')+'>&times;</button>'
+      +'</div>'
+      /* What just happened, on the screen it happened on. Survives the re-render that
+         follows the tap, which is the whole difficulty: the thing that says "added" is
+         written by the very action that rewrites this header. */
+      +'<div id="planSay" class="pl-say"'+(this._planSaidMsg?'':' hidden')+'>'
+        +esc(this._planSaidMsg||'')+'</div>'
+      +'<div id="planFindOut" class="pl-find-out" hidden></div>'
+      /* One bar, and only for a proposal you have not answered yet. A preview is the one
+         thing on this screen that is genuinely pending — days are drawn struck through
+         and nothing is committed until Apply — so it earns a band across the plan in a
+         way "here is what you last did" never did. */
       +(prev ? '<div class="pl-unsaved pl-prevbar">'
         +'<span class="pl-uk">Preview</span>'
         +'<span class="pl-ut">'+esc(this.planPreview.label)+' · '
@@ -7805,18 +8005,7 @@ class TrailApp {
         +(this.planHist.length ? '<button type="button" class="pl-ub" data-plan="undo">Undo</button>' : '')
         +(this.planRedo.length ? '<button type="button" class="pl-ub" data-plan="redo">Redo</button>' : '')
       +'</div>'
-      /* Nothing is ever unsaved now, so this bar has one job left: hold the way back. It
-         names the last change rather than announcing a state, because "Saved" on a screen
-         where everything is always saved is a word doing no work. */
-      : (this.planHist.length || this.planRedo.length) ? '<div class="pl-unsaved clean">'
-        +'<span class="pl-uk">Last change</span>'
-        +'<span class="pl-ut">'+(this.planHist.length
-            ? esc(this.planHist[this.planHist.length-1].label)
-            : 'undid '+esc(this.planRedo[this.planRedo.length-1].label))
-        +'</span>'
-        +(this.planHist.length ? '<button type="button" class="pl-ub" data-plan="undo">Undo</button>' : '')
-        +(this.planRedo.length ? '<button type="button" class="pl-ub" data-plan="redo">Redo</button>' : '')
-      +'</div>' : '')
+      : '')
       +this.syncPanelHtml()
     +'</div>');
 
@@ -7922,6 +8111,15 @@ class TrailApp {
               +' aria-pressed="'+(pd.zero?'true':'false')+'" title="'
               +(pd.zero?'Ride this day instead':'Make this a rest day')+'">'
               +(pd.zero?'✓ Zero day':'+ Zero day')+'</button>'
+            /* On the row, not down inside the fold. It was filed with the day's own
+               numbers on the theory that you download a day once you have finished
+               deciding what it is — but that put a file you want on the morning you ride
+               behind opening the day and scrolling past three dropdowns. Taking one day
+               to a head unit is a thing you do FROM the list. */
+            +(pd.zero||gone ? '' : '<button type="button" class="pl-hb pl-gpxb" data-plan="gpxday"'
+              +' data-d="'+d+'" aria-label="Download day '+(d+1)+' as a GPX"'
+              +' title="Download day '+(d+1)+' as a GPX — the track plus your stops, your'
+              +' places and where you sleep">GPX</button>')
           +'</div>');
 
       /* What this row used to be, when it is no longer what was saved. On every day the
@@ -7958,11 +8156,33 @@ class TrailApp {
          same call the fold makes — cheap, and it only runs where something was picked. */
       if(!pd.zero && !gone){
         const mine=this.planWayStops(d, b.start, b.end).filter(x=>this.planPicked[x.key]);
-        if(mine.length) h.push('<ol class="pl-picked">'+mine.map(x=>
-          '<li><span class="pl-picked-m">'+esc(mpTxt(x.mile))+'</span>'
+        /* How far into the day it is, which is the number a rider actually rides to. An
+           absolute milepost says where a place is on the trail; "8 mi in" says when to
+           start looking for it, and on a 42 mi day that is the difference between a
+           mid-morning coffee and somewhere you reach after lunch. */
+        const sgn=this.dirSign();
+        /* Each one a button onto the map. "TM 555.5 · Whirlpool State Park" is a name and
+           a number for somewhere the rider has never been, and the row was inert — the
+           only way to see where it actually was ran through opening the day, opening the
+           stop picker, and finding it again in a list of fourteen. */
+        if(mine.length) h.push('<ol class="pl-picked">'+mine.map(x=>{
+          const into=(x.mile-b.start)*sgn;
+          return '<li><button type="button" class="pl-picked-b"'
+            +(x.poi ? ' data-poi="'+x.poi.i+'"' : '')
+            +' data-lat="'+x.lat+'" data-lng="'+x.lng+'" data-z="15"'
+            +' title="Show '+esc(x.name)+' on the map">'
+          /* The two mileages side by side, because they are one thought: where the place
+             is on the trail, and how far into today that is. Split either side of the
+             name they were two lookups — read the milepost, cross the row, read the
+             other, hold both. */
+          +'<span class="pl-picked-m">'+esc(mpTxt(x.mile))+'</span>'
+          +'<span class="pl-picked-i">'+(into>=0.05 ? fmtMi(into)+' mi in' : 'at the start')+'</span>'
           +'<span class="pl-picked-n">'+esc(x.name)+'</span>'
           +'<span class="pl-picked-k">'+esc(x.kind)
-            +((x.off!=null && x.off>=0.2) ? ' · '+x.off.toFixed(1)+' mi off' : '')+'</span></li>').join('')
+            +(x.poi ? (this.detourTxt(x.poi) ? ' · '+esc(this.detourTxt(x.poi)) : '')
+                    : ((x.off!=null && x.off>=0.2) ? ' · '+x.off.toFixed(1)+' mi off' : ''))
+          +'</span></button></li>';
+        }).join('')
         +'</ol>');
       }
 
@@ -8022,7 +8242,6 @@ class TrailApp {
           +'<span class="pl-field pl-right"><span class="pl-k">or set miles</span>'
             +'<input class="pl-num" type="number" inputmode="numeric" min="0" max="160" value="'+Math.round(b.miles)+'" data-plan="miles" data-d="'+d+'"></span>'
         +'</div>');
-
         /* What to do with the days after this one. Lengthening a day has to put the
            difference somewhere, and there are three honest places for it to go: let
            tomorrow absorb it, which is what happens by itself; share it out over the days
@@ -8158,6 +8377,14 @@ class TrailApp {
             const on=!!this.planPicked[s.key];
             const cfg=catCfg(s.asset), col=PLAN_STOP_COL[s.kind]||'#605d5d';
             const off=(s.off!=null && s.off>=0.2) ? ' · '+s.off.toFixed(1)+' mi off' : '';
+            /* Your own places carry the kind as a control rather than a caption. Every one
+               of them read YOUR PICK, which says who chose it and not what it is — four of
+               them on a day were four identical violet rows, and the one you needed at
+               eleven in the morning looked exactly like the one you needed at six. The
+               corridor's rows keep their caption: those categories come from OpenStreetMap
+               and are not the rider's to relabel. */
+            const mine=s.asset==='chris';
+            const ic=mine ? (KIND_ICON[s.kind]||'target') : cfg.icon;
             /* A row you can look at, not only tick. The toggle stays the whole left-hand
                block so the gesture is unchanged; the links sit outside it, because an
                anchor inside a button is markup a browser is entitled to ignore. */
@@ -8165,12 +8392,23 @@ class TrailApp {
               +'<button type="button" class="pl-stoggle" data-plan="pickstop" data-key="'+esc(s.key)+'"'
                 +' aria-pressed="'+(on?'true':'false')+'">'
                 +'<span class="pl-tick">'+(on?'✓':'')+'</span>'
-                +'<span class="pl-sic" style="color:'+col+'">'+icon(cfg.icon,15)+'</span>'
+                +'<span class="pl-sic" style="color:'+col+'">'+icon(ic,15)+'</span>'
                 +'<span class="pl-sbody">'
                   +'<span class="pl-sname">'+esc(s.name)+'</span>'
-                  +'<span class="pl-smeta"><b class="pl-scat" style="color:'+col+'">'+esc(s.kind)+'</b>'
-                    +' · '+esc(mpTxt(s.mile))+esc(off)+'</span>'
+                  +'<span class="pl-smeta">'
+                    +(mine ? '' : '<b class="pl-scat" style="color:'+col+'">'+esc(s.kind)+'</b> · ')
+                    +esc(mpTxt(s.mile))+esc(off)+'</span>'
                 +'</span></button>'
+              /* Outside the toggle, because a select inside a button is markup a browser
+                 is entitled to ignore — the same reason the links below it sit out here. */
+              +(mine ? '<select class="pl-skind" style="color:'+col+'"'
+                  +' data-kname="'+esc(s.name)+'" data-at="'+(+s.lat).toFixed(5)+','+(+s.lng).toFixed(5)+'"'
+                  +' aria-label="What '+esc(s.name)+' is"'
+                  +' title="What this place is. Sets its colour and its icon everywhere, and'
+                  +' travels with the place rather than with this day">'
+                  +MY_KINDS.map(k=>'<option value="'+esc(k)+'"'+(k===s.kind?' selected':'')+'>'
+                    +esc(k)+'</option>').join('')
+                +'</select>' : '')
               +'<span class="pl-sacts">'
                 +'<button type="button" title="Show it on the map" aria-label="Show '+esc(s.name)+' on the map"'
                   +' data-poi="'+s.poi.i+'" data-lat="'+s.lat+'" data-lng="'+s.lng+'" data-z="15">'
@@ -8203,8 +8441,165 @@ class TrailApp {
       +'Beds and stops are the app’s own pins — NY State’s register, the OpenStreetMap corridor and your own picks.</div>');
     el.classList.toggle('pl-previewing', !!prev);
     el.innerHTML=h.join('');
+    /* Asked for after the render, not during it: the rows go up with the straight-line
+       figure and are replaced when the router answers, so a slow network delays a number
+       rather than the plan. */
+    this.loadDetours();
     // The map instance survives the rewrite; this puts it back where it belongs.
     this.planMini();
+    // The header was just rewritten, so the results under it are stale by definition.
+    this.renderPlanFind();
+  }
+
+  /* ---------- searching from the plan ----------
+     Three questions in one box, in the order they get asked: which day is that on, what
+     could I add, and — last, and only over the network — where is it. */
+  /* Days that answer to the query. Matched on everything the row already shows: the day
+     number, where it starts, where it ends, its date, and the names of the stops on it.
+     "brockport" and "day 6" and "tuesday" are all things a rider says about a day, and a
+     box that only knew one of them would be a box you had to learn. */
+  planDayHits(q){
+    const n=normQ(q); if(!n) return [];
+    const days=this.planP(), bs=this.planBounds(), out=[];
+    bs.forEach((b,d)=>{
+      const zero=days[d].zero;
+      const town=zero ? 'rest day' : (this.planEndName(b.end)||mpTxt(b.end));
+      const title='Day '+(d+1)+' · '+town;
+      const label=this.planDayLabel(d)||'';
+      const stops=zero ? [] : this.planWayStops(d, b.start, b.end)
+        .filter(s=>this.planPicked[s.key] && normQ(s.name).indexOf(n)>=0);
+      const self=normQ(title+' '+label+' '+this.placeNameAt(b.start)).indexOf(n)>=0;
+      if(!self && !stops.length) return;
+      out.push({d, title, num: zero ? '' : Math.round(b.miles)+' mi',
+        why: stops.length ? label+' · '+stops.map(s=>s.name).join(' · ') : label});
+    });
+    return out;
+  }
+  /* One place, one row. The same physical place turns up in more than one of the app's
+     lists — the State pins the Erie Canal Discovery Center as an Attraction, the OSM
+     corridor has it too, and the rider has saved it themselves — and a search that says
+     so three times, each with its own Stop button, is asking which copy of a museum you
+     would like to visit. Same name within a quarter mile is the same place; the copy the
+     rider owns wins, because that is the one carrying their kind and their note, and a
+     trail pin beats the corridor's because it has the State's own details on it. */
+  dedupeHits(list){
+    const rank=p=>p.asset==='chris' ? 0 : (catGrp(poiCat(p))==='trail' ? 1 : 2);
+    const out=[];
+    (list||[]).forEach(p=>{
+      const nm=normQ(p.name||'');
+      const i=out.findIndex(q=>normQ(q.name||'')===nm
+        && miBetween([q.lat,q.lng],[p.lat,p.lng])<0.25);
+      if(i<0){ out.push(p); return; }
+      if(rank(p)<rank(out[i])) out[i]=p;
+    });
+    return out;
+  }
+  /* The wider world, fetched once the typing has stopped and folded in when it lands.
+     Debounced because this is a keystroke handler talking to somebody else's server, and
+     put last because on this app a search is nearly always about a place the route
+     already passes. A failure is reported in the panel rather than thrown: the two
+     sections above it are still a real answer. */
+  planGeoWant(q){
+    if(this._planGeoQ===q) return;
+    this._planGeoQ=q;
+    clearTimeout(this._planGeoT);
+    this._planGeoT=setTimeout(async()=>{
+      let rows=[], err='';
+      try{ rows=await this.geocode(q); }
+      catch(e){ err='The wider place search didn’t answer — what’s above is the app’s own data.'; }
+      this._planGeo={q, rows, err};
+      if(this.screen==='plan' && (this.planQ||'').trim()===q) this.renderPlanFind();
+    }, 450);
+  }
+  renderPlanFind(){
+    const out=this.$('planFindOut'); if(!out) return;
+    const q=(this.planQ||'').trim();
+    const x=this.$('planQX'); if(x) x.hidden=!q;
+    if(q.length<2){ out.hidden=true; out.innerHTML=''; return; }
+    const h=[];
+    const days=this.planDayHits(q);
+    /* No counts on the headings. "Add a stop 6" is a number nobody acts on, and run up
+       against its own label it reads as a typo — the list is right underneath and can be
+       counted by looking at it. The only count worth printing is the one for rows that
+       are NOT there, at the foot. */
+    if(days.length) h.push('<div class="pl-find-h">In your plan</div>'
+      +days.map(r=>'<button type="button" class="pl-find-r" data-plan="jump" data-d="'+r.d+'">'
+        +'<b>'+esc(r.title)+'</b><em>'+esc(r.why)+'</em>'
+        +'<i>'+esc(r.num||'')+'</i></button>').join(''));
+
+    /* The same button the Nearby table carries, so "add this to a day" is one control
+       with one set of states wherever the rider meets it — including the disabled state
+       that says why a place cannot be a stop. */
+    const hits=this.dedupeHits(this.hitsFor(q));
+    if(hits.length){
+      h.push('<div class="pl-find-h">Add a stop</div>'
+        +hits.slice(0,PLAN_FIND_MAX).map(p=>{
+          const what=p.asset==='chris' ? (p.kind||'your pick')
+            : (catCfg(poiCat(p)).label||'');
+          /* The milepost on the right in tabular figures, the same place the day rows put
+             their mileage, so a column of these can be read down rather than across. */
+          return '<div class="pl-find-p">'
+            +'<button type="button" class="pl-find-r" data-poi="'+p.i+'" data-lat="'+p.lat+'"'
+              +' data-lng="'+p.lng+'" data-z="15" title="Show it on the map">'
+              +'<b>'+esc(p.name)+'</b>'
+              +'<em>'+esc([what, (p.off!=null && p.off>=0.2) ? p.off.toFixed(1)+' mi off' : '',
+                p.mile!=null && this.dayPast(p.mile)>=0 ? 'day '+(this.dayPast(p.mile)+1) : '']
+                .filter(Boolean).join(' · '))+'</em>'
+              +'<i>'+esc(p.mile!=null ? mpTxt(p.mile) : 'off route')+'</i></button>'
+            +this.stopBtnHtml(p)+'</div>';
+        }).join(''));
+      if(hits.length>PLAN_FIND_MAX)
+        h.push('<div class="pl-find-n">'+(hits.length-PLAN_FIND_MAX)+' more match on Nearby.</div>');
+    }
+
+    this.planGeoWant(q);
+    const g=this._planGeo;
+    if(g && g.q===q){
+      /* Photon knows the trail towns too, so the same place would otherwise be listed
+         twice — once with a milepost and a Stop button, once without either. */
+      const seen=[];
+      const far=(g.rows||[]).filter(r=>{
+        if(hits.some(p=>normQ(p.name)===normQ(r.name)
+          && miBetween([p.lat,p.lng],[r.lat,r.lng])<8)) return false;
+        /* And against each other: Photon files a street as one record per way, so a long
+           road comes back three times with the same name and the same town and no way to
+           tell the rows apart. Within a mile of a namesake is the same place. */
+        if(seen.some(s=>normQ(s.name)===normQ(r.name)
+          && miBetween([s.lat,s.lng],[r.lat,r.lng])<1)) return false;
+        seen.push(r);
+        return true;
+      }).slice(0,4);
+      if(far.length) h.push('<div class="pl-find-h">Elsewhere</div>'
+        +far.map(r=>'<div class="pl-find-p">'
+          +'<button type="button" class="find-r pl-find-r" data-flat="'+r.lat+'" data-flng="'+r.lng+'"'
+            +' data-fz="'+r.z+'" data-fname="'+esc(r.name||'')+'" title="Show it on the map">'
+            +'<b>'+esc(r.name)+'</b><em>'+esc(r.note||'')+'</em></button>'
+          /* Keeps it first and then puts it on a day, because a place the app has never
+             heard of has no milepost until it is one of yours — the same two steps
+             keepPlace does everywhere else, and it says which of them worked. */
+          +'<button type="button" class="poi-add" data-planadd="'+esc(r.name||'')+'"'
+            +' data-at="'+r.lat+','+r.lng+'"'
+            +' title="Save it to your places and put it on the day that rides past it">'
+            +'+ Stop</button></div>').join(''));
+      else if(g.err) h.push('<div class="pl-find-n">'+esc(g.err)+'</div>');
+    }
+    else if(!days.length && !hits.length)
+      h.push('<div class="pl-find-n">Looking…</div>');
+
+    if(!h.length) h.push('<div class="pl-find-n">Nothing in the plan or on the route '
+      +'matches “'+esc(q)+'”.</div>');
+    out.innerHTML=h.join('');
+    out.hidden=false;
+  }
+  /* Open the day and put it under the eye. Centred rather than scrolled to the top,
+     because the header this was typed into is sticky and would otherwise be sitting on
+     the row it just found. */
+  planScrollTo(d){
+    const el=this.$('planOut'); if(!el) return;
+    const row=el.querySelector('.pl-day[data-d="'+d+'"]'); if(!row) return;
+    row.scrollIntoView({behavior:'smooth', block:'center'});
+    row.classList.add('pl-day-hit');
+    setTimeout(()=>{ row.classList.remove('pl-day-hit'); }, 1500);
   }
 
   /* A map inside the list, so "6 places to sleep in Rhinebeck" can be answered by
@@ -8261,10 +8656,48 @@ class TrailApp {
   wirePlan(){
     const el=this.$('planOut'); if(!el || el._wired) return;
     el._wired=true;
+    /* Typing rewrites the results and NOTHING else. renderPlan replaces this whole
+       screen's HTML, input and all, so calling it from a keystroke would take the caret
+       out of the box between one letter and the next. The value is held on the app and
+       written back into the field whenever the plan does re-render, so a search survives
+       adding the stop it found. */
+    el.addEventListener('input',e=>{
+      if(!e.target || e.target.id!=='planQ') return;
+      this.planQ=e.target.value;
+      this.renderPlanFind();
+    });
+    /* A phone keyboard's Go key on a search field submits nothing here — there is no
+       form — so it is caught and used to skip the debounce the rider has just made
+       unnecessary by stopping typing. */
+    el.addEventListener('keydown',e=>{
+      if(!e.target || e.target.id!=='planQ' || e.key!=='Enter') return;
+      e.preventDefault();
+      this._planGeoQ=null;
+      clearTimeout(this._planGeoT);
+      this.planGeoWant((this.planQ||'').trim());
+    });
+    /* A place the geocoder found has no milepost until it is one of yours, so it is kept
+       first and then put on a day — keepPlace does both and says which of them worked. */
+    el.addEventListener('click',e=>{
+      const b=e.target.closest('[data-planadd]'); if(!b) return;
+      e.stopPropagation();
+      const [lat,lng]=String(b.dataset.at||'').split(',').map(Number);
+      this.keepPlace({n:b.dataset.planadd||'A place', y:lat, x:lng});
+    });
     el.addEventListener('click',e=>{
       const b=e.target.closest('[data-plan]'); if(!b) return;
       const act=b.dataset.plan, d=+b.dataset.d;
       if(act==='auto'){ this.autoPlan(); this.renderPlan(); }
+      else if(act==='gpx'){ this.gpxSave(null); }
+      else if(act==='gpxday'){ this.gpxSave(d); }
+      /* A day the search found. Opens it as well as scrolling to it — the rider asked
+         where something was, and the answer is the day with its stops showing. The search
+         is dropped on the way: the panel is sitting on top of the very row it just
+         found, and the question has been answered. */
+      else if(act==='jump'){ this.planQ=''; this.planOpenDay=d;
+        this.renderPlan(); this.planScrollTo(d); }
+      else if(act==='qclear'){ this.planQ=''; this.renderPlanFind();
+        const q=this.$('planQ'); if(q){ q.value=''; q.focus(); } }
       /* ---- sync ----
          One control: the cloud. Every edit saves and sends itself, so the only manual
          thing left worth doing is asking whether anything has come the other way. */
@@ -8331,6 +8764,19 @@ class TrailApp {
         }); this.renderPlan(); }
     });
     el.addEventListener('change',e=>{
+      /* Ahead of the numeric controls below, and matched on its class rather than
+         data-plan, because this one's value is a word — every branch under here parses
+         its value as a number and would drop it on the floor. */
+      const k=e.target.closest('.pl-skind');
+      if(k){
+        const [lat,lng]=String(k.dataset.at||'').split(',').map(Number);
+        if(this.setMyPoiKind(k.dataset.kname, lat, lng, k.value)){
+          this.status(k.dataset.kname+(k.value==='your pick'
+            ? ' is back to just one of your places.' : ' is marked as '+k.value+'.'));
+          this.renderPlan(); this.drawPlanLayer(); this.renderNearby();
+        }
+        return;
+      }
       const s=e.target.closest('[data-plan]'); if(!s) return;
       const act=s.dataset.plan, d=+s.dataset.d, v=+s.value;
       // the "nowhere yet" placeholder carries no milepost; it is a label, not a choice
@@ -8434,6 +8880,23 @@ class TrailApp {
         // the walk from the trail to the bed, so a two-mile detour is visible as one
         if(stay) L.polyline([[rp[0],rp[1]],[ep[0],ep[1]]],{pane:npane, color:'#3b3a6a',
           weight:2, opacity:.8, dashArray:'3 4'}).addTo(this.planNightLayer);
+      });
+      /* The ride out to each stop that isn't on the route, on the roads a bike would
+         actually take. Solid once it is a real traced route and dashed while it is still
+         the straight line, because the difference between the two is the whole point of
+         asking. */
+      (this.POIS||[]).forEach(p=>{
+        if(p.mile==null || !this.planPicked[this.poiStopKey(p)]) return;
+        const d=this.dayPast(p.mile);
+        if(d<0 || !this.planDayVisible(d)) return;
+        const det=this.detourOf(p);
+        if(!det || !det.coords || det.coords.length<2) return;
+        L.polyline(det.coords,{pane:npane, color:'#7a1410', weight:3, opacity:.9,
+          dashArray:det.road?null:'3 4'})
+          .bindPopup('<b>'+esc(p.name||'Stop')+'</b><div class="mv-s">'
+            +(det.road ? fmtMi(det.miles)+' mi each way by bike' : 'straight line — no road route found')
+            +' · leaves the route at '+esc(mpTxt(p.mile))+'</div>', {maxWidth:240})
+          .addTo(this.planNightLayer);
       });
       /* the waypoints you ticked in the plan tab */
       days.forEach((pd,d)=>{
@@ -9980,13 +10443,14 @@ class TrailApp {
     if(p.asset==='Lodging') lk.push('<a class="pa" href="'+ratesLink([p.name,p.addr].filter(Boolean).join(' '), this.arrivalDate(p))+'" target="_blank" rel="noopener">Check rates</a>');
     /* Said plainly, because a volunteer map and a state asset register are worth
        different amounts of trust when you are deciding to ride nine miles for a
-       shower. */
+       shower. Short, though: the rider knows what an out-of-date map means without
+       being told to telephone, and the line is read on every pin they open. */
     const osmNote = p.src==='bundled'
-      ? 'From OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
+      ? 'From OpenStreetMap, so it can be out of date.'
       : p.src==='chris'
       ? 'One of your own places, kept on your account — it syncs with the plan.'
       : p.src==='rental'
-      ? 'From the brand’s own location page, bundled at build time — hours and whether a one-way drop is allowed change without notice, so ring the counter before you ride to it.'
+      ? 'From the brand’s own location page — hours and one-way drops change without notice.'
       : '';
     /* Any pin can become one of yours, and any of yours can become a stop on the day that
        rides past it. Both are one tap: a form asking for a name you can already read at
@@ -10011,6 +10475,15 @@ class TrailApp {
                  +(d>=0 ? ' · '+esc(this.planDayLabel(d).replace(',','')) : '')
                : '✓ Saved to My places · not on a day yet')
         +'</div>'
+        /* What it is, on the pin as well as in the planner's list. A rider looking at
+           their own pin is the other half of the time they think "that's the bakery, not
+           just a pick" — and the kind belongs to the place, so it is the same control
+           reading and writing the same field in both places. */
+        +'<div class="poi-kind"><label for="pk-'+esc(at)+'">This is</label>'
+        +'<select id="pk-'+esc(at)+'" class="poi-kind-s" data-poikind="'+esc(p.name)+'" data-at="'+at+'">'
+        +MY_KINDS.map(k=>'<option value="'+esc(k)+'"'+(k===(p.kind||'your pick')?' selected':'')
+          +'>'+esc(k)+'</option>').join('')
+        +'</select></div>'
         +'<div class="poi-mine">'
         +'<button type="button" class="'+(on?'off':'')+'" data-poistop="'+esc(p.name)+'" data-at="'+at+'">'
           +(on?'Take it off the plan':'Add as a stop')+'</button>'
@@ -10127,7 +10600,8 @@ class TrailApp {
   poiRecord(o){
     const lat=+o.y, lng=+o.x, pr=projectRoute(lat,lng);
     return {asset:'chris', name:o.n||'(pick)', sub:'', addr:o.a||'', phone:o.p||'',
-      url:o.u||'', note:o.d||'', src:'chris', lat, lng, mile:pr.mile, off:pr.off};
+      url:o.u||'', note:o.d||'', kind:MY_KINDS.indexOf(o.k)>0?o.k:'',
+      src:'chris', lat, lng, mile:pr.mile, off:pr.off};
   }
   /* Kept on the device for the same reason the plan is: half this trail has no signal, and
      a place you saved is no use to you only when you are somewhere with bars. */
@@ -10160,8 +10634,12 @@ class TrailApp {
     // Same name within a hundred yards is the same place, tapped twice.
     const dup=this.myPois.find(x=>String(x.n)===name && abs(+x.y-lat)<0.001 && abs(+x.x-lng)<0.001);
     if(dup) return this.poiRecord(dup);
+    /* k is what the place IS — one of MY_KINDS, empty for "your pick". Empty rather than
+       the word, so a record that has never been told what it is stays the shape it has
+       always had and an older device reading this account is not handed a field it does
+       not understand. */
     const rec={n:name, y:lat, x:lng, a:String(o.a||''), p:String(o.p||''),
-      u:String(o.u||''), d:String(o.d||'')};
+      u:String(o.u||''), d:String(o.d||''), k:MY_KINDS.indexOf(o.k)>0?o.k:''};
     this.myPois.push(rec);
     this.poiCache(this.myPois);
     const p=this.poiRecord(rec);
@@ -10185,6 +10663,257 @@ class TrailApp {
     if(this.map) this.map.closePopup();
     if(this.screen==='plan') this.renderPlan();
     return p;
+  }
+  /* ---------- the ride out to a stop ----------
+     "0.4 mi off" is a straight line drawn through whatever is between you and the door —
+     a river, a thruway, a rail cut. What a rider needs is the pedalled distance, so this
+     asks the same bike router the ruler uses (FOSSGIS OSRM, bike profile) for the way
+     from the route to the place, and keeps the geometry so it can be drawn and written
+     into the GPX. One call per off-route stop, cached for the session, and every failure
+     degrades to the straight line it replaced. */
+  detourKey(p){ return this.poiStopKey(p); }
+  detourOf(p){ return this._detour ? this._detour[this.detourKey(p)] : null; }
+  async loadDetours(){
+    if(this._detourBusy) return;
+    this._detour=this._detour||{};
+    const want=(this.POIS||[]).filter(p=>p.mile!=null && this.planPicked[this.poiStopKey(p)]
+      && p.off!=null && p.off>=PLAN_DETOUR_MIN_MI && this._detour[this.detourKey(p)]===undefined);
+    if(!want.length) return;
+    this._detourBusy=true;
+    // Marked pending first, so a second render does not queue the same places again.
+    want.forEach(p=>{ this._detour[this.detourKey(p)]=null; });
+    for(const p of want){
+      const rp=this.routePtAt(p.mile);
+      let leg=null;
+      try{
+        const a=await this.snapPoint({lat:rp[0], lng:rp[1]});
+        const bb=await this.snapPoint({lat:p.lat, lng:p.lng});
+        if(a.onRoad && bb.onRoad) leg=await this.routeSeg(L.latLng(a.lat,a.lng), L.latLng(bb.lat,bb.lng));
+      }catch(e){
+        /* Network failures are expected out here and the straight line is the right
+           answer to them. A TypeError is not — it once ate a call to a method that did
+           not exist and reported it as "offline", so anything that is not a fetch
+           problem goes to the console rather than quietly becoming a straight line. */
+        if(e instanceof TypeError && !/fetch|network/i.test(e.message||'')) console.error(e);
+      }
+      this._detour[this.detourKey(p)]=leg
+        ? {miles:leg.miles, coords:leg.coords, road:true}
+        : {miles:p.off, coords:[[rp[0],rp[1]],[p.lat,p.lng]], road:false};
+    }
+    this._detourBusy=false;
+    if(this.screen==='plan') this.renderPlan();
+    this.drawPlanLayer();
+  }
+  /* What the row says about getting there: the pedalled distance once the router has
+     answered, the straight line until then, and which of the two it is — because "1.1 mi"
+     and "1.1 mi as the crow flies" are different promises. */
+  detourTxt(p){
+    const d=this.detourOf(p);
+    if(d && d.road) return fmtMi(d.miles)+' mi ride out';
+    if(p.off!=null && p.off>=0.2) return p.off.toFixed(1)+' mi off';
+    return '';
+  }
+
+  /* ---------- GPX out ---------- */
+  /* What a head unit wants: one track for the riding, and a waypoint for everything worth
+     turning off for. Both, in one file, because a track with no waypoints navigates you
+     past the diner you picked and a waypoint file with no track is a scatter of pins.
+     ELEV is sampled every tenth of a mile in feet; GPX is metres. */
+  gpxEle(mile){
+    const i=Math.round(mile/ELEV_STEP);
+    const ft=ELEV[Math.max(0,Math.min(ELEV.length-1,i))];
+    return isFinite(ft) ? (ft*0.3048).toFixed(1) : null;
+  }
+  /* Every place worth a waypoint between two mileposts, ridden order. The picked stops
+     first because they are decisions, then the rider's own places whether or not they
+     were ticked — an untick means "not planning to stop", not "hide it from my GPS" —
+     then the bed at the end of the day, which is the one waypoint you navigate to. */
+  gpxPoints(mFrom, mTo){
+    const lo=Math.min(mFrom,mTo), hi=Math.max(mFrom,mTo), sgn=this.dirSign();
+    const out=[], seen=new Set();
+    const add=(name, lat, lng, mile, kind, note)=>{
+      if(!isFinite(lat) || !isFinite(lng)) return;
+      const k=(name||'')+':'+Math.round((mile==null?0:mile)*10);
+      if(seen.has(k)) return;
+      seen.add(k);
+      out.push({name:name||'Place', lat:lat, lng:lng, mile:mile, kind:kind, note:note||''});
+    };
+    (this.POIS||[]).forEach(p=>{
+      if(p.mile==null || p.mile<lo || p.mile>hi) return;
+      const key=this.poiStopKey(p);
+      const picked=!!this.planPicked[key];
+      if(!picked && p.asset!=='chris') return;
+      const det=picked ? this.detourOf(p) : null;
+      add(p.name, p.lat, p.lng, p.mile, picked?'Stop':'My place',
+        [(p.asset==='chris' ? p.kind : ''), p.addr, p.phone,
+          (det && det.road ? fmtMi(det.miles)+' mi ride out from the route'
+          : (p.off>=0.2 ? p.off.toFixed(1)+' mi off the route' : ''))]
+          .filter(Boolean).join(' · '));
+    });
+    this.planBounds().forEach((b,i)=>{
+      const t=this.planDayTown(i);
+      if(!t || b.end<lo || b.end>hi) return;
+      const n=this.bedName(t);
+      add(n, t.lat!=null?t.lat:null, t.lng!=null?t.lng:null, b.end, 'Night',
+        'End of day '+(i+1)+' · '+this.planDayLabel(i).replace(',',''));
+    });
+    out.sort((a,b)=>(a.mile-b.mile)*sgn);
+    return out;
+  }
+  gpxDoc(dayIdx){
+    const bounds=this.planBounds();
+    const one=dayIdx!=null && bounds[dayIdx];
+    const from=one ? bounds[dayIdx].start : (bounds.length?bounds[0].start:this.planStartMile());
+    const to=one ? bounds[dayIdx].end
+      : (bounds.length?bounds[bounds.length-1].end:this.planStartMile());
+    const lo=Math.min(from,to), hi=Math.max(from,to);
+    const name=one
+      ? 'EST day '+(dayIdx+1)+' — '+this.planDayLabel(dayIdx).replace(',','')
+        +' — '+this.placeNameAt(bounds[dayIdx].start)+' to '+(this.planDayTown(dayIdx)
+          ? this.bedName(this.planDayTown(dayIdx)) : 'the end of the day')
+      : 'Empire State Trail — '+bounds.length+' day'+(bounds.length===1?'':'s');
+    /* Sliced from the route in the direction of travel, so the track runs the way the
+       rider does. ROUTE is stored NYC-first; riding to NYC walks it backwards. */
+    let pts=ROUTE.filter(r=>r[2]>=lo && r[2]<=hi);
+    if(this.dirSign()<0) pts=pts.slice().reverse();
+    const x=s=>String(s==null?'':s).replace(/[<>&'"]/g,c=>
+      ({'<':'&lt;','>':'&gt;','&':'&amp;','\'':'&apos;','"':'&quot;'}[c]));
+    const L=['<?xml version="1.0" encoding="UTF-8"?>',
+      '<gpx version="1.1" creator="Empire State Trail app" xmlns="http://www.topografix.com/GPX/1/1">',
+      '<metadata><name>'+x(name)+'</name></metadata>'];
+    const wpts=this.gpxPoints(lo,hi);
+    wpts.forEach(w=>{
+      L.push('<wpt lat="'+(+w.lat).toFixed(6)+'" lon="'+(+w.lng).toFixed(6)+'">'
+        +(w.mile!=null && this.gpxEle(w.mile)!=null ? '<ele>'+this.gpxEle(w.mile)+'</ele>' : '')
+        +'<name>'+x(w.name)+'</name>'
+        +'<desc>'+x([w.kind, w.mile!=null?mpTxt(w.mile):'', w.note].filter(Boolean).join(' · '))+'</desc>'
+        +'<type>'+x(w.kind)+'</type></wpt>');
+    });
+    L.push('<trk><name>'+x(name)+'</name><trkseg>');
+    pts.forEach(r=>{
+      const e=this.gpxEle(r[2]);
+      L.push('<trkpt lat="'+r[0].toFixed(6)+'" lon="'+r[1].toFixed(6)+'">'
+        +(e!=null?'<ele>'+e+'</ele>':'')+'</trkpt>');
+    });
+    L.push('</trkseg></trk>');
+    /* Each ride out to an off-route stop as its own track, so a head unit shows the way
+       there rather than a waypoint sitting in a field on the far side of a river. Kept
+       separate from the day's track: the detour is optional and the main line should not
+       jink off it. Only the traced ones — writing a straight line into a GPX as though it
+       were a route is the one thing here that could send a rider down a highway. */
+    let det=0;
+    (this.POIS||[]).forEach(p=>{
+      if(p.mile==null || p.mile<lo || p.mile>hi) return;
+      if(!this.planPicked[this.poiStopKey(p)]) return;
+      const dt=this.detourOf(p);
+      if(!dt || !dt.road || !dt.coords || dt.coords.length<2) return;
+      det++;
+      L.push('<trk><name>'+x('To '+(p.name||'a stop')+' — '+fmtMi(dt.miles)+' mi')+'</name>'
+        +'<type>Detour</type><trkseg>');
+      dt.coords.forEach(c=>L.push('<trkpt lat="'+(+c[0]).toFixed(6)+'" lon="'+(+c[1]).toFixed(6)+'"></trkpt>'));
+      L.push('</trkseg></trk>');
+    });
+    L.push('</gpx>');
+    return {xml:L.join('\n'), name:name, pts:pts.length,
+      wpts:wpts.length, detours:det, from:lo, to:hi};
+  }
+  /* A Blob and a synthetic click. No server, and nothing leaves the phone. */
+  gpxSave(dayIdx){
+    const doc=this.gpxDoc(dayIdx);
+    if(!doc.pts){ this.status('No route in that stretch to write out.'); return null; }
+    const file=(dayIdx!=null
+      ? 'est-day-'+(dayIdx+1)+'-'+this.planDayLabel(dayIdx).replace(/[^a-z0-9]+/gi,'-')
+      : 'empire-state-trail-plan').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase()+'.gpx';
+    try{
+      const url=URL.createObjectURL(new Blob([doc.xml],{type:'application/gpx+xml'}));
+      const a=document.createElement('a');
+      a.href=url; a.download=file;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+    }catch(e){ this.status('Could not write the file out.'); return null; }
+    this.status('Saved '+file+' — '+doc.pts+' track points, '+doc.wpts
+      +' waypoint'+(doc.wpts===1?'':'s')
+      +(doc.detours ? ' and '+doc.detours+' ride'+(doc.detours===1?'':'s')+' out to a stop' : '')+'.');
+    return doc;
+  }
+  apStat(msg, bad){
+    const el=this.$('apStat'); if(!el) return;
+    el.textContent=msg||'';
+    el.classList.toggle('bad', !!bad);
+  }
+  /* The form's submit. "Where" takes a coordinate, an address, or nothing at all — three
+     answers a rider actually has, rather than three fields they have to choose between
+     before they know which one they hold. Nothing means the middle of the map, which is
+     the honest default on a screen you reached by looking at somewhere.
+     Only the geocode is awaited; everything after it is the same keepPlace() the map's
+     buttons call, so a place typed in here is not a second kind of place. */
+  async submitAddPlace(){
+    const val=id=>{ const el=this.$(id); return el ? el.value.trim() : ''; };
+    const name=val('apName');
+    if(!name){ this.apStat('It needs a name.', true); const el=this.$('apName'); if(el) el.focus(); return; }
+    const where=val('apWhere');
+    let lat, lng, found='';
+    const ll=where ? parseLL(where) : null;
+    if(ll){ lat=ll.lat; lng=ll.lng; }
+    else if(where){
+      const go=this.$('apGo');
+      if(go) go.disabled=true;
+      this.apStat('Looking up “'+where+'”…');
+      let hits=[];
+      try{ hits=await this.geocode(where); }
+      catch(err){
+        if(go) go.disabled=false;
+        this.apStat('The place search didn’t answer. Try a coordinate — 43.05, -76.15 — '
+          +'or leave Where empty to use the middle of the map.', true);
+        return;
+      }
+      if(go) go.disabled=false;
+      if(!hits.length){
+        this.apStat('Nothing found for “'+where+'”. Try a coordinate, or leave it empty '
+          +'to use the middle of the map.', true);
+        return;
+      }
+      lat=hits[0].lat; lng=hits[0].lng;
+      found=hits[0].name+(hits[0].note?', '+hits[0].note:'');
+    }
+    else if(this.map){ const c=this.map.getCenter(); lat=c.lat; lng=c.lng; }
+    if(!isFinite(lat) || !isFinite(lng)){
+      this.apStat('No coordinate for that — open the map first, or type one in.', true);
+      return;
+    }
+    const p=await this.keepPlace({n:name, y:lat, x:lng, a:where&&!ll?(found||where):'',
+      p:val('apPhone'), u:val('apUrl'), d:val('apNote'), k:val('apKind')});
+    if(!p){ this.apStat('Could not save that one.', true); return; }
+    /* The status line said this already, but it is a map-screen toast and this form is on
+       Nearby — so it says it again where the rider is actually looking. */
+    const key=p.mile!=null ? this.poiStopKey(p) : '';
+    const d=key && this.planPicked[key] ? this.dayPast(p.mile) : -1;
+    this.apStat('Saved “'+p.name+'”'+(found?' at '+found:'')
+      +(p.mile!=null ? ' · '+mpTxt(p.mile)+(p.off>=0.2?' · '+p.off.toFixed(1)+' mi off route':'') : '')
+      +(d>=0 ? ' · a stop on day '+(d+1)+', '+this.planDayLabel(d).replace(',','') : '')+'.');
+    ['apName','apWhere','apPhone','apUrl','apNote'].forEach(id=>{
+      const el=this.$(id); if(el) el.value='';
+    });
+    // The kind is not cleared: a rider adding places tends to add several of a sort.
+    const nm=this.$('apName'); if(nm) nm.focus();
+  }
+  /* What one of your places is, said after the fact. It lives on the record rather than
+     on the day, so it follows the place everywhere the place goes — the icon and colour
+     in the picker, the dot on the plan, the line in the GPX — and it goes up with the
+     rest of the account. Not an edit to the plan: the stop key is the name and the
+     milepost, so a place that is ticked stays ticked through being renamed a bakery. */
+  setMyPoiKind(name, lat, lng, kind){
+    if(MY_KINDS.indexOf(kind)<0 || !this.myPois) return false;
+    const rec=this.myPois.find(x=>String(x.n)===String(name)
+      && abs(+x.y-(+lat))<0.001 && abs(+x.x-(+lng))<0.001);
+    if(!rec) return false;
+    rec.k = kind==='your pick' ? '' : kind;
+    const p=this.POIS.find(q=>q.asset==='chris' && q.name===name
+      && abs(q.lat-(+lat))<0.001 && abs(q.lng-(+lng))<0.001);
+    if(p) p.kind=rec.k;
+    this.poiCache(this.myPois);
+    this.pushPois();
+    return true;
   }
   removeMyPoi(name, lat, lng){
     if(!this.myPois) return false;
@@ -10217,30 +10946,38 @@ class TrailApp {
   /* Tick it for the day that goes past it. The answer is never "done" on its own: a place
      forty miles off the route, or one on a day you are not riding, has to say so or the
      rider is left believing in a stop that is not in the plan. */
-  addPoiAsStop(p){
-    if(!p || p.mile==null) return {ok:false, why:'that place is not near the route'};
+  /* Why this place cannot be a stop on the day that rides past it, asked without changing
+     anything — so the button can say up front what the tap would otherwise have said
+     afterwards, on a screen the rider was not looking at.
+     Deliberately not planWayStops(): that walks every POI the app holds, and this is
+     called once per row of a table that runs to hundreds. It stands in for the two tests
+     that list applies, and it has to keep standing in for them exactly — a control that
+     is enabled where the planner would refuse is how a rider ends up believing in a stop
+     that is not in their plan. */
+  stopWhyNot(p){
+    if(!p || p.mile==null) return {d:-1, why:'that place is not near the route'};
     if(p.off>PLAN_STOP_OFF_MI)
-      return {ok:false, why:'it is '+p.off.toFixed(1)+' mi off the route — too far to be a stop along the way'};
+      return {d:-1, why:'it is '+p.off.toFixed(1)+' mi off the route — too far to be a stop along the way'};
     const d=this.dayPast(p.mile);
-    if(d<0) return {ok:false, why:'no riding day passes it yet — plan a day through '+mpTxt(p.mile)+' first'};
+    if(d<0) return {d:-1, why:'no riding day passes it yet — plan a day through '+mpTxt(p.mile)+' first'};
+    /* And that is all of it. The planner's own stop list also drops anything within two
+       miles of a day's ends and anything at the town the day finishes at — good rules for
+       the fourteen places it OFFERS you, since those are the day rather than stops along
+       it, and useless ones for a place you went and saved. Every route into here ends up
+       ticking a place of the rider's own (a corridor pin is kept as one first), so the
+       question those two rules answer is not being asked. They were refusing a museum
+       three tenths of a mile from where a day happened to end, on a day the rider had
+       picked it for. planWayStops lists your own places by dayPast for the same reason,
+       so the tick and the row it produces cannot disagree. */
+    return {d, why:''};
+  }
+  addPoiAsStop(p){
+    const w=this.stopWhyNot(p);
+    if(w.why) return {ok:false, d:w.d, why:w.why};
     const key=this.poiStopKey(p);
-    if(this.planPicked[key]) return {ok:true, d:d, already:true};
-    /* Tick it only where the planner would actually list it. The stop list drops anything
-       within two miles of either end of a day, and anything at the town the day finishes
-       at, because those are not stops along the way — they are the day. Ticking one of
-       those set a flag that nothing renders, so the rider was told a place was on their
-       plan and then could not find it there. */
-    const b=this.planBounds()[d];
-    if(!this.planWayStops(d, b.start, b.end).some(x=>x.key===key)){
-      const endT=this.planDayTown(d), near=planTownAt(this.bedTowns(), p.mile, PLAN_SNAP_MI);
-      if(endT && near && near.n===endT.n)
-        return {ok:false, d:d, why:'day '+(d+1)+' already finishes at '+this.bedName(endT)
-          +', so you are stopping there anyway'};
-      return {ok:false, d:d, why:'it sits within two miles of the ends of day '+(d+1)
-        +', which is where that day starts and finishes rather than a stop along it'};
-    }
-    this.planEdit('a stop on day '+(d+1), ()=>{ this.planPicked[key]=true; });
-    return {ok:true, d:d};
+    if(this.planPicked[key]) return {ok:true, d:w.d, already:true};
+    this.planEdit('a stop on day '+(w.d+1), ()=>{ this.planPicked[key]=true; });
+    return {ok:true, d:w.d};
   }
   /* Every Avis and Budget counter in New York State, from data/rentals.json — pulled
      once by tools/fetch_car_rentals.py off the brands' own location pages, so the
