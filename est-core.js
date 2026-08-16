@@ -1029,6 +1029,9 @@ const PLAN_KEY='est_outlook_plan_v1';
    a locked phone never loses a thought, and to PLAN_KEY only when Save is pressed — which
    is what lets the screen say "not saved" and mean it. */
 const PLAN_DRAFT_KEY='est_outlook_plan_draft_v1';
+/* Your own places, cached off the account so they are still on the map in a dead zone —
+   the same argument that keeps the plan on the device. Seeded from data/pois-chris.json. */
+const POI_KEY='est-my-pois-v1';
 /* How many days a plan has. Seven was a week's holiday and it could not hold the trip:
    582 miles at any honest pace is ten days or more, so a seven-row plan simply stopped in
    Utica and said "442 mi" as though that were the answer. The plan is now as long as it
@@ -1065,6 +1068,13 @@ const PLAN_SNAP_MI=6;
              ".write": "auth != null && $uid === auth.uid && newData.hasChildren(['savedAt','plan'])",
              ".validate": "newData.hasChildren(['savedAt','plan'])"
            }
+         },
+         "pois": {
+           "$uid": {
+             ".read":  "auth != null && $uid === auth.uid",
+             ".write": "auth != null && $uid === auth.uid && newData.hasChildren(['savedAt','pois'])",
+             ".validate": "newData.hasChildren(['savedAt','pois'])"
+           }
          }
        }
      }
@@ -1072,6 +1082,10 @@ const PLAN_SNAP_MI=6;
    Everything is denied by default, and the only path any signed-in account can touch is
    the one named after itself. Not "an account may read a plan whose code it knows" — YOUR
    account, YOUR plan, and no reachable path between one rider's record and another's.
+
+   /pois/<uid> is the same shape for the same reason: the places you saved are yours, they
+   follow the account rather than the device, and data/pois-chris.json is now only the seed
+   that fills them the first time somebody signs in.
 
    The cost, stated plainly: there is no longer a way to hand somebody a plan. Sharing was
    what the code bought, and it went with it. */
@@ -1374,11 +1388,11 @@ async function fetchSource(src){
    campsites and nothing about where you buy food, OpenStreetMap knows every
    filling station and is only as current as whoever last surveyed it. */
 const CATCFG={
-  /* Hand-picked by the rider, kept in data/pois-chris.json. Its own parent so it never
+  /* Saved by the rider, kept on their account. Its own parent so it never
      competes with the State's list or the OSM corridor for a slot — a place you chose
      yourself outranks both, and it is the one category that is on by default and drawn
      as a full-size pin. */
-  'chris':{icon:'target',label:'Chris POIs',grp:'chris'},
+  'chris':{icon:'target',label:'My places',grp:'chris'},
   'Lock camping':{icon:'lock',label:'Lock camping',grp:'trail'},
   'Campground':{icon:'tent',label:'Campgrounds',grp:'trail'},
   'Lodging':{icon:'bed',label:'Lodging',grp:'trail'},
@@ -1409,7 +1423,7 @@ const CATCFG={
   'car-rental':{icon:'car',label:'Avis & Budget',grp:'rental'}
 };
 const CAT_GRP={
-  chris:{label:'Chris’s picks', src:'Chosen by hand', toc:'Chris POIs'},
+  chris:{label:'My places', src:'Saved by you', toc:'My places'},
   trail:{label:'On the trail', src:'New York State', toc:'Trail POIs'},
   bundled:{label:'Within 5 mi', src:'OpenStreetMap', toc:'OSM POIs'},
   /* Statewide, and said so, because this is the one group that deliberately breaks the
@@ -1685,6 +1699,8 @@ class TrailApp {
     this._elevMk=null; this._elevDrag=false; this._elevDownX=null; this._elevRaf=0;
     // Places you sent to Google Maps, kept as pins so you don't lose the spot. Saved.
     this.searches=[]; this.searchLayer=null; this.searchMarks={};
+    // Your own places, as the raw {n,y,x,…} records the account stores.
+    this.myPois=[];
     /* One switch per category, driving the list AND the pins together. They were
        briefly independent, which meant the map could show a pin whose row the list
        had filtered away — and a place you can see is a place you expect to be able
@@ -2778,6 +2794,48 @@ class TrailApp {
     document.addEventListener('click',e=>{ const g=e.target.closest('.mv-go'); if(g) this.confirmMove(g); });
     document.addEventListener('click',e=>{ const r=e.target.closest('.srch-rm'); if(r){ this.removeSearch(r.dataset.sk); if(this.map) this.map.closePopup(); } });
     document.addEventListener('click',e=>{ const z=e.target.closest('.pop-zoom'); if(z) this.zoomHere(z); });
+    /* Search a place, keep it, put it on a day. Three taps in three popups, and each one
+       says what happened rather than leaving the rider to go and check. */
+    document.addEventListener('click',e=>{
+      const a=e.target.closest('[data-addpoi]'); if(!a) return;
+      const s=this.searches.find(x=>this.searchKey(x)===a.dataset.addpoi); if(!s) return;
+      this.keepPlace({n:s.label||s.q||'A place', y:s.lat, x:s.lng});
+    });
+    document.addEventListener('click',e=>{
+      const k=e.target.closest('[data-poikeep]'); if(!k) return;
+      const [lat,lng]=String(k.dataset.at||'').split(',').map(Number);
+      const p=this.POIS.find(q=>q.lat!=null && abs(q.lat-lat)<0.0001 && abs(q.lng-lng)<0.0001
+        && (q.name||'')===k.dataset.poikeep);
+      this.keepPlace({n:k.dataset.poikeep||'A place', y:lat, x:lng,
+        a:p?p.addr:'', p:p?p.phone:'', u:p?p.url:'', d:p?p.note:''});
+    });
+    document.addEventListener('click',e=>{
+      const b=e.target.closest('[data-poistop]'); if(!b) return;
+      const [lat,lng]=String(b.dataset.at||'').split(',').map(Number);
+      const p=this.POIS.find(q=>q.asset==='chris' && q.name===b.dataset.poistop
+        && abs(q.lat-lat)<0.0001 && abs(q.lng-lng)<0.0001);
+      if(!p) return;
+      const key=p.mile!=null ? this.poiStopKey(p) : '';
+      if(key && this.planPicked[key]){
+        this.planEdit('a stop off the plan', ()=>{ delete this.planPicked[key]; });
+        this.status('Took '+p.name+' off the plan.');
+      } else {
+        const r=this.addPoiAsStop(p);
+        this.status(r.ok
+          ? (r.already?p.name+' was already on day ':'Added '+p.name+' to day ')+(r.d+1)
+            +' · '+this.planDayLabel(r.d).replace(',','')+'.'
+          : 'Not added — '+r.why+'.');
+      }
+      if(this.map) this.map.closePopup();
+      if(this.screen==='plan') this.renderPlan();
+    });
+    document.addEventListener('click',e=>{
+      const d=e.target.closest('[data-poidel]'); if(!d) return;
+      const [lat,lng]=String(d.dataset.at||'').split(',').map(Number);
+      if(this.removeMyPoi(d.dataset.poidel, lat, lng))
+        this.status('Forgot '+d.dataset.poidel+'. It is off the map and off your account.');
+      if(this.map) this.map.closePopup();
+    });
     // The one-way pick-up, set on one rental popup and spent on another. See setRentFrom.
     document.addEventListener('click',e=>{
       const f=e.target.closest('.rent-from'); if(f){ this.setRentFrom(f.dataset.rc); return; }
@@ -3629,12 +3687,18 @@ class TrailApp {
     const html='<span class="srch-pin">'+icon('search',12)+'<b>'+esc(s.label||'search')+'</b></span>';
     const mk=L.marker([s.lat,s.lng],{pane:this.lyrPane('search'),
       icon:L.divIcon({className:'srch-ic',html,iconSize:[0,0],iconAnchor:[0,0]})});
+    /* A search pin is a place you looked up; a saved place is one you decided on. Keeping
+       them apart matters — the map searches layer is scratch paper — so the way across is
+       a button, and it says where the place is going to end up. */
+    const pr=projectRoute(s.lat,s.lng);
     mk.bindPopup('<div class="srch-pop"><b>'+esc(s.label||'Search')+'</b>'
-      +'<div class="srch-cd">'+(+s.lat).toFixed(5)+', '+(+s.lng).toFixed(5)+'</div>'
+      +'<div class="srch-cd">'+(+s.lat).toFixed(5)+', '+(+s.lng).toFixed(5)
+        +(pr.off<=25 ? ' · '+esc(mpTxt(pr.mile))+' · '+pr.off.toFixed(1)+' mi off route' : '')+'</div>'
       +'<div class="pa-row mv-lk"><a href="'+searchAt(s.q,s.lat,s.lng)+'" target="_blank" rel="noopener" class="pa">Google Maps ↗</a>'
       +this.svLinkHtml(s.lat,s.lng)+'</div>'
+      +'<button type="button" class="srch-add" data-addpoi="'+esc(key)+'">Save as one of my places</button>'
       +'<button type="button" class="srch-rm" data-sk="'+esc(key)+'">Remove this pin</button></div>',
-      {maxWidth:240,autoPan:false});
+      {maxWidth:260,autoPan:false});
     mk.addTo(lyr);
     this.searchMarks[key]=mk;
     return mk;
@@ -6437,7 +6501,7 @@ class TrailApp {
      city in its own address, falling back to the nearest trail town when it has no
      address to give, and each group becomes a place with a milepost of its own.
 
-     Nothing to process and nothing to maintain: add a pin to data/pois-chris.json, or
+     Nothing to process and nothing to maintain: save a place from the map, or
      let the State service publish one, and the place appears in the plan by itself. */
   bedTowns(){
     if(this._bedTowns && this._bedTownsN===this.POIS.length) return this._bedTowns;
@@ -6641,7 +6705,11 @@ class TrailApp {
        the cut is made by what a stop is worth stopping for, and the survivors are then put
        back into the order you would ride past them. */
     out.sort((x,y)=>{
-      const r=(PLAN_STOP_RANK[x.kind]||9)-(PLAN_STOP_RANK[y.kind]||9);
+      /* ?? and not ||, because "your pick" ranks 0 and `0 || 9` is 9 — which quietly gave
+         the rider's own places the WORST rank and made them the first thing dropped when
+         a day through a city filled the list. The exact opposite of what ranking them
+         first was for. */
+      const r=(PLAN_STOP_RANK[x.kind] ?? 9)-(PLAN_STOP_RANK[y.kind] ?? 9);
       return r || (x.mile-y.mile)*this.dirSign();
     });
     return out.slice(0, PLAN_STOP_MAX).sort((x,y)=>(x.mile-y.mile)*this.dirSign());
@@ -6885,18 +6953,17 @@ class TrailApp {
     if(this.syncOn() && !(opt && opt.push===false)) this.queuePush();
   }
   /* ---------- the same plan on the other phone ----------
-     Two rules hold this together. Only the SAVED plan goes up, because a draft is this
-     device thinking and the other screen should not watch it think. And nothing ever comes
-     down on its own: a newer plan in the cloud is offered, not applied, because the one
-     unforgivable thing a sync can do is overwrite the edit somebody is in the middle of.
+     What goes up is what is on the disk, and what comes down is taken. There is no draft
+     state left to protect and no offer to weigh up: one rider, their own devices, one
+     plan. Undo is what makes taking it safe.
 
      Signed in IS switched on. There is no separate control, because there was never a
      coherent answer to "signed in, but syncing off" — the account exists for this. */
   syncOn(){ return !!(this.auth && this.auth.uid); }
-  syncUrl(tok){
-    return FB_URL+'/plans/'+encodeURIComponent(this.auth ? this.auth.uid : '')+'.json'
-      +(tok ? '?auth='+encodeURIComponent(tok) : '');
-  }
+  // Everything this account owns hangs off its uid, and the rules say so.
+  uidPath(){ return encodeURIComponent(this.auth ? this.auth.uid : ''); }
+  planPath(){ return 'plans/'+this.uidPath(); }
+  poiPath(){ return 'pois/'+this.uidPath(); }
   /* ---------- signed in ----------
      See the FB_API_KEY block up top for the shape and the console side. Everything here
      is deliberately best-effort: a rider with no signal is not signed out, they are a
@@ -7042,18 +7109,21 @@ class TrailApp {
     if(this.screen!=='plan') return;
     if(this.$('planOut')) this.renderPlan();
   }
-  // Short-fused, like every other call this app makes: a slow database must not sit on the
-  // Save button. Firebase answers 401 when a rule refuses, which is worth saying plainly.
-  async syncFetch(opt, retried){
+  /* One door to the database for everything this account keeps there — the plan, and the
+     places. Short-fused, like every other call this app makes: a slow database must not
+     sit on an edit. Firebase answers 401 when a rule refuses, which is worth saying
+     plainly rather than as a status code. */
+  async dbFetch(path, opt, retried){
     const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(), 9000);
     try{
-      const r=await fetch(this.syncUrl(await this.syncAuth()),
-        Object.assign({signal:ctl.signal, cache:'no-store'}, opt||{}));
+      const tok=await this.syncAuth();
+      const url=FB_URL+'/'+path+'.json'+(tok?'?auth='+encodeURIComponent(tok):'');
+      const r=await fetch(url, Object.assign({signal:ctl.signal, cache:'no-store'}, opt||{}));
       if(r.status===401 || r.status===403){
         /* An ID token lasts an hour and a phone in a pannier sleeps for longer than that,
            so the first refusal is usually just a stale token. Renew once and try again;
            only the second refusal is news. */
-        if(this.auth && !retried && await this.authRefresh()) return this.syncFetch(opt, true);
+        if(this.auth && !retried && await this.authRefresh()) return this.dbFetch(path, opt, true);
         throw new Error(this.auth ? 'the database refused this account — check the rules'
           : 'the database said no — sign in on this device, or check the rules');
       }
@@ -7062,6 +7132,7 @@ class TrailApp {
       return txt && txt!=='null' ? JSON.parse(txt) : null;
     } finally { clearTimeout(t); }
   }
+  syncFetch(opt){ return this.dbFetch(this.planPath(), opt); }
   /* Saves come in flurries — a pace change is three keystrokes — so the push waits a beat
      and sends the last one. The screen says "sending" the whole time, which is true. */
   queuePush(){
@@ -7298,7 +7369,13 @@ class TrailApp {
           +'User actions → Enable create (sign-up), so nobody else can make one' : '';
         this.showGate();
         this.renderPlan();
-        if(this.syncOn()) this.checkSync(true).then(()=>this.syncChanged());
+        if(this.syncOn()){
+          this.checkSync(true).then(()=>this.syncChanged());
+          /* The places load before the gate is answered, so on a first sign-in they came
+             from the seed file. Now that there is an account, ask it — and if it is empty,
+             loadMyPois seeds it from what is already here. */
+          this.refreshMyPois();
+        }
       });
     };
     el.addEventListener('click',e=>{
@@ -7874,6 +7951,21 @@ class TrailApp {
           +'Auto-plan the rest</button>'
       +'</div>');
 
+      /* The stops chosen for this day, in the order they are ridden past, each with the
+         milepost that says when to start looking for it. On the ROW, not inside the fold:
+         the fold is for choosing stops, and a rider should not have to open a picker to be
+         reminded what today has in it. Costs a planWayStops call per day, which is the
+         same call the fold makes — cheap, and it only runs where something was picked. */
+      if(!pd.zero && !gone){
+        const mine=this.planWayStops(d, b.start, b.end).filter(x=>this.planPicked[x.key]);
+        if(mine.length) h.push('<ol class="pl-picked">'+mine.map(x=>
+          '<li><span class="pl-picked-m">'+esc(mpTxt(x.mile))+'</span>'
+          +'<span class="pl-picked-n">'+esc(x.name)+'</span>'
+          +'<span class="pl-picked-k">'+esc(x.kind)
+            +((x.off!=null && x.off>=0.2) ? ' · '+x.off.toFixed(1)+' mi off' : '')+'</span></li>').join('')
+        +'</ol>');
+      }
+
       if(open){
         /* "Ride to" — the towns ahead, in the order you would reach them, each with the
            day it would make and the beds it has. No bands: a rider reading down a list of
@@ -8053,7 +8145,7 @@ class TrailApp {
           h.push('<div class="pl-disc">'
             +'<button type="button" class="pl-disc-b" data-plan="stops" data-d="'+d+'">'
               +caretSvg(sopen,'currentColor')
-              +(picked ? picked+(picked===1?' stop':' stops')+' along the way'
+              +(picked ? (sopen?'Done choosing':'Change '+(picked===1?'this stop':'these '+picked+' stops'))
                 : (stops.length? 'Add a stop along the way' : 'Nothing pinned along this day'))
             +'</button>');
           /* The name on its own line with what it IS and where it IS on the line under
@@ -9721,7 +9813,7 @@ class TrailApp {
     Promise.allSettled([
       this.fetchAllPOIs(),
       this.loadBundledPois(),
-      this.loadChrisPois(),
+      this.loadMyPois(),
       this.loadRentalPois()
     ]).then(([poi,bundled,chris,rental])=>{
       // State POIs are already in this.POIS from fetchAllPOIs; fold the bundled corridor
@@ -9732,8 +9824,15 @@ class TrailApp {
       const rc = rental.status==='fulfilled' ? rental.value : [];
       const add = nb.concat(cp, rc);
       // _byCat is keyed on POIS.length, and this is the one place the array grows.
-      if(add.length){ this.POIS.push(...add); this.POIS.forEach((p,i)=>{ p.i=i; }); this._byCat=null; }
+      if(add.length){ this.POIS.push(...add); this.POIS.forEach((p,i)=>{ p.i=i; });
+        this._byCat=null; this._bedTowns=null; }
       this.buildPOILayers();
+      /* The plan is drawn from the pins, and it is drawn before this lands. Until this
+         redraw, a rider who opened straight onto the Ride plan saw a day with no stops on
+         it — their own chosen ones included — and only found them by leaving the screen
+         and coming back, which is the sort of thing that reads as the app having lost
+         them. */
+      if(this.screen==='plan') this.renderPlan();
       if(stat){
         // The route line is no longer one of the things that can fail to arrive, so it
         // has nothing to say here — it is drawn before this promise is even made.
@@ -9885,11 +9984,49 @@ class TrailApp {
     const osmNote = p.src==='bundled'
       ? 'From OpenStreetMap within 5 mi of the route \u2014 as current as its last survey, so hours and whether it\u2019s still there are worth a call.'
       : p.src==='chris'
-      ? 'One of your own picks, kept in data/pois-chris.json.'
+      ? 'One of your own places, kept on your account — it syncs with the plan.'
       : p.src==='rental'
       ? 'From the brand’s own location page, bundled at build time — hours and whether a one-way drop is allowed change without notice, so ring the counter before you ride to it.'
       : '';
-    return h+'<div class="pa-row poi-lk">'+lk.join('')+'</div>'
+    /* Any pin can become one of yours, and any of yours can become a stop on the day that
+       rides past it. Both are one tap: a form asking for a name you can already read at
+       the top of this popup is how a feature goes unused.
+       Keyed by name and coordinate rather than by index — POIS is reindexed whenever a
+       source lands or a place is added, and an index would go stale inside the lifetime
+       of one open popup. */
+    const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
+    let mine='';
+    /* Where this place already stands, said outright. The buttons alone carried it before
+       — "Add as a stop" versus "take it off" — which asks the rider to infer the state
+       from the label of the thing that would change it, and a pin they saved last week
+       looked exactly like one they had not. */
+    const isMine=(n,lat,lng)=>!!(this.myPois||[]).some(x=>String(x.n)===String(n)
+      && abs(+x.y-lat)<0.001 && abs(+x.x-lng)<0.001);
+    if(p.src==='chris'){
+      const key=p.mile!=null ? this.poiStopKey(p) : '';
+      const on=!!(key && this.planPicked[key]);
+      const d=on ? this.dayPast(p.mile) : -1;
+      mine='<div class="poi-state'+(on?' on':'')+'">'
+          +(on ? '✓ Saved · a stop on day '+(d+1)
+                 +(d>=0 ? ' · '+esc(this.planDayLabel(d).replace(',','')) : '')
+               : '✓ Saved to My places · not on a day yet')
+        +'</div>'
+        +'<div class="poi-mine">'
+        +'<button type="button" class="'+(on?'off':'')+'" data-poistop="'+esc(p.name)+'" data-at="'+at+'">'
+          +(on?'Take it off the plan':'Add as a stop')+'</button>'
+        +'<button type="button" class="off" data-poidel="'+esc(p.name)+'" data-at="'+at+'">Forget it</button>'
+      +'</div>';
+    } else if(p.lat!=null){
+      /* The same place can be both a bundled pin and one of yours — two pins, one park.
+         So this asks the list, not the pin it is drawn on. */
+      const kept=isMine(p.name, p.lat, p.lng);
+      mine=kept
+        ? '<div class="poi-state on">✓ Already in My places — its own pin carries the stop button</div>'
+        : '<div class="poi-mine">'
+          +'<button type="button" data-poikeep="'+esc(p.name||'')+'" data-at="'+at+'">Save as one of my places</button>'
+        +'</div>';
+    }
+    return h+'<div class="pa-row poi-lk">'+lk.join('')+'</div>'+mine
       +(osmNote?'<div class="poi-src">'+osmNote+'</div>':'');
   }
   async fetchAllPOIs(){
@@ -9935,7 +10072,7 @@ class TrailApp {
     });
     return out;
   }
-  /* Chris's own picks, from data/pois-chris.json — a short hand-kept list, so unlike the
+  /* The rider's own places, kept on their account. A short hand-made list, so unlike the
      bundled corridor it carries no precomputed mile and is projected here at load. That's
      deliberate: a dozen projections cost nothing, and it means re-anchoring the route
      never leaves these pointing at stale mileposts the way a baked-in figure would.
@@ -9943,23 +10080,167 @@ class TrailApp {
      No corridor filter either. Every other source is machine-swept and needs the 5-mile
      cut to stay useful; this one was chosen a place at a time, so a pick that sits farther
      out is a decision, not noise, and dropping it silently would be the bug. */
-  async loadChrisPois(){
-    let data;
-    try{
-      const r=await fetch('data/pois-chris.json',{cache:'no-cache'});
-      if(!r.ok) return [];
-      data=await r.json();
-    }catch(e){ return []; }
+  async loadMyPois(){
+    /* Three places this list can come from, in order of how current they are: the account,
+       the last copy this device kept, and the file that shipped with the app. The file is
+       the seed — the list started there and is uploaded once — and it stays as the floor
+       under a signed-out or offline first run. */
+    let data=null, from='file';
+    if(this.syncOn()){
+      try{
+        const rec=await this.dbFetch(this.poiPath(), {method:'GET'});
+        if(rec && Array.isArray(rec.pois)){ data=rec.pois; from='cloud'; }
+      }catch(e){ /* no signal: the cached copy below is exactly what this is for */ }
+    }
+    if(!data){ const c=this.poiCache(); if(c){ data=c; from='cache'; } }
+    if(!data){
+      try{
+        const r=await fetch('data/pois-chris.json',{cache:'no-cache'});
+        if(r.ok) data=await r.json();
+      }catch(e){}
+    }
     if(!Array.isArray(data)) return [];
-    const out=[];
-    data.forEach(o=>{
-      const lat=+o.y, lng=+o.x;
-      if(!isFinite(lat) || !isFinite(lng)) return;
-      const pr=projectRoute(lat,lng);
-      out.push({asset:'chris', name:o.n||'(pick)', sub:'', addr:o.a||'', phone:o.p||'',
-        url:o.u||'', note:o.d||'', src:'chris', lat, lng, mile:pr.mile, off:pr.off});
-    });
-    return out;
+    this.myPois=data.filter(o=>isFinite(+o.y) && isFinite(+o.x));
+    /* Seed the account from whatever this device already had — the file on a first run, or
+       the cached copy on a device that has been used signed out. The test is whether the
+       CLOUD had them, not where these came from: a device with a cache would otherwise
+       never fill an empty account, and the list would look like it had emptied itself the
+       moment it moved off the file. */
+    if(from!=='cloud' && this.syncOn() && this.myPois.length) this.pushPois();
+    if(from!=='cache') this.poiCache(this.myPois);
+    return this.myPois.map(o=>this.poiRecord(o));
+  }
+  /* Re-read the list and swap it into POIS in place. Used after a sign-in, when the copy
+     already on screen came from the seed file rather than from the account. */
+  async refreshMyPois(){
+    const add=await this.loadMyPois();
+    this.POIS=this.POIS.filter(p=>p.asset!=='chris').concat(add);
+    this.POIS.forEach((p,i)=>{ p.i=i; });
+    this._byCat=null; this._bedTowns=null;
+    this.buildPOILayers();
+    if(this.screen==='plan') this.renderPlan();
+    return add.length;
+  }
+  /* One raw record — the shape it has in the file and in the database — turned into the
+     shape the map, the lists and the planner all expect. Projected here rather than
+     stored, so re-anchoring the route never leaves these pointing at a stale milepost. */
+  poiRecord(o){
+    const lat=+o.y, lng=+o.x, pr=projectRoute(lat,lng);
+    return {asset:'chris', name:o.n||'(pick)', sub:'', addr:o.a||'', phone:o.p||'',
+      url:o.u||'', note:o.d||'', src:'chris', lat, lng, mile:pr.mile, off:pr.off};
+  }
+  /* Kept on the device for the same reason the plan is: half this trail has no signal, and
+     a place you saved is no use to you only when you are somewhere with bars. */
+  poiCache(list){
+    try{
+      if(list===undefined){ const t=localStorage.getItem(POI_KEY);
+        const a=t?JSON.parse(t):null; return Array.isArray(a)?a:null; }
+      localStorage.setItem(POI_KEY, JSON.stringify(list));
+    }catch(e){}
+    return null;
+  }
+  // The whole list, every time. It is a dozen records — a merge would be more code than data.
+  async pushPois(){
+    if(!this.syncOn()) return false;
+    try{
+      await this.dbFetch(this.poiPath(), {method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({savedAt:Date.now(), pois:this.myPois||[]})});
+      return true;
+    }catch(e){ this.status('Saved here, but not sent up — '+this.syncErr(e)); return false; }
+  }
+  /* Adding a place is three things at once: the record, the pin, and the row in the
+     planner's stop list for whichever day rides past it. Doing fewer than three left the
+     rider wondering which of them had actually happened. */
+  async addMyPoi(o){
+    const lat=+o.y, lng=+o.x;
+    if(!isFinite(lat) || !isFinite(lng)) return null;
+    const name=String(o.n||'').trim() || 'A place';
+    this.myPois=this.myPois||[];
+    // Same name within a hundred yards is the same place, tapped twice.
+    const dup=this.myPois.find(x=>String(x.n)===name && abs(+x.y-lat)<0.001 && abs(+x.x-lng)<0.001);
+    if(dup) return this.poiRecord(dup);
+    const rec={n:name, y:lat, x:lng, a:String(o.a||''), p:String(o.p||''),
+      u:String(o.u||''), d:String(o.d||'')};
+    this.myPois.push(rec);
+    this.poiCache(this.myPois);
+    const p=this.poiRecord(rec);
+    this.POIS.push(p); this.POIS.forEach((q,i)=>{ q.i=i; });
+    this._byCat=null; this._bedTowns=null;
+    this.buildPOILayers();
+    this.pushPois();
+    return p;
+  }
+  /* Keep it, then say what keeping it bought: a pin, an account record, and — when the
+     route rides past it — a stop already on the day that does. Offering the stop as a
+     second decision would be asking a question whose answer is why the place was saved. */
+  async keepPlace(o){
+    const p=await this.addMyPoi(o);
+    if(!p){ this.status('Could not save that one — no coordinate on it.'); return null; }
+    const r=this.addPoiAsStop(p);
+    this.status('Saved '+p.name+' to your places'
+      +(r.ok ? ', and put it on day '+(r.d+1)+' · '+this.planDayLabel(r.d).replace(',','')+'.'
+             : ' — '+r.why+', so it is on the map but not on a day.')
+      +(this.syncOn() ? '' : ' Signed out, so it is on this device only.'));
+    if(this.map) this.map.closePopup();
+    if(this.screen==='plan') this.renderPlan();
+    return p;
+  }
+  removeMyPoi(name, lat, lng){
+    if(!this.myPois) return false;
+    const before=this.myPois.length;
+    this.myPois=this.myPois.filter(x=>!(String(x.n)===String(name)
+      && abs(+x.y-(+lat))<0.001 && abs(+x.x-(+lng))<0.001));
+    if(this.myPois.length===before) return false;
+    this.POIS=this.POIS.filter(p=>!(p.asset==='chris' && p.name===name
+      && abs(p.lat-(+lat))<0.001 && abs(p.lng-(+lng))<0.001));
+    this.POIS.forEach((q,i)=>{ q.i=i; });
+    this._byCat=null; this._bedTowns=null;
+    this.poiCache(this.myPois);
+    this.buildPOILayers();
+    this.pushPois();
+    return true;
+  }
+  /* Which day rides past a milepost, and the key the planner's stop list would give it.
+     Both answers come from the same two functions the planner itself uses, so a stop
+     added from the map is the same object as one ticked on the plan tab. */
+  poiStopKey(p){ return (p.name||p.asset)+':'+Math.round(p.mile*10); }
+  dayPast(mile){
+    if(mile==null) return -1;
+    const bs=this.planBounds();
+    for(let i=0;i<bs.length;i++){
+      const lo=Math.min(bs[i].start,bs[i].end), hi=Math.max(bs[i].start,bs[i].end);
+      if(mile>=lo-0.01 && mile<=hi+0.01 && !this.planP()[i].zero) return i;
+    }
+    return -1;
+  }
+  /* Tick it for the day that goes past it. The answer is never "done" on its own: a place
+     forty miles off the route, or one on a day you are not riding, has to say so or the
+     rider is left believing in a stop that is not in the plan. */
+  addPoiAsStop(p){
+    if(!p || p.mile==null) return {ok:false, why:'that place is not near the route'};
+    if(p.off>PLAN_STOP_OFF_MI)
+      return {ok:false, why:'it is '+p.off.toFixed(1)+' mi off the route — too far to be a stop along the way'};
+    const d=this.dayPast(p.mile);
+    if(d<0) return {ok:false, why:'no riding day passes it yet — plan a day through '+mpTxt(p.mile)+' first'};
+    const key=this.poiStopKey(p);
+    if(this.planPicked[key]) return {ok:true, d:d, already:true};
+    /* Tick it only where the planner would actually list it. The stop list drops anything
+       within two miles of either end of a day, and anything at the town the day finishes
+       at, because those are not stops along the way — they are the day. Ticking one of
+       those set a flag that nothing renders, so the rider was told a place was on their
+       plan and then could not find it there. */
+    const b=this.planBounds()[d];
+    if(!this.planWayStops(d, b.start, b.end).some(x=>x.key===key)){
+      const endT=this.planDayTown(d), near=planTownAt(this.bedTowns(), p.mile, PLAN_SNAP_MI);
+      if(endT && near && near.n===endT.n)
+        return {ok:false, d:d, why:'day '+(d+1)+' already finishes at '+this.bedName(endT)
+          +', so you are stopping there anyway'};
+      return {ok:false, d:d, why:'it sits within two miles of the ends of day '+(d+1)
+        +', which is where that day starts and finishes rather than a stop along it'};
+    }
+    this.planEdit('a stop on day '+(d+1), ()=>{ this.planPicked[key]=true; });
+    return {ok:true, d:d};
   }
   /* Every Avis and Budget counter in New York State, from data/rentals.json — pulled
      once by tools/fetch_car_rentals.py off the brands' own location pages, so the
