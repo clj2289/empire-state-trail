@@ -7664,6 +7664,13 @@ class TrailApp {
         +'<input class="pl-num" type="number" inputmode="numeric" min="4" max="25" value="'+speed+'"'
         +' data-plan="speed" title="Overall average from wheels-out to wheels-in, stops included — not a moving average">'
         +'<span class="pl-unit">mph</span></span>'
+        /* The target, on the screen that uses it. It was only ever on the More tab, which
+           is two taps from the plan it governs and gives no sign of what it would do. */
+        +'<span class="pl-field"><span class="pl-k">Target a day</span>'
+        +'<input class="pl-num" type="number" inputmode="numeric" min="10" max="200" step="5"'
+        +' value="'+Math.round(this.wxPerDay||60)+'" data-plan="perday"'
+        +' title="What Auto-plan aims at, and how many days it thinks the trip takes. It does not move days you have already planned">'
+        +'<span class="pl-unit">mi</span></span>'
         +'<button type="button" class="pl-pin" data-plan="tomap" title="See the days on the map" aria-label="See the days on the map">'
         +'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>'
         +'</button>'
@@ -8218,6 +8225,15 @@ class TrailApp {
         this.savePlan(); this.planChanged(); this.renderPlan(); }
       else if(act==='speed'){ const n=Math.max(4,Math.min(25,v||12));
         this.avgSpeed=n; this.savePrefs(); this.savePlan(); this.planChanged(); this.renderPlan(); }
+      /* The target Auto-plan aims at. Deliberately does NOT touch the days that are already
+         there: a rider who types 70 into a target has not asked for the eleven days below
+         it to be thrown away and redrawn. It changes what the next Auto-plan, the next
+         added day and the day-count estimate all aim for, and the row underneath says so.
+         The same number lives on More as "Miles a day"; both write the one preference. */
+      else if(act==='perday'){ const n=Math.max(10,Math.min(200,v||60));
+        this.wxPerDay=n; this.savePrefs();
+        const echo=this.$('wxPerDay'); if(echo) echo.value=n;
+        this.renderPlan(); }
       else if(act==='to'){ const b0=this.planBounds()[d];
         this.setPlanDay(d,{miles:Math.max(0,Math.round(abs(v-b0.start)))}); this.renderPlan(); }
       else if(act==='start'){ this.setPlanDay(d,{start:v}); this.renderPlan(); }
