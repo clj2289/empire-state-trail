@@ -8811,7 +8811,7 @@ class TrailApp {
         const was=this.stopOnDay(k, tm, d);
         this.planEdit((was?'a stop off day ':'a stop on day ')+(d+1),
           ()=>{ this.setStopDay(k, tm, d, !was); });
-        const now=this.stopDaysOf(k, tm).filter(x=>this.planPicked[k]);
+        const now=this.stopDaysOf(k, tm);
         this.status(nm+(was ? ' is off day '+(d+1) : ' is on day '+(d+1))
           +' · '+this.planDayLabel(d).replace(',','')
           +(now.length>1 ? ' — and day '+now.filter(x=>x!==d).map(x=>x+1).join(' and day ') : '')+'.');
@@ -11069,15 +11069,20 @@ class TrailApp {
     });
     return out;
   }
+  /* The days this stop IS on — empty when it is not a stop at all. That first line is
+     load-bearing: without it this answered "the day that rides past it" for every place
+     on the trail, ticked or not, and the picker's own tick read every fresh tap as "it is
+     already on this day, take it off". Every tap did nothing, and said so. */
   stopDaysOf(key, mile){
+    if(!this.planPicked[key]) return [];
     const ov=this.planStopDays[key];
     if(ov && ov.length) return ov;
     const d=this.dayPast(mile);
     return d>=0 ? [d] : [];
   }
   stopOnDay(key, mile, d){ return this.stopDaysOf(key, mile).indexOf(d)>=0; }
-  // A picked stop, on the day being drawn. Every list that says "today's stops" asks this.
-  stopHere(s, d){ return !!this.planPicked[s.key] && this.stopOnDay(s.key, s.mile, d); }
+  // A chosen stop, on the day being drawn. Every list that says "today's stops" asks this.
+  stopHere(s, d){ return this.stopOnDay(s.key, s.mile, d); }
   /* Could this day have it? Inside the day's own stretch, or within reach of either end —
      which is what makes the town you sleep in reachable from the day that arrives and the
      day that leaves. A rest day is a point rather than a stretch, and the same test gives
