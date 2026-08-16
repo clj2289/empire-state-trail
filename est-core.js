@@ -1548,13 +1548,14 @@ class TrailApp {
     this.planHist=[]; this.planRedo=[]; this.planSavedSnap=null; this.planPreview=null;
     /* Off-device sync — see the FB_URL block up top. 'off' means no account on this device,
        which is the state a fresh install is in: this app works with no account and no
-       network and must go on doing that. `remote` is a newer plan the cloud has that this
-       screen has not taken — held, not applied, because clobbering unsaved work is the one
-       thing a sync is never allowed to do. */
+       network and must go on doing that. `remote` holds a newer plan only for the moment
+       between finding it and loading it — nothing waits there for an answer any more. */
     this.syncState='off'; this.syncMsg=''; this.syncAt=0;
     this.syncRemote=null; this._syncCheck=0;
-    /* The newest remote plan already answered — taken or turned down. Without it, every
-       check offers the same plan again and the bar becomes something to swat away. */
+    // What the last check did, so the cloud button can repeat it rather than contradict it.
+    this.syncNews='';
+    /* The newest remote stamp already dealt with, so a plan that has been loaded once is
+       not loaded again on every check for the next 45 seconds of its life. */
     this.syncSeen=0;
     /* The Firebase account this device is signed in as — see loadAuth. Null is a perfectly
        good state: the app has always worked with no account and no network and still must.
@@ -3675,6 +3676,8 @@ class TrailApp {
       // onto blank map a thousand miles from any trail answers nothing.
       const t=this.anchorTown();
       if(this.map && move && t) this.map.setView([t.lat,t.lng],11);
+      // Off the route there is no "left today" to state — mileLeftToday returns null here.
+      this.syncMileLeft();
       this.savePrefs(); this.renderAll();
       this.status('You are ~'+this.offTrail+' mi from the trail, so distances are planned from '+this.anchorName()+' instead. They switch to your real position once you are on the route.');
       return;
@@ -3697,6 +3700,8 @@ class TrailApp {
     if(this._planAuto!==false && abs((this.planAnchor==null?pr.mile:this.planAnchor)-pr.mile)>3){
       this.planRebuild(); this._planAuto=true; this.planChanged();
     }
+    // Moving is the whole reason the number changes, so it is recomputed on every fix.
+    this.syncMileLeft();
     this.renderAll();
   }
   /* Moving the map to a place you picked from a list answered "where" and left
@@ -6805,7 +6810,10 @@ class TrailApp {
   planBaseline(){ this.planSavedSnap=this.planSnapshot(); }
   planDirty(){ return this.planSavedSnap!=null && this.planSnapshot()!==this.planSavedSnap; }
   /* Every mutation goes through here. The state before it goes on the undo stack under a
-     name a rider would recognise, and the result is drafted rather than saved. */
+     name a rider would recognise, and the result is SAVED — there is no draft state and no
+     Save button any more. A plan is a record of decisions already made; asking a rider to
+     confirm each one, on a phone, in the rain, was a question with one answer. Undo is what
+     makes that safe, and it is the thing that had to be good rather than the save. */
   planEdit(label, fn){
     const before=this.planSnapshot();
     fn();
@@ -6814,7 +6822,9 @@ class TrailApp {
     this.planRedo=[];   // a fresh edit is a new branch; there is nothing to go forward to
     this.planPreview=null;
     this._planAuto=false;
-    this.draftPlan();
+    // Local write is synchronous; the push it queues is debounced, so a run of taps on
+    // one slider is one upload rather than thirty.
+    this.savePlan();
     this.planChanged();
   }
   planRestore(snap){
@@ -6834,7 +6844,8 @@ class TrailApp {
     const now=this.planSnapshot();
     if(!this.planRestore(h.snap)) return null;
     this.planRedo.push({snap:now, label:h.label});
-    this.draftPlan(); this.planChanged();
+    // Undo is an edit like any other now: it saves, and it goes up.
+    this.savePlan(); this.planChanged();
     return h.label;
   }
   redoPlan(){
@@ -6843,14 +6854,10 @@ class TrailApp {
     const now=this.planSnapshot();
     if(!this.planRestore(r.snap)) return null;
     this.planHist.push({snap:now, label:r.label});
-    this.draftPlan(); this.planChanged();
+    this.savePlan(); this.planChanged();
     return r.label;
   }
   // Back to the last saved plan, and both stacks with it — Discard is not another edit.
-  revertPlan(){
-    if(this.planSavedSnap==null || !this.planRestore(this.planSavedSnap)) return false;
-    this.planHist=[]; this.planRedo=[]; this.planPreview=null; this.clearDraft(); this.planChanged(); return true;
-  }
   draftPlan(){ try{ localStorage.setItem(PLAN_DRAFT_KEY, this.planSnapshot()); }catch(e){} }
   clearDraft(){ try{ localStorage.removeItem(PLAN_DRAFT_KEY); }catch(e){} }
   /* The saved plan as a record — the same shape on this phone, in the cloud and in a
@@ -6991,6 +6998,13 @@ class TrailApp {
     if(/TOO_MANY_ATTEMPTS|RESET_PASSWORD_EXCEED_LIMIT/.test(s)) return 'too many tries — wait a few minutes';
     if(/USER_DISABLED/.test(s)) return 'that account is switched off';
     if(/API_KEY_INVALID|API key not valid/i.test(s)) return 'the API key is wrong for this project';
+    /* The key is restricted to a list of sites and this one is not on it. Worth naming the
+       trap rather than repeating Google: the browser sends only the ORIGIN as the referrer
+       on these calls, so a rule carrying a path — .../empire-state-trail/ — can never match
+       and the entry has to be the bare origin with a star. */
+    if(/refere|API_KEY_HTTP_REFERRER_BLOCKED/i.test(s))
+      return 'this site is not on the API key\'s allowed list — add '
+        +location.origin+'/* in Cloud Console → Credentials (the origin only, no path)';
     return s.replace(/_/g,' ').toLowerCase()||'no answer';
   }
   // The account, and nothing else. There is no second credential any more.
@@ -6999,7 +7013,7 @@ class TrailApp {
      Everything the last account knew about the cloud is wrong for the next one. */
   syncReset(){
     this.syncState=this.syncOn()?'idle':'off';
-    this.syncMsg=''; this.syncRemote=null;
+    this.syncMsg=''; this.syncRemote=null; this.syncNews='';
     this.syncSeen=0; this._syncCheck=0;
     clearTimeout(this._pushT);
   }
@@ -7103,10 +7117,23 @@ class TrailApp {
          here — which is what comes back the moment two phones agree. */
       const news=rec && rec.plan && Array.isArray(rec.plan.days)
         && rat > mine+1500 && rat > this.syncSeen && !this.sameAsSaved(rec);
-      if(news){ this.syncRemote=rec; }
+      this.syncNews='';
+      if(news){
+        /* Taken, not offered. One rider, their own devices, one plan — there is no rival
+           claim here for a bar to arbitrate, so asking was a question with one answer.
+           It still says what it did, because a plan changing under you unannounced is
+           worse than the bar was. */
+        this.syncRemote=rec;
+        if(this.adoptRemote()){
+          const who=(rec.device && rec.device===syncDevice())
+            ? 'sent from this device' : 'from '+(rec.device||'your other device');
+          this.syncNews='Loaded the plan '+who+', saved '+this.syncAgo(rat)+'.';
+          this.status(this.syncNews);
+        }
+      }
       else {
         this.syncRemote=null;
-        if(rec && rat>this.syncSeen && !news) this.syncSeen=rat;
+        if(rec && rat>this.syncSeen) this.syncSeen=rat;
       }
       this.syncChanged(); return rec;
     }catch(e){
@@ -7124,26 +7151,37 @@ class TrailApp {
         ===this.planSavedSnap;
     }catch(e){ return false; }
   }
-  /* Taking the other phone's plan is an edit like any other — on the undo stack under a
-     name that says where it came from, and NOT saved. That is the point: it arrives as
-     unsaved work, so the rows rule through what this phone had and set the incoming plan
-     beside it, and the rider reads the difference before Save makes it theirs. */
+  /* The other device's plan is not a proposal to weigh up — it is the plan, saved, by the
+     same person, minutes ago. So it lands as the saved plan: no amber bar, no rows ruled
+     through, nothing to agree to. The state it replaced goes on the undo stack anyway, so
+     an edit that was in progress here is recoverable, but it costs the rider no attention
+     unless they go looking. */
   adoptRemote(){
     const rec=this.syncRemote; if(!rec || !rec.plan) return false;
     const p=decodeSavedPlan(JSON.stringify(rec.plan)); if(!p) return false;
     this.syncRemote=null;
     this.syncSeen=Math.max(this.syncSeen, +rec.savedAt||0);
-    this.planEdit('the plan from '+(rec.device||'the other device'), ()=>{
-      if(isFinite(p.speed) && p.speed>0) this.avgSpeed=p.speed;
-      if(isFinite(p.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,p.anchorTM));
-      this.planDays=p.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
-        start:isFinite(pd.start)?pd.start:this.wxRideStart, end:isFinite(pd.end)?pd.end:null,
-        zero:!!pd.zero})).slice(0,PLAN_DAYS_MAX);
-      this.planStay=(p.stay && typeof p.stay==='object') ? {...p.stay} : {};
-      this.planPicked=(p.picked && typeof p.picked==='object') ? {...p.picked} : {};
-      this.planSnap();
-    });
-    this.drawPlanLayer();
+    const before=this.planSnapshot();
+    if(isFinite(p.speed) && p.speed>0) this.avgSpeed=p.speed;
+    if(isFinite(p.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,p.anchorTM));
+    this.planDays=p.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
+      start:isFinite(pd.start)?pd.start:this.wxRideStart, end:isFinite(pd.end)?pd.end:null,
+      zero:!!pd.zero})).slice(0,PLAN_DAYS_MAX);
+    this.planStay=(p.stay && typeof p.stay==='object') ? {...p.stay} : {};
+    this.planPicked=(p.picked && typeof p.picked==='object') ? {...p.picked} : {};
+    this.planSnap();
+    if(this.planSnapshot()!==before){
+      this.planHist.push({snap:before, label:'the plan from '+(rec.device||'the other device')});
+      if(this.planHist.length>40) this.planHist.shift();
+    }
+    /* Redo belonged to the plan that just went; a proposal about it is stale for the same
+       reason. */
+    this.planRedo=[]; this.planPreview=null; this._planAuto=false;
+    /* Saved, not pushed. It came FROM up there — sending it straight back would only stamp
+       a fresh time on a record that already has one and start the other device wondering
+       whether it is behind. */
+    this.savePlan({push:false});
+    this.planChanged();
     return true;
   }
   // "4 min ago" — the only form of this that a rider reads rather than decodes.
@@ -7173,25 +7211,6 @@ class TrailApp {
       +' data-plan="synco" title="'+esc(tip)+'" aria-label="'+esc(tip)+'">'
       +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
       +'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+base+mark+'</svg></button>';
-  }
-  // A newer plan up there. Offered, never taken — and it says what it is before you take it.
-  syncBarHtml(){
-    const r=this.syncRemote; if(!r || !r.plan || !Array.isArray(r.plan.days)) return '';
-    const ds=r.plan.days, rid=ds.filter(d=>!d.zero).length;
-    const mi=Math.round(ds.reduce((n,d)=>n+(d.zero?0:(+d.miles||0)),0));
-    /* Usually the other phone. Sometimes this one, when a send got through and the plan
-       here was rolled back afterwards — and a bar naming your own phone as though it were
-       somebody else is a puzzle, so it says what it is. */
-    const who=(r.device && r.device===syncDevice()) ? 'This phone sent a newer one,'
-      : esc(r.device||'Another device')+' saved it';
-    return '<div class="pl-unsaved pl-syncbar">'
-      +'<span class="pl-uk">Newer</span>'
-      +'<span class="pl-ut">'+who+' '+this.syncAgo(+r.savedAt)
-        +' · '+rid+(rid===1?' riding day · ':' riding days · ')+mi+' mi'
-        +(this.planDirty() ? ' · your unsaved changes would go, Undo brings them back' : '')+'</span>'
-      +'<button type="button" class="pl-ub pl-ub-go" data-plan="syncpull">Load it</button>'
-      +'<button type="button" class="pl-ub" data-plan="syncskip">Keep mine</button>'
-    +'</div>';
   }
   /* Folded away until the cloud is tapped, because a rider who is planning a ride is not
      thinking about databases. Everything it needs to say fits in a few lines: what the
@@ -7600,7 +7619,7 @@ class TrailApp {
       : esc(newV==null ? oldV : newV);
     const pvN=prev ? this.planPreviewCount(prev) : 0;
     const pvD=prev ? prev.days.length-days.length : 0;
-    const was=this.planWas(), dirty=this.planDirty();
+    const was=this.planWas();
     const chgN=was ? days.reduce((n,x,i)=>n+(this.planDayChange(i,was)?1:0),0) : 0;
     /* How far the plan falls short of the end of the trail. Named in the header, because
        "7 riding days · 442 mi" over a 582-mile trail is a number that looks like an answer
@@ -7618,10 +7637,9 @@ class TrailApp {
           +(short>0.5 ? '<span class="pl-shortk"> · '+Math.round(short)+' mi short of '
             +esc(this.destName())+'</span>' : '')+'</div></div>'
         +'<button type="button" class="pl-auto" data-plan="auto">Auto-plan</button>'
-        /* Filled once there is something to save and outlined when there is not, so the
-           button itself is part of the answer to "have I saved this?". */
-        +'<button type="button" class="pl-save'+(dirty?' on':'')+'" data-plan="save">Save</button>'
-        /* Beside Save because that is when it matters: Save is what goes up. */
+        /* No Save. Every edit is already saved and already on its way up, and the cloud
+           says how that is going — which is the only part a rider cannot see for
+           themselves. */
         +this.syncBtnHtml()
       +'</div>'
       +'<div class="pl-head-2">'
@@ -7695,19 +7713,18 @@ class TrailApp {
         +(this.planHist.length ? '<button type="button" class="pl-ub" data-plan="undo">Undo</button>' : '')
         +(this.planRedo.length ? '<button type="button" class="pl-ub" data-plan="redo">Redo</button>' : '')
       +'</div>'
-      : (dirty || this.planRedo.length) ? '<div class="pl-unsaved'+(dirty?'':' clean')+'">'
-        +'<span class="pl-uk">'+(dirty?'Not saved':'Saved')+'</span>'
-        +'<span class="pl-ut">'+(dirty
-            ? (chgN ? chgN+(chgN===1?' day differs':' days differ') : 'changes pending')
-              +(this.planHist.length ? ' · changed '+esc(this.planHist[this.planHist.length-1].label) : '')
-            : 'back to the saved plan'
-              +(this.planRedo.length ? ' · undid '+esc(this.planRedo[this.planRedo.length-1].label) : ''))
+      /* Nothing is ever unsaved now, so this bar has one job left: hold the way back. It
+         names the last change rather than announcing a state, because "Saved" on a screen
+         where everything is always saved is a word doing no work. */
+      : (this.planHist.length || this.planRedo.length) ? '<div class="pl-unsaved clean">'
+        +'<span class="pl-uk">Last change</span>'
+        +'<span class="pl-ut">'+(this.planHist.length
+            ? esc(this.planHist[this.planHist.length-1].label)
+            : 'undid '+esc(this.planRedo[this.planRedo.length-1].label))
         +'</span>'
         +(this.planHist.length ? '<button type="button" class="pl-ub" data-plan="undo">Undo</button>' : '')
         +(this.planRedo.length ? '<button type="button" class="pl-ub" data-plan="redo">Redo</button>' : '')
-        +(dirty ? '<button type="button" class="pl-ub" data-plan="revert">Discard</button>' : '')
       +'</div>' : '')
-      +this.syncBarHtml()
       +this.syncPanelHtml()
     +'</div>');
 
@@ -8138,28 +8155,17 @@ class TrailApp {
       const b=e.target.closest('[data-plan]'); if(!b) return;
       const act=b.dataset.plan, d=+b.dataset.d;
       if(act==='auto'){ this.autoPlan(); this.renderPlan(); }
-      else if(act==='save'){ this.savePlan(); this.renderPlan();
-        this.status(this.syncOn() ? 'Ride plan saved, and going up to your other devices.'
-                                  : 'Ride plan saved on this phone.'); }
       /* ---- sync ----
-         One control now: the cloud. It says what the state is and asking it again is the
-         only manual thing left worth doing, since Save is what sends. */
+         One control: the cloud. Every edit saves and sends itself, so the only manual
+         thing left worth doing is asking whether anything has come the other way. */
       else if(act==='synco'){
         if(!this.syncOn()){ this.status('Not signed in — sign in on the More tab to carry the plan.'); return; }
         this.status('Asking…');
         this.checkSync(true).then(()=>{ this.renderPlan();
           this.status(this.syncState==='err' ? 'Could not reach it — '+this.syncMsg
-            : this.syncRemote ? 'There is a newer plan up there.'
-            : 'Up to date.'); }); }
-      /* It comes in as unsaved work on purpose — the rows show it against yours, and
-         nothing is settled until Save. Undo is right there in the bar meanwhile. */
-      else if(act==='syncpull'){ if(this.adoptRemote()){ this.renderPlan();
-        this.status('Loaded it — the rows show what changed. Save to keep it, Undo for yours.'); } }
-      else if(act==='syncskip'){ this.syncSeen=Math.max(this.syncSeen, +(this.syncRemote||{}).savedAt||0);
-        this.syncRemote=null; this.renderPlan();
-        // Yours is the newer one now, as far as anyone else is concerned.
-        this.pushPlan({stamp:true}).then(()=>this.renderPlan());
-        this.status('Kept this phone’s plan, and sent it up.'); }
+            /* checkSync already loaded anything newer and said so; repeating "up to date"
+               over the top of that would be the one lie in the sequence. */
+            : this.syncNews || 'Up to date.'); }); }
       else if(act==='tomap'){ this.showTab('map'); this.planFit(); }
       else if(act==='open'){ this.planOpenDay=this.planOpenDay===d?null:d; this.renderPlan(); }
       else if(act==='zero'){ this.setZeroDay(d, !this.planP()[d].zero); this.renderPlan(); }
@@ -8184,8 +8190,6 @@ class TrailApp {
         this.status(l ? 'Put back what it was before '+l+'.' : 'Nothing left to undo.'); }
       else if(act==='redo'){ const l=this.redoPlan(); this.renderPlan();
         this.status(l ? 'Back to '+l+' again.' : 'Nothing to redo.'); }
-      else if(act==='revert'){ if(this.revertPlan()){ this.renderPlan();
-        this.status('Back to the plan you last saved.'); } }
       /* The four that move days other than this one are proposed, not done: the rows
          redraw as a diff and nothing is committed until Apply. */
       else if(act==='spread'){ this.planPreviewOf('Even daily miles', ()=>this.spreadFrom_(d)); this.renderPlan(); }
@@ -8374,6 +8378,40 @@ class TrailApp {
       });
     }
     this.syncPlanKey();
+    this.syncMileLeft();
+  }
+  /* How far there is still to go today. Every part of this can be missing — the rider may
+     be at home in August, or off the route, or on a rest day — and a number that keeps
+     being shown through all of that is worse than no number, so this returns null rather
+     than a figure it cannot stand behind.
+     Today is day -wxStartShift: planDateFor adds the shift to the index, so the day that
+     lands on today's date is the one where the two cancel. */
+  mileLeftToday(){
+    if(this.myMile==null || this.offTrail || this.planning) return null;
+    const d=-(this.wxStartShift||0), days=this.planP();
+    if(!(d>=0 && d<days.length)) return null;
+    const b=this.planBounds()[d]; if(!b) return null;
+    if(days[d].zero) return {d:d, zero:true};
+    /* Signed by direction, so this is miles still to ride either way round rather than a
+       milepost subtraction that goes negative for half the riders who use it. */
+    return {d:d, left:(b.end-this.myMile)*this.dirSign(), town:this.planDayTown(d)};
+  }
+  syncMileLeft(){
+    const el=this.$('mileLeft'); if(!el) return;
+    const r=this.mileLeftToday();
+    if(!r){ el.hidden=true; el.innerHTML=''; el.removeAttribute('title'); return; }
+    const town=r.town ? this.bedName(r.town) : 'the end of the day';
+    let v, k, tip, done=false;
+    if(r.zero){ v='0'; k='rest day'; done=true;
+      tip='Day '+(r.d+1)+' is a zero day — nothing to ride today'; }
+    else if(r.left<=0.4){ v='0'; k='you’re there'; done=true;
+      tip='Day '+(r.d+1)+' ends at '+town+', and you are at it'; }
+    else { v=String(Math.round(r.left)); k='mi left';
+      tip=Math.round(r.left)+' mi still to ride to '+town+', where day '+(r.d+1)+' ends'; }
+    el.className='fab fab-num'+(done?' done':'');
+    el.innerHTML='<span class="fab-num-v">'+v+'</span><span class="fab-num-k">'+esc(k)+'</span>';
+    el.title=tip; el.setAttribute('aria-label',tip);
+    el.hidden=false;
   }
   /* The colour key under the layer row: one line per day, so a leg on the map has a name
      without tapping it. Repainted here because Leaflet rebuilds the list on every tick. */
@@ -8386,7 +8424,10 @@ class TrailApp {
          and leaves you to work out which stroke on the map it is; naming the leg says it
          outright, which is the whole job of a key. */
       const from=this.placeNameAt(bounds[d].start);
-      const lab=this.planDayLabel(d).replace(/,.*/,'')+' · '
+      /* The date, not just the weekday. Ten days runs past a week, so two rows say "Sat"
+         and neither says which one — and the trip crosses a month, so the day number alone
+         is no better. The comma goes because this sits in a legend, not a sentence. */
+      const lab=this.planDayLabel(d).replace(',','')+' · '
         +(pd.zero ? 'zero at '+from : from+' → '+(t?t.n:Math.round(bounds[d].end)+' mi'));
       return '<span class="plan-key-row"><span class="plan-key-sw" style="background:'
         +this.planDayCol(d)+'"></span><span>'+esc(lab)+'</span></span>';

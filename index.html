@@ -456,15 +456,13 @@
   .pl-sum{font-size:11.5px;color:var(--pl-mute);margin-top:1px;font-variant-numeric:tabular-nums}
   .pl-auto{flex:none;font-family:inherit;font-size:11.5px;padding:5px 10px;background:transparent;
     color:var(--pl-mute);border:0;cursor:pointer;min-height:32px}
-  .pl-save{flex:none;font-family:inherit;font-size:12px;padding:6px 14px;background:#201e1d;
-    color:#f8f4f4;border:1px solid #201e1d;border-radius:999px;cursor:pointer;min-height:32px}
   .pl-head-2{display:flex;align-items:center;gap:14px;margin-top:9px;flex-wrap:wrap}
-  /* The unsaved bar. It only exists when there is something unsaved, so it is allowed to
-     be loud — an amber rule under the header rather than another permanent band. */
+  /* The bar under the header. Amber is kept for the preview, which IS a pending state;
+     the last-change row wears .clean because nothing is at stake there — the work is
+     already saved and this is only the way back. */
   .pl-unsaved{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;
     padding:5px 8px;background:#fdf3e0;border:1px solid #e0b872;border-radius:3px}
-  /* Amber is reserved for "not saved". Once you have undone back to the saved plan the bar
-     stays for the Redo, but it must stop shouting — the work is safe again. */
+  /* Quiet grey: a bar that appears after every edit must not shout after every edit. */
   .pl-unsaved.clean{background:#eceaea;border-color:rgba(32,30,29,.2)}
   .pl-unsaved.clean .pl-uk{color:var(--pl-sec)}
   .pl-unsaved.clean .pl-ut{color:var(--pl-mute)}
@@ -518,8 +516,6 @@
     color:var(--pl-link);background:transparent;border:1px dashed rgba(0,103,134,.4);
     border-radius:3px;padding:6px;cursor:pointer;min-height:32px}
   .pl-lmore:hover{background:rgba(0,103,134,.07)}
-  .pl-save{transition:background .12s,color .12s}
-  .pl-save:not(.on){background:transparent;color:var(--pl-ink)}
   /* ---- sync ----
      A cloud beside Save. Grey when the plan is only on this phone, which is not a fault
      and must not look like one; teal with a tick when it is in both places; amber only
@@ -532,16 +528,6 @@
   .pl-cloud.open{color:var(--pl-ink)}
   @keyframes pl-cloud-pulse{0%,100%{opacity:1}50%{opacity:.35}}
   @media (prefers-reduced-motion:reduce){.pl-cloud-busy{animation:none;opacity:.6}}
-  /* The bar for a plan the other phone saved. Teal like a preview, for the same reason:
-     it is something on offer, not something that has happened. */
-  .pl-syncbar{background:#e6f2f6;border-color:rgba(0,103,134,.45)}
-  .pl-syncbar .pl-uk{color:#00566f}
-  .pl-syncbar .pl-ut{color:#134b5c;white-space:normal;overflow:visible}
-  .pl-syncbar .pl-ub{color:#00566f;border-color:rgba(0,103,134,.45)}
-  .pl-syncbar .pl-ub:hover{background:rgba(0,103,134,.12)}
-  /* Louder than the rule above it, or the filled button ends up teal on teal. */
-  .pl-syncbar .pl-ub-go{color:#f4fafc;background:#00566f;border-color:#00566f}
-  .pl-syncbar .pl-ub-go:hover{background:#00435a}
   /* All that is left of the sync panel: one line, and only when something went wrong. The
      cloud beside Save carries the good news on its own. */
   .pl-syncline{margin-top:6px;font-size:11px;line-height:1.45;color:var(--pl-mute)}
@@ -760,6 +746,18 @@
     border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
   .fab:hover{background:var(--color-accent-100)}
   .fab:active{background:var(--color-accent-200)}
+  /* The same box as the buttons beside it, because it belongs to that rail — but it is a
+     readout, so it does not light up, does not take a press, and grows to fit three
+     digits rather than clipping them. */
+  .fab-num{cursor:default;width:auto;min-width:46px;padding:0 6px;line-height:1;
+    grid-template-rows:auto auto;gap:1px;align-content:center}
+  .fab-num:hover,.fab-num:active{background:var(--color-bg)}
+  .fab-num-v{font-family:var(--font-heading);font-weight:var(--font-heading-weight);
+    font-size:19px;color:var(--color-text)}
+  .fab-num-k{font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--color-neutral-600)}
+  /* Nothing left to ride reads as an arrival, not as a measurement. */
+  .fab-num.done .fab-num-v{color:var(--color-accent)}
   .map-sheet{flex:none;width:100%;
     padding:0 calc(var(--space-4) + env(safe-area-inset-right)) var(--space-3) calc(var(--space-4) + env(safe-area-inset-left))}
   .map-sheet[hidden]{display:none}
@@ -1727,6 +1725,11 @@
              syncMapStrip, and initMap appends the layers control so it lands below the
              zoom pair, nearest the thumb. -->
         <div class="map-fabs">
+          <!-- How much of today is left to ride. Not a control — it does not do anything,
+               it answers the one question that gets asked all day. syncMileLeft fills it,
+               and hides it whenever the answer would be a guess: no fix, off the trail, or
+               no plan day dated today. -->
+          <div id="mileLeft" class="fab fab-num" hidden></div>
           <button id="findBtn" type="button" class="fab" title="Find a place" aria-label="Find a place"><span data-ic="search"></span></button>
           <button id="locBtn" type="button" class="fab" title="Locate me" aria-label="Locate me"><span data-ic="locate"></span></button>
           <button id="recenterBtn" type="button" class="fab" title="Recenter" aria-label="Recenter map"><span data-ic="target"></span></button>
