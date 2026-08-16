@@ -1037,6 +1037,97 @@ const PLAN_DRAFT_KEY='est_outlook_plan_draft_v1';
 const PLAN_DAYS=7;
 const PLAN_DAYS_MAX=40;
 const PLAN_SNAP_MI=6;
+/* ---------- the plan, off this device ----------
+   A Firebase Realtime Database, reached over its REST interface — no SDK, no build step,
+   one PUT and one GET. It holds the saved plan only: a draft is this phone thinking out
+   loud, and thinking out loud does not belong on the other screen mid-sentence.
+
+   The plan lives at /plans/<uid> — the Firebase account's own id, and nothing else. There
+   is no sync code, no pairing step and no link to send: sign in on a second device with
+   the same email and it is already looking at the same record. One way in, and it is the
+   one way in for everything.
+
+   This replaced a scheme where the plan sat under a twenty-character code that the rider
+   copied between devices. Once there was a real account, the code was a second answer to a
+   question already answered — a whole pairing ritual, a link format, a paste box and a
+   fold-out panel of buttons, all to establish something the sign-in had established a
+   moment earlier. Two ways to say who you are is one too many.
+
+   These rules go in the console at Realtime Database → Rules:
+
+     {
+       "rules": {
+         ".read": false,
+         ".write": false,
+         "plans": {
+           "$uid": {
+             ".read":  "auth != null && $uid === auth.uid",
+             ".write": "auth != null && $uid === auth.uid && newData.hasChildren(['savedAt','plan'])",
+             ".validate": "newData.hasChildren(['savedAt','plan'])"
+           }
+         }
+       }
+     }
+
+   Everything is denied by default, and the only path any signed-in account can touch is
+   the one named after itself. Not "an account may read a plan whose code it knows" — YOUR
+   account, YOUR plan, and no reachable path between one rider's record and another's.
+
+   The cost, stated plainly: there is no longer a way to hand somebody a plan. Sharing was
+   what the code bought, and it went with it. */
+const FB_URL='https://empire-state-trail-default-rtdb.firebaseio.com';
+const SYNC_DEV_LS='est_sync_device_v1';
+/* ---------- who you are ----------
+   Firebase Auth, over its REST endpoints — the same bargain as the database: no SDK, no
+   build step, two POSTs and a string. Email and password, because it is the one sign-in
+   that needs nothing but a keyboard and works the same on a phone as on a laptop.
+
+   The shape of it:
+     accounts:signInWithPassword  → idToken (one hour) + refreshToken (does not expire)
+     securetoken /v1/token        → a fresh idToken from the refreshToken
+   and the idToken goes on ?auth= for every database call. The refresh token is the real
+   credential after the first sign-in; it lives in localStorage and the password is never
+   kept at all.
+
+   The console side, once:
+     Authentication → Sign-in method → Email/Password → Enable
+     Authentication → Users → Add user            (make the account yourself)
+     Authentication → Settings → User actions → untick "Enable create (sign-up)"
+   That last one matters more than it looks. The Web API key below is public by design —
+   it identifies the project and Google says to ship it — but while sign-up is open, a
+   public key means anybody can mint themselves an account and satisfy `auth != null`.
+   Switch sign-up off and the accounts are exactly the ones you made by hand. */
+/* Console → Project settings → General → Web API Key. In the repo on purpose: this one
+   names the project, it does not authorise anything, and Google ships it in every Firebase
+   web config. What keeps it from being a way in is that sign-up is switched off in the
+   console — see the block above. The credentials that WOULD matter, a password and a
+   database secret, are not here and never will be. */
+const FB_API_KEY='AIzaSyCRTU8XtsMUGtJVx9MjPf-8BVMxskkQN20';
+const FB_AUTH_LS='est-fb-auth';
+const IDP_URL='https://identitytoolkit.googleapis.com/v1/accounts:';
+const STS_URL='https://securetoken.googleapis.com/v1/token';
+function fbKey(){ return FB_API_KEY; }
+/* There was a second way in here: a legacy database secret, kept under `est-fb-token` and
+   sent instead of a token. It went. It authenticated as an ADMIN — it passed every rule in
+   the database including the ones written to keep people out — and it existed only to
+   cover a device that could not sign in, which is no longer a device that exists. A
+   standing admin credential in a browser, to solve a problem the front door already
+   solves, is a footgun with no trigger guard. */
+/* Which phone saved it. Not identity — a label, so "a newer plan" can say whose. */
+function syncDevice(){
+  let d='';
+  try{ d=localStorage.getItem(SYNC_DEV_LS)||''; }catch(e){}
+  if(d) return d;
+  const ua=navigator.userAgent||'';
+  const kind=/iPhone/.test(ua)?'iPhone':/iPad/.test(ua)?'iPad':/Android/.test(ua)?'Android'
+    :/Macintosh/.test(ua)?'Mac':/Windows/.test(ua)?'PC':'browser';
+  const buf=new Uint8Array(3);
+  if(self.crypto && self.crypto.getRandomValues) self.crypto.getRandomValues(buf);
+  else for(let i=0;i<3;i++) buf[i]=Math.floor(Math.random()*256);
+  d=kind+'·'+[...buf].map(b=>'23456789abcdefghjkmnpqrstuvwxyz'[b%30]).join('');
+  try{ localStorage.setItem(SYNC_DEV_LS, d); }catch(e){}
+  return d;
+}
 /* A bed counts towards a town if it's within PLAN_SNAP_MI along the trail and this far
    off it — the same corridor the Nearby list treats as reachable. The lodging list
    inside a day row is a disclosure, not a directory, so it stops at a handful. */
@@ -1083,7 +1174,8 @@ function decodeSavedPlan(raw){
   try{
     const o=JSON.parse(raw);
     if(o && Array.isArray(o.days) && o.days.length)
-      return {days:o.days, speed:o.speed, anchorTM:o.anchorTM, stay:o.stay, picked:o.picked};
+      return {days:o.days, speed:o.speed, anchorTM:o.anchorTM, stay:o.stay, picked:o.picked,
+        savedAt:isFinite(o.savedAt)?+o.savedAt:0};
   }catch(e){}
   return null;
 }
@@ -1454,6 +1546,22 @@ class TrailApp {
        edit — and the last saved copy, which is both what Discard goes back to and what
        every "was 55 mi" note on the screen is measured against. */
     this.planHist=[]; this.planRedo=[]; this.planSavedSnap=null; this.planPreview=null;
+    /* Off-device sync — see the FB_URL block up top. 'off' means no account on this device,
+       which is the state a fresh install is in: this app works with no account and no
+       network and must go on doing that. `remote` is a newer plan the cloud has that this
+       screen has not taken — held, not applied, because clobbering unsaved work is the one
+       thing a sync is never allowed to do. */
+    this.syncState='off'; this.syncMsg=''; this.syncAt=0;
+    this.syncRemote=null; this._syncCheck=0;
+    /* The newest remote plan already answered — taken or turned down. Without it, every
+       check offers the same plan again and the bar becomes something to swat away. */
+    this.syncSeen=0;
+    /* The Firebase account this device is signed in as — see loadAuth. Null is a perfectly
+       good state: the app has always worked with no account and no network and still must.
+       `authEmail` is only remembered so a failed sign-in does not make you type it twice. */
+    this.auth=null; this.authMsg=''; this.authBusy=false; this.authEmail=''; this._authP=null;
+    // When this device last saved — the half of "which of these two is newer" that is ours.
+    this.planAt=0;
     /* The mini map inside a lodging list: which day's is showing, and whether it has been
        pulled taller. One instance, moved between rows — see planMini(). */
     this.planMiniDay=null; this.planMiniBig=false; this._miniMap=null; this._miniWrap=null;
@@ -1654,9 +1762,21 @@ class TrailApp {
   init(){
     this.loadPrefs();
     this.loadUserLayers();
+    /* Before anything that talks to the cloud: the account is what says which record is
+       ours, so there is nothing to fetch until it is loaded. */
+    this.loadAuth();
+    this.syncReset();
+    /* And the door straight up, before the map, the layers and every fetch behind them. The
+       rest of init still runs underneath — so signing in reveals an app that is already
+       built rather than one that then starts building. */
+    this.wireGate(); this.showGate();
+    this.wireAccount(); this.renderAccount();
     // Before initMap, so the plan's legs are on the map the first time it draws — and
     // after loadPrefs, because a saved plan carries the pace it was built at.
     this.loadPlan();
+    /* Ask the cloud once the screen is up, not while it is building. A newer plan from the
+       other phone only ever raises a bar — see checkSync. */
+    if(this.syncOn()) setTimeout(()=>this.checkSync(true), 1500);
     this.buildDropdowns();
     this.buildTestRows();
     this.wireTabs();
@@ -2544,8 +2664,12 @@ class TrailApp {
     if(name==='nearby') this.renderNearby();
     // Same reason as Nearby: the plan reads the pins and the pace, and both move while
     // you are on another screen. Rebuilt on the way in rather than tracked for staleness.
-    if(name==='plan') this.renderPlan();
+    if(name==='plan'){ this.renderPlan();
+      // And ask whether the other phone has been busy. Rate-limited inside checkSync.
+      if(this.syncOn()) this.checkSync(); }
     if(name==='wx') this.renderOutlook();
+    // Who you are and when the plan last went up — both move while you are elsewhere.
+    if(name==='settings') this.renderAccount();
     // Only resize. Recentring here threw away wherever you had panned to the moment
     // you glanced at another tab and came back.
     if(name==='map' && this.map){ setTimeout(()=>{ this.map.invalidateSize(); this.flushFit(); },60); }
@@ -6442,6 +6566,11 @@ class TrailApp {
     if(t.camp) return t.camp+(t.camp>1?' campsites':' campsite');
     return 'no beds';
   }
+  /* A split-off cluster carries its milepost in its own NAME — "Fairport · TM 443.6" —
+     because that is the only thing telling it from the Fairport four miles back, and day
+     titles and the map sheet still need it. Anywhere the milepost is already its own
+     column, that suffix is the same fact printed twice, so take it off there. */
+  bedName(t){ return t ? String(t.n).replace(/\s·\sTM\s[\d.]+$/,'') : ''; }
   /* The actual places, from the pins — all of them. It used to stop at PLAN_LODGE_MAX,
      which put two different numbers on one screen: a day summary counting nine beds over
      a list showing six. The row still shows a few at a time, but the cut is made where
@@ -6724,11 +6853,498 @@ class TrailApp {
   }
   draftPlan(){ try{ localStorage.setItem(PLAN_DRAFT_KEY, this.planSnapshot()); }catch(e){} }
   clearDraft(){ try{ localStorage.removeItem(PLAN_DRAFT_KEY); }catch(e){} }
-  savePlan(){
-    try{ localStorage.setItem(PLAN_KEY, JSON.stringify({days:this.planP(),
-      speed:this.avgSpeed, anchorTM:this.planStartMile(), stay:this.planStay,
-      picked:this.planPicked})); }catch(e){}
+  /* The saved plan as a record — the same shape on this phone, in the cloud and in a
+     shared link, so there is one thing to reason about rather than three. savedAt is what
+     makes "which of these two is newer" answerable at all. */
+  planRecord(){
+    return {days:this.planP(), speed:this.avgSpeed, anchorTM:this.planStartMile(),
+      stay:this.planStay, picked:this.planPicked, savedAt:Date.now()};
+  }
+  savePlan(opt){
+    const rec=this.planRecord();
+    try{ localStorage.setItem(PLAN_KEY, JSON.stringify(rec)); }catch(e){}
+    this.planAt=rec.savedAt;
     this.clearDraft(); this.planBaseline();
+    // Local first, always: the cloud is a copy, not the place the plan lives.
+    if(this.syncOn() && !(opt && opt.push===false)) this.queuePush();
+  }
+  /* ---------- the same plan on the other phone ----------
+     Two rules hold this together. Only the SAVED plan goes up, because a draft is this
+     device thinking and the other screen should not watch it think. And nothing ever comes
+     down on its own: a newer plan in the cloud is offered, not applied, because the one
+     unforgivable thing a sync can do is overwrite the edit somebody is in the middle of.
+
+     Signed in IS switched on. There is no separate control, because there was never a
+     coherent answer to "signed in, but syncing off" — the account exists for this. */
+  syncOn(){ return !!(this.auth && this.auth.uid); }
+  syncUrl(tok){
+    return FB_URL+'/plans/'+encodeURIComponent(this.auth ? this.auth.uid : '')+'.json'
+      +(tok ? '?auth='+encodeURIComponent(tok) : '');
+  }
+  /* ---------- signed in ----------
+     See the FB_API_KEY block up top for the shape and the console side. Everything here
+     is deliberately best-effort: a rider with no signal is not signed out, they are a
+     rider with no signal, and the plan on this phone must go on working either way. */
+  loadAuth(){
+    let a=null; try{ a=JSON.parse(localStorage.getItem(FB_AUTH_LS)||'null'); }catch(e){}
+    this.auth=(a && a.refreshToken) ? a : null;
+  }
+  setAuth(a){
+    this.auth=a||null;
+    try{
+      if(a) localStorage.setItem(FB_AUTH_LS, JSON.stringify(a));
+      else localStorage.removeItem(FB_AUTH_LS);
+    }catch(e){}
+  }
+  /* A valid ID token, or ''. Renewed two minutes early, because a token that expires
+     between this line and the fetch below it is a 401 nobody can reproduce. */
+  async authToken(){
+    const a=this.auth;
+    if(!a || !a.refreshToken) return '';
+    if(a.idToken && (a.exp||0)-Date.now()>120000) return a.idToken;
+    return (await this.authRefresh()) ? (this.auth ? this.auth.idToken : '') : '';
+  }
+  /* One refresh at a time. Three calls going out together — a check, a push and a retry —
+     would otherwise each spend the refresh token, and Firebase rotates it. */
+  authRefresh(){
+    const a=this.auth;
+    if(!a || !a.refreshToken || !fbKey()) return Promise.resolve(false);
+    if(this._authP) return this._authP;
+    this._authP=(async()=>{
+      try{
+        const r=await fetch(STS_URL+'?key='+encodeURIComponent(fbKey()), {method:'POST',
+          headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(a.refreshToken)});
+        const j=await r.json().catch(()=>null);
+        if(!r.ok || !j || !j.id_token){
+          /* 400 is the account saying no: password changed, user deleted, token revoked.
+             There is nothing to retry, and pretending otherwise leaves the panel claiming
+             a sign-in that will refuse every call. Anything else — no signal, a 500 — is
+             kept, because it will work again later. */
+          if(r.status===400){
+            this.setAuth(null);
+            /* The account is gone or the password changed, so this device has no way back
+               in without typing one. Put the door back rather than leaving a signed-out app
+               quietly failing every call. */
+            this.authMsg='signed out — the password changed, or the account was removed';
+            this.showGate();
+          }
+          return false;
+        }
+        this.setAuth({email:a.email, uid:j.user_id||a.uid, idToken:j.id_token,
+          refreshToken:j.refresh_token||a.refreshToken,
+          exp:Date.now()+((+j.expires_in||3600)*1000)});
+        return true;
+      }catch(e){ return false; }
+      finally{ this._authP=null; }
+    })();
+    return this._authP;
+  }
+  async authIn(email, pass, create){
+    if(!fbKey()) return {err:'this build has no Firebase API key in it — Project settings → General → Web API Key'};
+    if(!email || !pass) return {err:'an email and a password, both'};
+    try{
+      const r=await fetch(IDP_URL+(create?'signUp':'signInWithPassword')
+          +'?key='+encodeURIComponent(fbKey()),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({email:email, password:pass, returnSecureToken:true})});
+      const j=await r.json().catch(()=>null);
+      const code=(j && j.error && j.error.message)||'';
+      if(!r.ok || !j || !j.idToken) return {err:this.authErr(code||('HTTP '+r.status)), code:code};
+      this.setAuth({email:j.email||email, uid:j.localId, idToken:j.idToken,
+        refreshToken:j.refreshToken, exp:Date.now()+((+j.expiresIn||3600)*1000)});
+      return {ok:true};
+    }catch(e){ return {err:this.syncErr(e)}; }
+  }
+  /* The only way back in, since the password is never stored anywhere to be recovered
+     from. Firebase sends the email; the link it contains is handled by Google, not here. */
+  async authResetMail(email){
+    if(!fbKey()) return {err:'no API key on this build'};
+    if(!email) return {err:'which email?'};
+    try{
+      const r=await fetch(IDP_URL+'sendOobCode?key='+encodeURIComponent(fbKey()),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({requestType:'PASSWORD_RESET', email:email})});
+      const j=await r.json().catch(()=>null);
+      if(!r.ok) return {err:this.authErr((j && j.error && j.error.message)||('HTTP '+r.status))};
+      return {ok:true};
+    }catch(e){ return {err:this.syncErr(e)}; }
+  }
+  /* Firebase shouts in SCREAMING_SNAKE. Nobody standing in a car park outside Medina is
+     helped by INVALID_LOGIN_CREDENTIALS. */
+  authErr(m){
+    const s=String(m||'');
+    if(/INVALID_LOGIN_CREDENTIALS|INVALID_PASSWORD|EMAIL_NOT_FOUND/.test(s))
+      return 'that email and password do not match an account';
+    if(/EMAIL_EXISTS/.test(s)) return 'there is already an account with that email — sign in instead';
+    if(/WEAK_PASSWORD/.test(s)) return 'the password needs at least six characters';
+    if(/INVALID_EMAIL/.test(s)) return 'that does not look like an email address';
+    if(/MISSING_PASSWORD/.test(s)) return 'no password';
+    if(/OPERATION_NOT_ALLOWED/.test(s))
+      return 'email sign-in is switched off for this project — turn it on in the console';
+    /* Not "misconfigured" — never switched on. This is the answer when Authentication has
+       not been started on the project at all, which is where every new project begins. */
+    if(/CONFIGURATION_NOT_FOUND/.test(s))
+      return 'this project has no sign-in set up yet — Console → Authentication → Get started';
+    if(/ADMIN_ONLY_OPERATION/.test(s))
+      return 'this project does not let people sign themselves up — make the account in the console';
+    if(/TOO_MANY_ATTEMPTS|RESET_PASSWORD_EXCEED_LIMIT/.test(s)) return 'too many tries — wait a few minutes';
+    if(/USER_DISABLED/.test(s)) return 'that account is switched off';
+    if(/API_KEY_INVALID|API key not valid/i.test(s)) return 'the API key is wrong for this project';
+    return s.replace(/_/g,' ').toLowerCase()||'no answer';
+  }
+  // The account, and nothing else. There is no second credential any more.
+  async syncAuth(){ return this.authToken(); }
+  /* Called whenever the account changes — signing in, signing out, a refresh token dying.
+     Everything the last account knew about the cloud is wrong for the next one. */
+  syncReset(){
+    this.syncState=this.syncOn()?'idle':'off';
+    this.syncMsg=''; this.syncRemote=null;
+    this.syncSeen=0; this._syncCheck=0;
+    clearTimeout(this._pushT);
+  }
+  /* Half this trail has no signal, so "Failed to fetch" is the message this will show most
+     often. It says what actually happened instead. */
+  syncErr(e){
+    const m=(e && e.message)||'', n=(e && e.name)||'';
+    if(/abort/i.test(n)) return 'it took too long to answer';
+    if(/failed to fetch|networkerror|load failed|network request/i.test(m))
+      return 'no signal, or the store is out of reach';
+    return m||'no answer';
+  }
+  /* Sync state is chrome, not plan. It must not redraw the map and re-run the outlook every
+     time a cloud icon changes colour. There are no typed fields left on this screen to
+     preserve — that went with the sync code — so this is now just the cheap redraw. */
+  syncChanged(){
+    if(this.screen!=='plan') return;
+    if(this.$('planOut')) this.renderPlan();
+  }
+  // Short-fused, like every other call this app makes: a slow database must not sit on the
+  // Save button. Firebase answers 401 when a rule refuses, which is worth saying plainly.
+  async syncFetch(opt, retried){
+    const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(), 9000);
+    try{
+      const r=await fetch(this.syncUrl(await this.syncAuth()),
+        Object.assign({signal:ctl.signal, cache:'no-store'}, opt||{}));
+      if(r.status===401 || r.status===403){
+        /* An ID token lasts an hour and a phone in a pannier sleeps for longer than that,
+           so the first refusal is usually just a stale token. Renew once and try again;
+           only the second refusal is news. */
+        if(this.auth && !retried && await this.authRefresh()) return this.syncFetch(opt, true);
+        throw new Error(this.auth ? 'the database refused this account — check the rules'
+          : 'the database said no — sign in on this device, or check the rules');
+      }
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const txt=await r.text();
+      return txt && txt!=='null' ? JSON.parse(txt) : null;
+    } finally { clearTimeout(t); }
+  }
+  /* Saves come in flurries — a pace change is three keystrokes — so the push waits a beat
+     and sends the last one. The screen says "sending" the whole time, which is true. */
+  queuePush(){
+    if(!this.syncOn()) return;
+    this.syncState='busy'; this.syncMsg='sending'; this.syncChanged();
+    clearTimeout(this._pushT);
+    this._pushT=setTimeout(()=>this.pushPlan(), 900);
+  }
+  /* What goes up is what is in PLAN_KEY — read back off the disk rather than rebuilt from
+     the working copy, so there is no path by which a draft can be sent. `stamp` re-dates
+     the saved record, which is what "keep mine" means: this one is the current one now.
+     Timestamps are the clocks on your own two phones, which is the assumption that makes
+     last-write-wins honest here and would not survive strangers sharing a code. */
+  async pushPlan(opt){
+    if(!this.syncOn()) return false;
+    clearTimeout(this._pushT);
+    let saved=null; try{ saved=decodeSavedPlan(localStorage.getItem(PLAN_KEY)); }catch(e){}
+    if(!saved || !saved.days || !saved.days.length){
+      /* Nothing has been saved on this phone, so there is nothing to send — and switching
+         sync on is not permission to save work the rider has not saved. */
+      this.syncState='idle'; this.syncMsg='';
+      this.status('Nothing saved on this phone yet — press Save and it goes up.');
+      this.syncChanged(); return false;
+    }
+    if(opt && opt.stamp){
+      saved.savedAt=Date.now();
+      try{ localStorage.setItem(PLAN_KEY, JSON.stringify(saved)); }catch(e){}
+      this.planAt=saved.savedAt;
+    }
+    const at=saved.savedAt||this.planAt||Date.now();
+    this.syncState='busy'; this.syncMsg='sending'; this.syncChanged();
+    try{
+      await this.syncFetch({method:'PUT', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({v:1, savedAt:at, device:syncDevice(), plan:saved})});
+      this.syncAt=Date.now(); this.syncState='ok'; this.syncMsg=''; this.syncRemote=null;
+      this.syncSeen=Math.max(this.syncSeen, at);   // what is up there is ours now
+      this.syncChanged(); return true;
+    }catch(e){
+      /* Kept, not lost. The plan is already on this phone; the next Save tries again, and
+         until then the cloud mark says so rather than pretending. */
+      this.syncState='err'; this.syncMsg=this.syncErr(e);
+      this.syncChanged(); return false;
+    }
+  }
+  /* Is there something newer up there? Only ever sets syncRemote — the bar it puts on the
+     screen is where a rider decides. Quiet on failure: a check that could not reach the
+     network is not news. */
+  async checkSync(force){
+    if(!this.syncOn()) return null;
+    const now=Date.now();
+    if(!force && now-this._syncCheck<45000) return null;
+    this._syncCheck=now;
+    try{
+      const rec=await this.syncFetch({method:'GET'});
+      this.syncAt=Date.now();
+      if(this.syncState!=='busy') this.syncState='ok';
+      // It answered, so whatever it last said it could not do is no longer true.
+      this.syncMsg='';
+      const mine=this.planAt||0, rat=(rec && +rec.savedAt)||0;
+      /* Three ways a newer stamp is not news: it is not newer than what this phone saved,
+         it is one this rider has already answered, or it is word for word the plan already
+         here — which is what comes back the moment two phones agree. */
+      const news=rec && rec.plan && Array.isArray(rec.plan.days)
+        && rat > mine+1500 && rat > this.syncSeen && !this.sameAsSaved(rec);
+      if(news){ this.syncRemote=rec; }
+      else {
+        this.syncRemote=null;
+        if(rec && rat>this.syncSeen && !news) this.syncSeen=rat;
+      }
+      this.syncChanged(); return rec;
+    }catch(e){
+      if(force){ this.syncState='err'; this.syncMsg=this.syncErr(e); this.syncChanged(); }
+      return null;
+    }
+  }
+  /* Is that record the plan this phone already saved? Laid out the way planSnapshot lays
+     one out, so the comparison is the same string comparison "not saved" is decided by. */
+  sameAsSaved(rec){
+    if(this.planSavedSnap==null || !rec || !rec.plan) return false;
+    const p=rec.plan;
+    try{
+      return JSON.stringify({d:p.days, s:p.stay||{}, p:p.picked||{}, a:p.anchorTM, v:p.speed})
+        ===this.planSavedSnap;
+    }catch(e){ return false; }
+  }
+  /* Taking the other phone's plan is an edit like any other — on the undo stack under a
+     name that says where it came from, and NOT saved. That is the point: it arrives as
+     unsaved work, so the rows rule through what this phone had and set the incoming plan
+     beside it, and the rider reads the difference before Save makes it theirs. */
+  adoptRemote(){
+    const rec=this.syncRemote; if(!rec || !rec.plan) return false;
+    const p=decodeSavedPlan(JSON.stringify(rec.plan)); if(!p) return false;
+    this.syncRemote=null;
+    this.syncSeen=Math.max(this.syncSeen, +rec.savedAt||0);
+    this.planEdit('the plan from '+(rec.device||'the other device'), ()=>{
+      if(isFinite(p.speed) && p.speed>0) this.avgSpeed=p.speed;
+      if(isFinite(p.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,p.anchorTM));
+      this.planDays=p.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
+        start:isFinite(pd.start)?pd.start:this.wxRideStart, end:isFinite(pd.end)?pd.end:null,
+        zero:!!pd.zero})).slice(0,PLAN_DAYS_MAX);
+      this.planStay=(p.stay && typeof p.stay==='object') ? {...p.stay} : {};
+      this.planPicked=(p.picked && typeof p.picked==='object') ? {...p.picked} : {};
+      this.planSnap();
+    });
+    this.drawPlanLayer();
+    return true;
+  }
+  // "4 min ago" — the only form of this that a rider reads rather than decodes.
+  syncAgo(ms){
+    if(!ms) return '';
+    const s=Math.max(0,Math.round((Date.now()-ms)/1000));
+    if(s<45) return 'just now';
+    if(s<5400) return Math.round(s/60)+' min ago';
+    if(s<172800) return Math.round(s/3600)+' h ago';
+    return new Date(ms).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+  }
+  /* One mark in the header carries the whole state, because that is all a sync deserves
+     when it is working: a cloud with a tick. It only asks for attention when it failed. */
+  syncBtnHtml(){
+    const s=this.syncState;
+    const base='<path d="M17.5 19H7a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.75 4.75 0 0 1-.5 9.5Z"></path>';
+    const mark=s==='ok' ? '<path d="M9.6 14.1l1.9 1.9 3.4-3.9"></path>'
+      : s==='err' ? '<path d="M12 11.2v2.9"></path><path d="M12 16.6v.01"></path>' : '';
+    /* The whole status, on the one control there is. Tapping it asks the cloud again, which
+       is the only thing the three buttons under the old panel did that Save does not. */
+    const tip=s==='off' ? 'This plan is on this phone only — sign in on More to carry it'
+      : s==='busy' ? 'Sending the plan…'
+      : s==='err' ? 'Not sent — '+this.syncMsg+'. Tap to try again'
+      : (this.syncAt ? 'Synced '+this.syncAgo(this.syncAt) : 'Not sent yet — press Save')
+        +' · tap to check';
+    return '<button type="button" class="pl-cloud pl-cloud-'+s+'"'
+      +' data-plan="synco" title="'+esc(tip)+'" aria-label="'+esc(tip)+'">'
+      +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+      +'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+base+mark+'</svg></button>';
+  }
+  // A newer plan up there. Offered, never taken — and it says what it is before you take it.
+  syncBarHtml(){
+    const r=this.syncRemote; if(!r || !r.plan || !Array.isArray(r.plan.days)) return '';
+    const ds=r.plan.days, rid=ds.filter(d=>!d.zero).length;
+    const mi=Math.round(ds.reduce((n,d)=>n+(d.zero?0:(+d.miles||0)),0));
+    /* Usually the other phone. Sometimes this one, when a send got through and the plan
+       here was rolled back afterwards — and a bar naming your own phone as though it were
+       somebody else is a puzzle, so it says what it is. */
+    const who=(r.device && r.device===syncDevice()) ? 'This phone sent a newer one,'
+      : esc(r.device||'Another device')+' saved it';
+    return '<div class="pl-unsaved pl-syncbar">'
+      +'<span class="pl-uk">Newer</span>'
+      +'<span class="pl-ut">'+who+' '+this.syncAgo(+r.savedAt)
+        +' · '+rid+(rid===1?' riding day · ':' riding days · ')+mi+' mi'
+        +(this.planDirty() ? ' · your unsaved changes would go, Undo brings them back' : '')+'</span>'
+      +'<button type="button" class="pl-ub pl-ub-go" data-plan="syncpull">Load it</button>'
+      +'<button type="button" class="pl-ub" data-plan="syncskip">Keep mine</button>'
+    +'</div>';
+  }
+  /* Folded away until the cloud is tapped, because a rider who is planning a ride is not
+     thinking about databases. Everything it needs to say fits in a few lines: what the
+     code is, what to do with it on the other phone, and what is and is not sent. */
+  /* ---------- the front door ----------
+     Shown at load when this device has no account on it, over everything including the tab
+     bar. The test is whether a refresh token is SITTING HERE, not whether one can be
+     redeemed right now — those are different questions and only the first one has an
+     answer in a dead zone. So a phone that signed in once in a kitchen in Buffalo opens
+     straight to the map in a field outside Medina with no bars, which is the only way a
+     trail app is allowed to behave. The gate is therefore a once-per-device thing, seen
+     when you install it and never again. */
+  gateNeeded(){ return !this.auth; }
+  showGate(){
+    const el=this.$('gate'); if(!el) return;
+    if(!this.gateNeeded()){
+      if(!el.hidden){ el.hidden=true; el.innerHTML=''; document.body.style.overflow=''; }
+      return;
+    }
+    el.hidden=false;
+    document.body.style.overflow='hidden';
+    this.renderGate();
+    /* Not on a phone: a keyboard springing up the instant the app opens hides the two
+       lines telling you what it is and why it wants this. */
+    if(!/Android|iPhone|iPad|Mobi/i.test(navigator.userAgent||'')){
+      const f=el.querySelector('[data-gate=em]'); if(f) f.focus();
+    }
+  }
+  renderGate(){
+    const el=this.$('gate'); if(!el || el.hidden) return;
+    const busy=this.authBusy;
+    el.innerHTML='<div class="gate-card">'
+      +'<div class="gate-t">Empire State Trail</div>'
+      +'<div class="gate-s">Sign in to carry your ride plan between your phone and anything '
+        +'else you open this on. Once you have, this screen is done with — the app opens '
+        +'straight up after that, signal or no signal.</div>'
+      +'<div class="gate-f">'
+        +'<input class="gate-in" data-gate="em" type="email" autocapitalize="off" '
+          +'autocomplete="username" spellcheck="false" placeholder="Email" '
+          +'value="'+esc(this.authEmail||'')+'">'
+        +'<input class="gate-in" data-gate="pw" type="password" '
+          +'autocomplete="current-password" placeholder="Password">'
+        +'<button type="button" class="gate-go" data-gate="go"'+(busy?' disabled':'')+'>'
+          +(busy?'Signing in…':'Sign in')+'</button>'
+      +'</div>'
+      +'<div class="gate-alt">'
+        +'<button type="button" data-gate="new">Create an account</button>'
+        +'<button type="button" data-gate="reset">Forgotten your password</button>'
+      +'</div>'
+      +(this.authMsg ? '<div class="gate-msg">'+esc(this.authMsg)+'</div>' : '')
+      +'<div class="gate-foot">The plan, the map and every mile of the route are on this '
+        +'device already. Signing in is only about keeping them the same on two of them.</div>'
+    +'</div>';
+  }
+  /* Its own listener rather than the plan screen's: the gate is outside #planOut, it is up
+     before that screen has ever been rendered, and it has to keep working if the rest of
+     the app fails to start. */
+  wireGate(){
+    const el=this.$('gate'); if(!el || el._wired) return;
+    el._wired=true;
+    const fld=k=>{ const i=el.querySelector('[data-gate='+k+']'); return i?i.value:''; };
+    const go=made=>{
+      const em=fld('em').trim(), pw=fld('pw');
+      this.authEmail=em; this.authBusy=true; this.authMsg=''; this.renderGate();
+      this.authIn(em, pw, made).then(r=>{
+        this.authBusy=false;
+        if(r.err){
+          this.authMsg=(made?'Could not make the account — ':'')+r.err;
+          this.renderGate();
+          const p=el.querySelector('[data-gate=pw]'); if(p) p.focus();
+          return;
+        }
+        this.authEmail='';
+        this.authMsg=made ? 'account made — now untick Authentication → Settings → '
+          +'User actions → Enable create (sign-up), so nobody else can make one' : '';
+        this.showGate();
+        this.renderPlan();
+        if(this.syncOn()) this.checkSync(true).then(()=>this.syncChanged());
+      });
+    };
+    el.addEventListener('click',e=>{
+      const b=e.target.closest('[data-gate]'); if(!b || b.tagName!=='BUTTON') return;
+      const k=b.dataset.gate;
+      if(k==='go') go(false);
+      else if(k==='new') go(true);
+      else if(k==='reset'){
+        const em=fld('em').trim();
+        this.authMsg='sending…'; this.renderGate();
+        this.authResetMail(em).then(r=>{
+          this.authMsg=r.err ? r.err : 'Sent. Check '+em+' for a link to set a new password.';
+          this.renderGate(); });
+      }
+    });
+    el.addEventListener('keydown',e=>{
+      if(e.key!=='Enter') return;
+      if(!e.target.closest('[data-gate=em],[data-gate=pw]')) return;
+      e.preventDefault(); go(false);
+    });
+  }
+  /* ---------- the account, on More ----------
+     Signing in happens once, at the door. Everything after that is one line saying who you
+     are and one button to stop being them — which is a More-tab job, not something to put
+     next to a ride plan. */
+  renderAccount(){
+    const el=this.$('acctOut'); if(!el) return;
+    const a=this.auth;
+    if(!a){
+      el.innerHTML='<div class="set-lbl">Account</div>'
+        +'<div class="acct-b">Not signed in. The ride plan is on this device only.</div>'
+        +'<button type="button" class="acct-out" data-acct="in">Sign in</button>';
+      return;
+    }
+    const st=this.syncState==='err' ? 'Last sync failed — '+this.syncMsg
+      : this.syncState==='busy' ? 'Sending the plan…'
+      : this.syncAt ? 'Ride plan synced '+this.syncAgo(this.syncAt)
+      : 'Ride plan not sent yet — press Save on the Ride plan tab.';
+    el.innerHTML='<div class="set-lbl">Account</div>'
+      +'<div class="acct-who">'+esc(a.email||'signed in')+'</div>'
+      +'<div class="acct-b'+(this.syncState==='err'?' bad':'')+'">'+esc(st)+'</div>'
+      +(this.authMsg ? '<div class="acct-b bad">'+esc(this.authMsg)+'</div>' : '')
+      +'<div class="acct-b">Sign in with the same email on another device and it keeps the '
+        +'same plan. Nothing else this app holds — your own layers, the map, what you have '
+        +'passed — ever leaves the device it is on.</div>'
+      +'<button type="button" class="acct-out" data-acct="out">Sign out</button>';
+  }
+  wireAccount(){
+    const el=this.$('acctOut'); if(!el || el._wired) return;
+    el._wired=true;
+    el.addEventListener('click',e=>{
+      const b=e.target.closest('[data-acct]'); if(!b) return;
+      if(b.dataset.acct==='out'){
+        /* The plan stays. Signing out is about this device's key to the store, not about
+           throwing away the trip — and the local copy was never the cloud's to take. */
+        this.setAuth(null); this.authMsg=''; this.syncReset();
+        this.renderAccount(); this.renderPlan(); this.showGate();
+        this.status('Signed out. The plan is still here, and still saved.');
+      } else { this.authMsg=''; this.showGate(); }
+    });
+  }
+  /* What the plan screen says about the cloud, which on a good day is nothing at all.
+
+     This used to be a fold-out panel: a Copy link button, the code in a box beside a Copy
+     code button, two paragraphs explaining the pairing, three action buttons, an account
+     row and a token row. All of it was scaffolding for a sync code that no longer exists,
+     and the account row was a second sign-in for an app that already has one at the door.
+     What is left is a line that appears when something has gone wrong and is otherwise
+     absent — the cloud beside Save carries the good news on its own, and tapping it asks
+     again. Sign out lives on More, which is where a thing you touch twice a year belongs. */
+  syncPanelHtml(){
+    if(this.syncState==='err')
+      return '<div class="pl-syncline bad">Not sent — '+esc(this.syncMsg)
+        +'. It is saved on this phone, and the next Save tries again.</div>';
+    return '';
   }
   /* The last saved plan, laid out the way this one is, so a row can say what it used to
      be. This is the honest answer to "what did my edit drag with it": not a guess about
@@ -6902,6 +7518,7 @@ class TrailApp {
     if(!fromUrl){ try{ draft=localStorage.getItem(PLAN_DRAFT_KEY); }catch(e){} }
     if(!saved && !draft) return;
     if(saved){
+      this.planAt=+saved.savedAt||0;
       if(isFinite(saved.speed) && saved.speed>0) this.avgSpeed=saved.speed;
       if(isFinite(saved.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,saved.anchorTM));
       this.planDays=saved.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
@@ -7004,6 +7621,8 @@ class TrailApp {
         /* Filled once there is something to save and outlined when there is not, so the
            button itself is part of the answer to "have I saved this?". */
         +'<button type="button" class="pl-save'+(dirty?' on':'')+'" data-plan="save">Save</button>'
+        /* Beside Save because that is when it matters: Save is what goes up. */
+        +this.syncBtnHtml()
       +'</div>'
       +'<div class="pl-head-2">'
         +'<span class="pl-field"><span class="pl-k">Starting at</span>'
@@ -7081,6 +7700,8 @@ class TrailApp {
         +(this.planRedo.length ? '<button type="button" class="pl-ub" data-plan="redo">Redo</button>' : '')
         +(dirty ? '<button type="button" class="pl-ub" data-plan="revert">Discard</button>' : '')
       +'</div>' : '')
+      +this.syncBarHtml()
+      +this.syncPanelHtml()
     +'</div>');
 
     const moonSvg=col=>'<svg class="pl-moon" width="11" height="11" viewBox="0 0 24 24" fill="'+col+'" stroke="none"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"></path></svg>';
@@ -7224,9 +7845,15 @@ class TrailApp {
           .filter(t=>{ const m=(t.tm-b.start)*sgn; return m>2 && m<=PLAN_DAY_MAX_MI; })
           .sort((p,q)=>(p.tm-q.tm)*sgn);
         let sel=false;
+        /* Name · milepost · the day it makes · its beds — the same four columns on every
+           line, including the end of the trail and the "no beds" fallback. The milepost
+           used to appear on exactly one line, and only by accident: it was part of that
+           place's name. One list cannot be in two formats, and the milepost is the column
+           that tells two same-named places apart, so every line carries it. */
         let opts=ahead.map(t=>{ const on=!!(atT && t.tm===atT.tm && b.miles>0.5); if(on) sel=true;
           return '<option value="'+t.tm+'"'+(on?' selected':'')+'>'
-            +esc(t.n)+' · '+Math.round(abs(t.tm-b.start))+' mi · '+esc(this.bedWord(t))+'</option>'; }).join('');
+            +esc(this.bedName(t))+' · '+esc(mpTxt(t.tm))
+            +' · '+Math.round(abs(t.tm-b.start))+' mi · '+esc(this.bedWord(t))+'</option>'; }).join('');
         /* The end of the trail, always — it is the one destination that is a destination
            whether or not anything is pinned at it, and the list was leaving it out
            because it is chosen by beds. Skipped only when a place already sits on it. */
@@ -7237,7 +7864,8 @@ class TrailApp {
           const nt=nearestTown(term), on=!sel && !atT && abs(b.end-term)<3;
           if(on) sel=true;
           opts+='<option value="'+term+'"'+(on?' selected':'')+'>'
-            +esc(nt?this.shortTown(nt.n):'the end')+' · '+Math.round(abs(gone))+' mi · end of the trail</option>';
+            +esc(nt?this.shortTown(nt.n):'the end')+' · '+esc(mpTxt(term))
+            +' · '+Math.round(abs(gone))+' mi · end of the trail</option>';
         })();
         /* When nothing in the list is what the day currently does, the list needs to SAY
            so. Without this the browser quietly shows the first option as chosen, and a day
@@ -7246,7 +7874,7 @@ class TrailApp {
            is a description of the day rather than somewhere you can ride to. */
         if(!sel) opts='<option value="" selected disabled>'
             +(b.miles<0.5 ? 'Nowhere yet — pick a town'
-              : '⚠ '+Math.round(b.miles)+' mi · between towns, no beds')
+              : '⚠ '+mpTxt(b.end)+' · '+Math.round(b.miles)+' mi · between towns, no beds')
           +'</option>'+opts;
 
         h.push('<div class="pl-row"><span class="pl-k">Ride to</span>'
@@ -7504,7 +8132,27 @@ class TrailApp {
       const act=b.dataset.plan, d=+b.dataset.d;
       if(act==='auto'){ this.autoPlan(); this.renderPlan(); }
       else if(act==='save'){ this.savePlan(); this.renderPlan();
-        this.status('Ride plan saved on this phone.'); }
+        this.status(this.syncOn() ? 'Ride plan saved, and going up to your other devices.'
+                                  : 'Ride plan saved on this phone.'); }
+      /* ---- sync ----
+         One control now: the cloud. It says what the state is and asking it again is the
+         only manual thing left worth doing, since Save is what sends. */
+      else if(act==='synco'){
+        if(!this.syncOn()){ this.status('Not signed in — sign in on the More tab to carry the plan.'); return; }
+        this.status('Asking…');
+        this.checkSync(true).then(()=>{ this.renderPlan();
+          this.status(this.syncState==='err' ? 'Could not reach it — '+this.syncMsg
+            : this.syncRemote ? 'There is a newer plan up there.'
+            : 'Up to date.'); }); }
+      /* It comes in as unsaved work on purpose — the rows show it against yours, and
+         nothing is settled until Save. Undo is right there in the bar meanwhile. */
+      else if(act==='syncpull'){ if(this.adoptRemote()){ this.renderPlan();
+        this.status('Loaded it — the rows show what changed. Save to keep it, Undo for yours.'); } }
+      else if(act==='syncskip'){ this.syncSeen=Math.max(this.syncSeen, +(this.syncRemote||{}).savedAt||0);
+        this.syncRemote=null; this.renderPlan();
+        // Yours is the newer one now, as far as anyone else is concerned.
+        this.pushPlan({stamp:true}).then(()=>this.renderPlan());
+        this.status('Kept this phone’s plan, and sent it up.'); }
       else if(act==='tomap'){ this.showTab('map'); this.planFit(); }
       else if(act==='open'){ this.planOpenDay=this.planOpenDay===d?null:d; this.renderPlan(); }
       else if(act==='zero'){ this.setZeroDay(d, !this.planP()[d].zero); this.renderPlan(); }

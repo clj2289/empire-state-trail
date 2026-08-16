@@ -520,6 +520,68 @@
   .pl-lmore:hover{background:rgba(0,103,134,.07)}
   .pl-save{transition:background .12s,color .12s}
   .pl-save:not(.on){background:transparent;color:var(--pl-ink)}
+  /* ---- sync ----
+     A cloud beside Save. Grey when the plan is only on this phone, which is not a fault
+     and must not look like one; teal with a tick when it is in both places; amber only
+     when a send actually failed. */
+  .pl-cloud{flex:none;display:flex;align-items:center;justify-content:center;width:32px;
+    min-height:32px;padding:0;background:transparent;border:0;cursor:pointer;color:var(--pl-faint)}
+  .pl-cloud-ok{color:#0f6a8b}
+  .pl-cloud-busy{color:#0f6a8b;animation:pl-cloud-pulse 1.1s ease-in-out infinite}
+  .pl-cloud-err{color:#8a5a00}
+  .pl-cloud.open{color:var(--pl-ink)}
+  @keyframes pl-cloud-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @media (prefers-reduced-motion:reduce){.pl-cloud-busy{animation:none;opacity:.6}}
+  /* The bar for a plan the other phone saved. Teal like a preview, for the same reason:
+     it is something on offer, not something that has happened. */
+  .pl-syncbar{background:#e6f2f6;border-color:rgba(0,103,134,.45)}
+  .pl-syncbar .pl-uk{color:#00566f}
+  .pl-syncbar .pl-ut{color:#134b5c;white-space:normal;overflow:visible}
+  .pl-syncbar .pl-ub{color:#00566f;border-color:rgba(0,103,134,.45)}
+  .pl-syncbar .pl-ub:hover{background:rgba(0,103,134,.12)}
+  /* Louder than the rule above it, or the filled button ends up teal on teal. */
+  .pl-syncbar .pl-ub-go{color:#f4fafc;background:#00566f;border-color:#00566f}
+  .pl-syncbar .pl-ub-go:hover{background:#00435a}
+  /* All that is left of the sync panel: one line, and only when something went wrong. The
+     cloud beside Save carries the good news on its own. */
+  .pl-syncline{margin-top:6px;font-size:11px;line-height:1.45;color:var(--pl-mute)}
+  .pl-syncline.bad{color:#8a5a00}
+  /* ---- the front door ----
+     Opaque, not a scrim: there is nothing behind it worth squinting at, and a half-visible
+     map invites a rider to try tapping through it. Covers the tab bar as well, which is why
+     it sits outside .app-wrap. */
+  .gate{position:fixed;inset:0;z-index:4000;background:#f3f2f2;color:#201e1d;
+    display:flex;align-items:center;justify-content:center;padding:24px 20px;
+    overflow-y:auto;color-scheme:light}
+  .gate[hidden]{display:none}
+  .gate-card{width:100%;max-width:340px}
+  .gate-t{font-family:var(--serif,Georgia,serif);font-size:27px;line-height:1.12;letter-spacing:-.01em}
+  .gate-s{font-size:12.5px;color:#7d7979;margin-top:7px;line-height:1.45}
+  .gate-f{display:flex;flex-direction:column;gap:7px;margin-top:17px}
+  .gate-in{font-size:16px;color:#201e1d;background:#fff;border:1px solid rgba(32,30,29,.22);
+    border-radius:4px;padding:10px 11px;width:100%}
+  .gate-in:focus{outline:2px solid #00566f;outline-offset:-1px;border-color:#00566f}
+  .gate-go{font:inherit;font-size:14px;font-weight:600;background:#201e1d;color:#f7f6f5;
+    border:1px solid #201e1d;border-radius:999px;padding:10px 14px;cursor:pointer;margin-top:3px}
+  .gate-go:hover{background:#000}
+  .gate-go[disabled]{opacity:.55;cursor:default}
+  .gate-alt{display:flex;gap:14px;flex-wrap:wrap;margin-top:11px}
+  .gate-alt button{font:inherit;font-size:12px;color:#006786;background:none;border:0;
+    padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+  /* Amber, not red: most of what lands here is "no signal", which is not an error anybody
+     needs shouting at them. */
+  .gate-msg{font-size:12.5px;color:#8a5a00;margin-top:11px;line-height:1.45}
+  .gate-foot{font-size:11px;color:#9b9797;margin-top:20px;line-height:1.45}
+
+  /* ---- the account block on More ---- */
+  .acct{margin:0 0 18px}
+  .acct-who{font-size:15px;font-weight:600;color:#201e1d;margin-top:1px}
+  .acct-b{font-size:11.5px;line-height:1.5;color:#7d7979;margin-top:3px;max-width:52ch}
+  .acct-b.bad{color:#8a5a00}
+  .acct-out{font:inherit;font-size:12.5px;color:#201e1d;background:none;
+    border:1px solid rgba(32,30,29,.22);border-radius:999px;padding:6px 13px;
+    cursor:pointer;margin-top:9px}
+  .acct-out:hover{background:rgba(32,30,29,.06)}
   .pl-field{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
   .pl-k{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--pl-faint);flex:none}
   .pl-unit{font-size:11.5px;color:var(--pl-mute)}
@@ -1961,6 +2023,8 @@
     <section data-screen="settings" class="screen">
       <div class="screen-pad">
         <h1 class="screen-title">More</h1>
+        <!-- Who this device is signed in as, and the way out. Filled by renderAccount(). -->
+        <div id="acctOut" class="acct"></div>
         <label class="switch"><input type="checkbox" id="showPassed" class="f-showPassed"> Show stops I’ve already passed</label>
         <label class="switch"><input type="checkbox" id="tapToSet" checked> Let the map spot dialog move my location</label>
         <p class="poi-band-note" style="margin-top:2px">Long-press the map (or right-click on the web) to open a spot with its trail mile, Google Maps, Street View and a Find-nearby row. A plain tap just reads the map. This switch only controls whether that dialog can also move your location.</p>
@@ -1999,6 +2063,11 @@
     <button data-tab="settings" type="button" class="tab" aria-current="false" title="More" aria-label="More"><span class="tab-ic" data-ic="gear"></span></button>
   </nav>
 </div>
+
+<!-- The front door. Filled and shown by TrailApp.renderGate(); see the FB_API_KEY block
+     in est-core.js for what it is guarding. Outside .app-wrap on purpose, so it covers
+     the tab bar too — a gate with a way round it is a decoration. -->
+<div id="gate" class="gate" hidden></div>
 
 <script src="est-core.js"></script>
 <script>
