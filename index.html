@@ -729,7 +729,10 @@
   /* A title carrying a diff is twice as long, and the half being ellipsised away is the
      new town — the one thing the preview exists to show. Let it wrap while it is up. */
   .pl-previewing .pl-t{white-space:normal;overflow:visible;text-overflow:clip}
-  .pl-s{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--pl-mute);margin-top:2px;
+  /* Baseline, not centre: the distance is set at twice the size of the rest of this line
+     and centring it left the two sitting at different heights with nothing to line up on.
+     Wraps between items — never inside one. */
+  .pl-s{display:flex;align-items:baseline;flex-wrap:wrap;gap:5px;font-size:12px;color:var(--pl-mute);margin-top:2px;
     font-variant-numeric:tabular-nums}
   /* Where the day ends up, sat on the words it is about rather than in front of the
      whole line. Its colour is the signal — indigo a bed, red none pinned, grey a day
@@ -741,8 +744,8 @@
      beside it — they are the two facts a day is picked out by, and one of them had been
      left in the same 11px as the hotel count. Inline rather than boxed, so it sits on the
      same baseline as the rest of the line and reads as the head of a sentence. */
-  .pl-smi{font-size:22px;line-height:1;color:var(--pl-ink);font-weight:600;
-    letter-spacing:-.015em;font-variant-numeric:tabular-nums}
+  .pl-smi{flex:none;white-space:nowrap;font-size:22px;line-height:1;color:var(--pl-ink);
+    font-weight:600;letter-spacing:-.015em;font-variant-numeric:tabular-nums}
   .pl-pill{flex:none;font-family:inherit;font-size:11.5px;padding:5px 11px;border:1px dashed var(--pl-line);
     border-radius:999px;background:#fff;color:var(--pl-mute);cursor:pointer;min-height:30px;white-space:nowrap}
   .pl-pill.on{background:#8a6a1e;color:#fff;border:1px solid #8a6a1e}

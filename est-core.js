@@ -8532,9 +8532,13 @@ class TrailApp {
                     ? diff(String(Math.round(b.miles)),
                         nb&&nd&&!nd.zero ? String(Math.round(nb.miles)) : null, 'pl-ins')
                     : String(Math.round(b.miles))+' mi')
-                  +'</b> · ')
+                  +'</b>')
+                /* The separator travels with the text that follows it rather than sitting
+                   between them as a text node of its own: this line is a flex row, a bare
+                   " · " becomes an item in it, and an item can be wrapped onto a line by
+                   itself — which is how a dot ended up alone under the mileage. */
                 +((away||summary) ? esc(summary)
-                  : esc(hours)+' · '+bedSvg(bedCol, bedTip, bedTxt))+'</span>'
+                  : (plain?'':'· ')+esc(hours)+' · '+bedSvg(bedCol, bedTip, bedTxt))+'</span>'
             +'</button>'
             /* A two-state control, labelled by what pressing it does rather than by what
                the day currently is — "Riding" sitting there in a box read as a status
