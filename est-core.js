@@ -8217,7 +8217,7 @@ class TrailApp {
          time and no use for a count of the hotels along a stretch of trail you are not on.
          The note is the title on these days, so this line is free to say what kind of day
          it is. */
-      const summary=away ? 'Not on the trail this day'
+      const summary=away ? (pd.note ? '' : 'Not on the trail this day')
         : pd.zero ? 'Rest day'
         : done ? 'The trail ends at '+fromN
         : idle ? 'An earlier day already reaches '+fromN
@@ -8292,9 +8292,17 @@ class TrailApp {
       // that changed between riding and resting.
       const chg=prev ? '' : this.planDayNote(d, was);
       if(chg) h.push('<div class="pl-chg"><span class="pl-chg-d"></span>'+esc(chg)+'</div>');
-      /* The rider's own note, on the row. On an off-trail day it is already the title, so
-         it would only be said twice. */
-      if(pd.note && !away) h.push('<div class="pl-daynote">'+esc(pd.note)+'</div>');
+      /* The rider's own note, on the row — and where there is none, the offer of one in
+         its place. It was only ever a field inside the fold, which is a thing you find by
+         opening every day to see what is in it. "Return the car and start riding" belongs
+         to the morning it happens on, and the row is where that morning is. On an
+         off-trail day the note is already the title, so only the offer appears. */
+      if(pd.note && !away) h.push('<button type="button" class="pl-daynote"'
+        +' data-plan="notego" data-d="'+d+'" title="Change this note">'+esc(pd.note)+'</button>');
+      else if(!gone && !(away && pd.note))
+        h.push('<button type="button" class="pl-daynote pl-daynote-add"'
+          +' data-plan="notego" data-d="'+d+'">'
+          +(away ? '+ what is this day?' : '+ note')+'</button>');
       if(gone) h.push('<div class="pl-chg pl-chg-x"><span class="pl-chg-d"></span>this day goes</div>');
       /* A day an earlier one rode past, with the two ways out of it right there. */
       if(idle && !prev) h.push('<div class="pl-idle">'+warnSvg
@@ -8933,6 +8941,15 @@ class TrailApp {
             : this.syncNews || 'Up to date.'); }); }
       else if(act==='tomap'){ this.showTab('map'); this.planFit(); }
       else if(act==='open'){ this.planOpenDay=this.planOpenDay===d?null:d; this.renderPlan(); }
+      /* Opens the day AND puts the caret in the note, because the rider tapped the note.
+         Making them find the field again inside a fold they did not ask to open is the
+         thing that kept notes from being used at all. */
+      else if(act==='notego'){
+        this.planOpenDay=d; this.renderPlan();
+        const el2=this.$('planOut');
+        const f=el2 && el2.querySelector('.pl-day[data-d="'+d+'"] [data-plan="daynote"]');
+        if(f){ f.focus(); f.setSelectionRange(f.value.length, f.value.length);
+          f.scrollIntoView({block:'center'}); } }
       else if(act==='zero'){ this.setZeroDay(d, !this.planP()[d].zero); this.renderPlan(); }
       else if(act==='lodge'){ this.planOpenLodge=this.planOpenLodge===d?null:d;
         if(this.planOpenLodge!==d) this.planMiniDay=null;
@@ -9278,7 +9295,9 @@ class TrailApp {
          and neither says which one — and the trip crosses a month, so the day number alone
          is no better. The comma goes because this sits in a legend, not a sentence. */
       const lab=this.planDayLabel(d).replace(',','')+' · '
-        +(pd.zero ? 'zero at '+from : from+' → '+(t?t.n:Math.round(bounds[d].end)+' mi'));
+        +(pd.off ? (pd.note || 'off the trail')
+          : pd.zero ? 'zero at '+from
+          : from+' → '+(t?t.n:Math.round(bounds[d].end)+' mi'));
       return '<span class="plan-key-row"><span class="plan-key-sw" style="background:'
         +this.planDayCol(d)+'"></span><span>'+esc(lab)+'</span></span>';
     }).join('');

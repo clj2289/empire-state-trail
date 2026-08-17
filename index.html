@@ -832,7 +832,25 @@
   .pl-sday.on{color:#fff;background:#0088b0;border:1px solid #0088b0}
   /* What kind of day it is, and what it is for. Above the riding controls, because on a
      day you are driving to the start those controls answer a question nobody asked. */
-  .pl-daynote{margin:2px 0 0;font-size:11px;color:var(--pl-sec);font-style:italic}
+  /* The day's own note, and where there is none, the offer of one — same line, same
+     place, so the row does not jump when one is written. A button, because tapping it is
+     how you edit it. */
+  .pl-daynote{display:block;margin:2px 0 0;padding:1px 0;font-family:inherit;font-size:11px;
+    line-height:1.35;color:var(--pl-sec);font-style:italic;text-align:left;
+    background:transparent;border:0;cursor:pointer}
+  .pl-daynote:hover{color:var(--pl-link)}
+  .pl-daynote-add{color:var(--pl-faint);font-style:normal;font-size:10px;
+    letter-spacing:.04em}
+  /* A day of the trip spent off the trail, kept SHORT. It holds a date and a sentence and
+     nothing else — given the full height of a riding day it turned two lines of "driving
+     up" into a third of the screen, and a trip that starts with two of them opened on
+     almost no trail at all. */
+  .pl-day.pl-away{padding-top:7px;padding-bottom:8px}
+  .pl-day.pl-away .pl-hair{display:none}
+  .pl-day.pl-away .pl-dn{font-size:19px}
+  .pl-day.pl-away .pl-t{font-size:15px}
+  .pl-day.pl-away .pl-pill{font-size:10.5px;padding:3px 9px;min-height:24px;
+    border-style:solid;border-color:var(--pl-hair);color:var(--pl-mute)}
   .pl-dayrow{gap:10px;align-items:center}
   .pl-check{flex:none;display:flex;align-items:center;gap:6px;font-size:12px;
     color:var(--pl-ink);cursor:pointer;white-space:nowrap}
