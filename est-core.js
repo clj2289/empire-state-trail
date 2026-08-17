@@ -8721,6 +8721,21 @@ class TrailApp {
               +'Auto-plan the rest</button>'
           +'</div>');
         }
+        /* And on every other day too. Replanning from here is not only an answer to
+           "tomorrow just absorbed forty miles" — it is the thing a rider reaches for
+           whenever the back half of the trip has stopped making sense, and it was only
+           ever offered in the two situations that happened to produce it: a day an
+           earlier one rode past, and a day whose change the next one swallowed. Anywhere
+           else there was no way to ask for it at all. Not shown while a proposal is up,
+           when the only decisions left are Apply and Cancel, and not on the last day,
+           which has no rest to plan. A day off the trail keeps it: "we drove up, now plan
+           the ride from here" is one of the better reasons to press it. */
+        else if(!prev && laterRides)
+          h.push('<div class="pl-after pl-after-1">'
+            +'<button type="button" class="pl-fix" data-plan="replan" data-d="'+d+'"'
+              +' title="Throw away every day after this one and plan them again from where'
+              +' this day ends. You see it as a proposal first.">Auto-plan the rest</button>'
+          +'</div>');
 
         if(noBed){
           const near=this.bedTowns().filter(t=>abs(t.tm-b.end)<=14)
