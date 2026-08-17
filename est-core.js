@@ -111,6 +111,11 @@ const POP_PANE_Z='1200';
 // ~6.5 days, so four is comfortably inside it), and the mile spacing at which the route
 // is sampled for forecasts — one grid fetch per distinct sample cell.
 const WX_OUTLOOK_DAYS=4;
+/* How far ahead api.weather.gov's hourly grid actually reaches. Past this there is no
+   forecast to draw, and a graph drawn anyway would be drawing today's weather against a
+   day five weeks out — which is what this used to do, because the outlook began at
+   today's midnight and simply laid the plan's first day on top of it. */
+const WX_FORECAST_DAYS=6;
 const WX_SAMPLE_MI=12;
 /* The spot forecast. The Outlook stops where a forecast stops, but an arrival time costs
    nothing to work out, so a tapped spot's own timeline runs far enough to date any point
@@ -2985,8 +2990,6 @@ class TrailApp {
     // than a spot you can see. A form, so the phone keyboard's Go key submits it.
     const apf=this.$('apForm');
     if(apf) apf.addEventListener('submit',e=>{ e.preventDefault(); this.submitAddPlace(); });
-    const cmb=this.$('commGo');
-    if(cmb) cmb.addEventListener('click',()=>this.addCommunityPlaces());
     const impb=this.$('impGo');
     if(impb) impb.addEventListener('click',()=>{
       const t=this.$('impText');
@@ -9786,14 +9789,36 @@ class TrailApp {
      of today (plus any start-date shift); the rider advances from `now` so a plan opened
      mid-morning doesn't pretend you rode the pre-dawn hours. */
   wxPlanOpts(){
-    const anchor=this.planStartMile();
-    if(anchor==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
+    if(this.planStartMile()==null) return {err:'The outlook follows your route, so it needs a position on the trail. Use the locate button on the map, or tap the map to set one.'};
+    /* The outlook is the PLAN's days, on the plan's dates. It used to begin at today's
+       midnight and lay day one on top of it whatever the plan said, so a trip set for
+       September was shown this week's weather against its first day's miles — a forecast
+       for a ride nobody is doing, labelled as though they were.
+       It starts today or when the trip starts, whichever is later: there is no forecast
+       for a day already ridden, and no point drawing one. */
+    const days=this.planP(), bounds=this.planBounds();
+    if(!days.length) return {err:'No days in the plan yet. Build one on the Ride plan tab.'};
     const now=new Date();
-    const midnight=new Date(now.getFullYear(),now.getMonth(),now.getDate()+ (this.wxStartShift||0),0,0,0,0).getTime();
-    return {opts:{days:WX_OUTLOOK_DAYS, sgn:this.dirSign(),
+    const today0=new Date(now.getFullYear(),now.getMonth(),now.getDate(),0,0,0,0).getTime();
+    const t=this.todayIndex();
+    const from=Math.max(0, t);
+    if(from>=days.length)
+      return {err:'The trip finished on '+this.planDayLabel(days.length-1)
+        +'. Change the start date on the Ride plan tab and the outlook follows it.'};
+    const startMs=t>=0 ? today0 : this.planStartDate().getTime();
+    const ahead=Math.round((startMs-today0)/864e5);
+    if(ahead>WX_FORECAST_DAYS)
+      return {err:'Day 1 is '+this.planDayLabel(0)+', which is '+ahead+' days out. '
+        +'The forecast only reaches about '+WX_FORECAST_DAYS+' days ahead, so there is '
+        +'nothing to show for it yet — this fills in as the trip gets close.'};
+    /* Where the rider will be that morning, not where the whole plan starts: on day six
+       of a trip the outlook is about day six's stretch of trail. */
+    const anchor=bounds[from] ? bounds[from].start : this.planStartMile();
+    return {opts:{days:Math.min(WX_OUTLOOK_DAYS, days.length-from), sgn:this.dirSign(),
       speed:this.avgSpeed>0?this.avgSpeed:12, perDay:Math.max(5,this.wxPerDay||60),
-      startMs:midnight, nowMs:Date.now(), totalMi:TOTAL, anchorMile:anchor,
-      rideStart:this.wxRideStart, rideEnd:this.wxRideEnd, dayPlan:this.planP()}, anchor};
+      startMs:startMs, nowMs:Date.now(), totalMi:TOTAL, anchorMile:anchor,
+      rideStart:this.wxRideStart, rideEnd:this.wxRideEnd,
+      dayPlan:days.slice(from)}, anchor, dayFrom:from};
   }
   // The town list the plan reads, in the renderer's shape: short name, milepost, a spot
   // of context, and coordinates for the nearest-sample fetch.
@@ -9804,13 +9829,16 @@ class TrailApp {
   // Fold a built plan + the fetched spatial grids into the {meta,days,towns,hours} the
   // renderer draws. Pure once the grids are in hand, so the ride-window and zero controls
   // re-run it against the cached field without touching the network.
-  wxAssemble(plan, smiles, gridByIndex, opts, anchor){
+  wxAssemble(plan, smiles, gridByIndex, opts, anchor, dayFrom){
     const hours=assembleOutlookHours(plan, smiles, gridByIndex, m=>this.routeBearing(m));
     const towns=outlookTowns(plan, this.wxTownList(), anchor, opts.sgn);
     const days=plan.days.map((d,i)=>{
       const ms=opts.startMs+i*24*36e5, date=localISO(ms).slice(0,10);
-      return {date, zero:d.zero,
-        label:new Date(ms).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'}),
+      // Numbered as the PLAN numbers them, so "Day 6" on this screen and "Day 6" on the
+      // Ride plan are the same day rather than two counts that happen to share a word.
+      const no=(dayFrom||0)+i+1;
+      return {date, zero:d.zero, dayNo:no,
+        label:'Day '+no+' · '+new Date(ms).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'}),
         startMile:d.startMile, endMile:d.endMile,
         // the window the timeline actually rode, so the rail cannot draw a different one
         rideStart:d.start, rideEnd:d.end, miles:d.miles,
@@ -9851,8 +9879,9 @@ class TrailApp {
     const got=gridByIndex.filter(g=>g && g.temp && g.temp.size).length;
     this.wxBusy=false;
     if(!got){ this.wxData={err:'No answer from api.weather.gov. It’s the US forecast service — it covers the whole trail, but it does go down. Worth another try in a minute.'}; this.renderOutlook(); return; }
-    this.wxGrids={smiles, gridByIndex, anchor, sgn:opts.sgn, min:smiles[0], max:smiles[smiles.length-1]};
-    const data=this.wxAssemble(plan, smiles, gridByIndex, opts, anchor);
+    this.wxGrids={smiles, gridByIndex, anchor, sgn:opts.sgn, startMs:opts.startMs,
+      min:smiles[0], max:smiles[smiles.length-1]};
+    const data=this.wxAssemble(plan, smiles, gridByIndex, opts, anchor, po.dayFrom);
     data.at=Date.now(); data.got=got; data.of=smiles.length;
     this.wxData=data;
     // A fresh read is a fresh graph: the hour under the cursor is picked again rather
@@ -9870,11 +9899,15 @@ class TrailApp {
     const opts=po.opts, anchor=po.anchor;
     // A start-date shift moves every hour's clock, so the cached grids (keyed to absolute
     // time) no longer line up — that one always refetches.
-    if(anchor!==this.wxGrids.anchor || opts.sgn!==this.wxGrids.sgn || this.wxStartShift!==(this.wxGrids.shift||0)){ this.buildOutlook(); return; }
+    // The start moving is the one change the cache cannot absorb: the grids are keyed to
+    // absolute time, so every hour would be read from the wrong place in them.
+    if(anchor!==this.wxGrids.anchor || opts.sgn!==this.wxGrids.sgn
+      || opts.startMs!==this.wxGrids.startMs){ this.buildOutlook(); return; }
     const plan=planTimeline(opts);
     const lo=this.wxGrids.min-WX_SAMPLE_MI, hi=this.wxGrids.max+WX_SAMPLE_MI;
     if(plan.hours.some(h=>h.mile<lo || h.mile>hi)){ this.buildOutlook(); return; }
-    const data=this.wxAssemble(plan, this.wxGrids.smiles, this.wxGrids.gridByIndex, opts, anchor);
+    const data=this.wxAssemble(plan, this.wxGrids.smiles, this.wxGrids.gridByIndex,
+      opts, anchor, po.dayFrom);
     data.at=this.wxData.at; data.got=this.wxData.got; data.of=this.wxData.of;
     this.wxData=data;
     this.renderOutlook();
@@ -11832,58 +11865,6 @@ class TrailApp {
       +(this.syncOn() ? ' They are on your account, so every device gets them.'
         : ' Signed out, so they are on this device only — sign in on More and they go up.'),
       !!failed.length);
-  }
-  /* The same places, already looked up, shipped with the app. Everything the paste box
-     does happens here too — the merge, the second reports, the skip of anything already
-     saved — except the geocoding, which was done once against this route and checked
-     rather than being asked of a stranger's server on the day.
-     One tap, and it goes wherever the rider's other places go: signed in, that is their
-     account, which is the whole point. There is no version of this I can do for them —
-     the database only takes writes from a session holding their credentials, and it
-     should stay that way. */
-  async addCommunityPlaces(){
-    const btn=this.$('commGo'); if(btn) btn.disabled=true;
-    this.impStat('Loading the list…');
-    let doc;
-    try{
-      const r=await fetch('data/community_places.json', {cache:'no-store'});
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      doc=await r.json();
-    }catch(e){
-      if(btn) btn.disabled=false;
-      this.impStat('Could not load the list — '+this.syncErr(e), true);
-      return;
-    }
-    const list=(doc && doc.places) || [];
-    if(!list.length){ if(btn) btn.disabled=false;
-      this.impStat('The list came back empty.', true); return; }
-    const added=[], grew=[], already=[];
-    for(const r of list){
-      if(!Number.isFinite(+r.y) || !Number.isFinite(+r.x)) continue;
-      const have=(this.myPois||[]).find(z=>normQ(z.n)===normQ(r.n)
-        && abs(+z.y-(+r.y))<0.02 && abs(+z.x-(+r.x))<0.02);
-      if(have){
-        if(r.d && String(have.d||'').indexOf(r.d)<0){
-          have.d=[have.d, r.d].filter(Boolean).join(' // ').slice(0, PLACE_NOTE_MAX);
-          if(!have.k && r.k) have.k=r.k;
-          if(!have.u && r.u) have.u=r.u;
-          grew.push(r.n);
-        } else already.push(r.n);
-        continue;
-      }
-      const p=await this.addMyPoi({n:r.n, y:+r.y, x:+r.x, a:r.a||'', u:r.u||'',
-        d:String(r.d||'').slice(0, PLACE_NOTE_MAX), k:r.k||''}, {defer:true});
-      if(p) added.push(p);
-    }
-    if(added.length || grew.length) this.flushMyPois();
-    if(btn) btn.disabled=false;
-    this.renderNearby();
-    if(this.screen==='plan') this.renderPlan();
-    this.impStat('Added '+added.length+' of '+list.length+'.'
-      +(grew.length ? ' Another account added to '+grew.length+' you already had.' : '')
-      +(already.length ? ' '+already.length+' already saved.' : '')
-      +(this.syncOn() ? ' They are on your account now, so every device gets them.'
-        : ' Signed out, so they are on this device only — sign in on More and they go up.'));
   }
   impStat(msg, bad){
     const el=this.$('impStat'); if(!el) return;
