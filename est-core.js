@@ -1197,6 +1197,13 @@ const PLAN_STOP_EITHER_MI=3;
 /* A day's own note. Long enough for "drive up from Albany, Beekman Arms, book the
    shuttle" and short enough that a row stays a row. */
 const PLAN_NOTE_MAX=120;
+/* Which shape of plan record this build writes. A record with no `v` at all was
+   written by a build from before travel days, day notes, a start date and per-day stop
+   assignments existed — so its SILENCE about those fields is not the rider saying they
+   are gone, it is a build with no way to say anything about them. Without this the two
+   builds fight: the older one round-trips the plan through the account, strips every
+   field it has never heard of, and the newer one loyally adopts the result. */
+const PLAN_REC_V=2;
 /* How many matches the plan's own search box shows before it stops. It sits under a
    sticky header on the screen it edits, so it has to leave the plan visible — a panel
    that fills the phone is a second screen, and the rider came here to see their days. */
@@ -1222,7 +1229,7 @@ function decodeSavedPlan(raw){
          added here is written on every save and silently dropped on every load, which is
          indistinguishable from not being saved at all. */
       return {days:o.days, speed:o.speed, anchorTM:o.anchorTM, stay:o.stay, picked:o.picked,
-        stopDays:o.stopDays, startDate:o.startDate,
+        stopDays:o.stopDays, startDate:o.startDate, v:+o.v||0,
         savedAt:isFinite(o.savedAt)?+o.savedAt:0};
   }catch(e){}
   return null;
@@ -7176,7 +7183,7 @@ class TrailApp {
   planRecord(){
     return {days:this.planP(), speed:this.avgSpeed, anchorTM:this.planStartMile(),
       stay:this.planStay, picked:this.planPicked, stopDays:this.planStopDays,
-      startDate:this.planStart, savedAt:Date.now()};
+      startDate:this.planStart, v:PLAN_REC_V, savedAt:Date.now()};
   }
   savePlan(opt){
     const rec=this.planRecord();
@@ -7476,16 +7483,28 @@ class TrailApp {
     this.syncRemote=null;
     this.syncSeen=Math.max(this.syncSeen, +rec.savedAt||0);
     const before=this.planSnapshot();
+    /* A record from a build that predates these fields cannot be read as having deleted
+       them. It is not that the rider took the travel days off — that build had no travel
+       days to take off, and no start date, and no way to put a stop on a chosen day. So
+       those are kept from what is already here, and only the days themselves are adopted.
+       The per-day pair only survives when the two plans have the same number of days: a
+       different day count means a different plan, and merging by index into that would
+       staple "drive up from Albany" onto whatever day happens to sit at that position. */
+    const old=!(+p.v>=PLAN_REC_V);
+    const keepDays=old && this.planDays && this.planDays.length===p.days.length
+      ? this.planDays.slice() : null;
     if(isFinite(p.speed) && p.speed>0) this.avgSpeed=p.speed;
     if(isFinite(p.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,p.anchorTM));
-    this.planDays=p.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
+    this.planDays=p.days.map((pd,i)=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
       start:isFinite(pd.start)?pd.start:this.wxRideStart, end:isFinite(pd.end)?pd.end:null,
-      zero:!!pd.zero, off:!!pd.off,
-      note:String(pd.note==null?'':pd.note).slice(0,PLAN_NOTE_MAX)})).slice(0,PLAN_DAYS_MAX);
+      zero:!!pd.zero,
+      off:keepDays ? !!keepDays[i].off : !!pd.off,
+      note:String((keepDays ? keepDays[i].note : pd.note)||'').slice(0,PLAN_NOTE_MAX)}))
+      .slice(0,PLAN_DAYS_MAX);
     this.planStay=(p.stay && typeof p.stay==='object') ? {...p.stay} : {};
     this.planPicked=(p.picked && typeof p.picked==='object') ? {...p.picked} : {};
-    this.planStopDays=this.cleanStopDays(p.stopDays);
-    this.planStart=this.cleanDate(p.startDate);
+    this.planStopDays=old ? this.planStopDays : this.cleanStopDays(p.stopDays);
+    this.planStart=old ? this.planStart : this.cleanDate(p.startDate);
     this.planSnap();
     if(this.planSnapshot()!==before){
       this.planWasSnap=before;
@@ -8245,7 +8264,10 @@ class TrailApp {
               +'<span class="pl-tl">'+(warn?warnSvg:'')
                 +'<span class="pl-t"'+(warn&&!prev?' style="color:#b3261e"':'')+'>'+titleHtml+'</span>'
                 +caretSvg(open)+'</span>'
-              +'<span class="pl-s">'+(summary ? esc(summary)
+              /* `away ||` and not just `summary`: a travel day whose note is already the
+                 title has nothing left to say, and an empty summary was falling through to
+                 the riding clause — "8am–9am · 51 hotels" on a day spent in a car. */
+              +'<span class="pl-s">'+((away||summary) ? esc(summary)
                 : esc(hours)+' · '+bedSvg(bedCol, bedTip, bedTxt))+'</span>'
             +'</button>'
             /* The distance, in the empty half of the title row. It was buried at the head
