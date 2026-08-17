@@ -1285,16 +1285,48 @@ function snapPlanToTowns(days, bedded, anchor, sgn){
     return {...pd, miles};
   });
 }
-/* The plan as a URL fragment — base64 JSON, no server. Round-trips through #plan=. */
-function encodePlan(days, speed, anchorTM){
-  try{ return btoa(JSON.stringify({d:days, s:speed, a:anchorTM})).replace(/=+$/,''); }
-  catch(e){ return ''; }
+/* The plan as a URL fragment — base64 JSON, no server. Round-trips through #plan=.
+
+   The WHOLE plan, not just its days. It used to carry three fields, so a link moved the
+   shape of the trip and quietly left behind the start date, every stop that had been
+   chosen, which day each of those was on, and every bed booked — and a link is the only
+   way a plan crosses between two origins, since localhost and the deployed site have
+   separate storage and the API key's referrer rule means localhost cannot reach the
+   account at all. A link that drops most of the plan is the wrong tool for the one job
+   only it can do.
+
+   btoa() throws on anything above U+00FF, and this now carries free text the rider typed —
+   an em dash in "Drive up — Beekman Arms" was enough to make the whole link come back as
+   the empty string, silently, because the catch below swallowed it. So: UTF-8 first. */
+function b64utf8(str){
+  const bytes=new TextEncoder().encode(str);
+  let bin='';
+  // A chunk at a time: String.fromCharCode(...bytes) blows the stack on a long plan.
+  for(let i=0;i<bytes.length;i+=0x2000)
+    bin+=String.fromCharCode.apply(null, bytes.subarray(i, i+0x2000));
+  return btoa(bin).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_');
+}
+function unb64utf8(b64){
+  const bin=atob(String(b64).replace(/-/g,'+').replace(/_/g,'/'));
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+function encodePlan(rec){
+  try{
+    return b64utf8(JSON.stringify({d:rec.days, s:rec.speed, a:rec.anchorTM,
+      st:rec.stay, pk:rec.picked, sd:rec.stopDays, t:rec.startDate, v:rec.v}));
+  }catch(e){ return ''; }
 }
 function decodePlan(raw){
   const m=String(raw||'').match(/[#?&]?plan=([A-Za-z0-9+/=_-]+)/);
   try{
-    const o=JSON.parse(atob((m?m[1]:String(raw||'').trim()).replace(/-/g,'+').replace(/_/g,'/')));
-    if(o && Array.isArray(o.d) && o.d.length) return {days:o.d, speed:o.s, anchorTM:o.a};
+    const o=JSON.parse(unb64utf8(m?m[1]:String(raw||'').trim()));
+    // `d` and the three short keys are all a link from before this carried; the rest
+    // simply come back undefined, which is what the loader already expects of them.
+    if(o && Array.isArray(o.d) && o.d.length)
+      return {days:o.d, speed:o.s, anchorTM:o.a, stay:o.st, picked:o.pk,
+        stopDays:o.sd, startDate:o.t, v:+o.v||0};
   }catch(e){}
   return null;
 }
@@ -7105,8 +7137,15 @@ class TrailApp {
      share button off the screen, so this is a console affordance like window.app itself:
      app.planLink() gives you something to paste, and loadPlan reads it back on open. */
   planLink(){
-    return location.origin+location.pathname+'#plan='
-      +encodePlan(this.planP(), this.avgSpeed, this.planStartMile());
+    return location.origin+location.pathname+'#plan='+encodePlan(this.planRecord());
+  }
+  /* The same link for somewhere else — the deployed site, or a phone that has never had
+     this plan. Handed over as text rather than opened, because the point is to paste it
+     into another browser. */
+  planLinkFor(origin){
+    return String(origin||location.origin).replace(/\/+$/,'')
+      +(String(origin||'').indexOf('empire-state-trail')>=0 ? '/' : location.pathname)
+      +'#plan='+encodePlan(this.planRecord());
   }
   /* ---------- draft, save, undo ----------
      A plan is a document, not a running total. Every edit lands in the working copy and is
