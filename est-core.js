@@ -1204,6 +1204,10 @@ const PLAN_NOTE_MAX=120;
    builds fight: the older one round-trips the plan through the account, strips every
    field it has never heard of, and the newer one loyally adopts the result. */
 const PLAN_REC_V=2;
+/* How often a visible app asks whether the plan changed somewhere else. Slow on
+   purpose: it is one small GET, but the point is a plan that catches up by itself
+   within a minute or two, not a live cursor. */
+const SYNC_POLL_MS=60000;
 /* Where a link has to point for somebody else to be able to open it. A plan shared from
    a laptop running the app on localhost is a plan nobody else can open — that address
    is that machine, and this is exactly the case where the link is being handed to
@@ -1888,6 +1892,7 @@ class TrailApp {
     /* Ask the cloud once the screen is up, not while it is building. A newer plan from the
        other phone only ever raises a bar — see checkSync. */
     if(this.syncOn()) setTimeout(()=>this.checkSync(true), 1500);
+    this.wireSyncWatch();
     this.buildDropdowns();
     this.buildTestRows();
     this.wireTabs();
@@ -7503,6 +7508,41 @@ class TrailApp {
   /* Is there something newer up there? Only ever sets syncRemote — the bar it puts on the
      screen is where a rider decides. Quiet on failure: a check that could not reach the
      network is not news. */
+  /* ---------- keeping every device on the same plan ----------
+     Edits already push themselves: every savePlan queues one. Coming the other way was
+     the thin part — the plan was only ever fetched on start-up and on the way INTO the
+     plan tab. A phone left open on that tab never asked again, and one picked up an hour
+     later showed whatever it had been holding since breakfast, with every sign of being
+     right. Which is the whole complaint: two people, two devices, two versions of a plan
+     that is supposed to be one thing.
+
+     So: whenever the app comes back to the front, and on a slow tick while it is there.
+     Both go through checkSync, which rate-limits itself and does nothing at all when the
+     answer is the plan already on screen. */
+  wireSyncWatch(){
+    if(this._syncWatch) return;
+    this._syncWatch=true;
+    const back=()=>{
+      if(!this.syncOn()) return;
+      // Away long enough that the other device could plausibly have been used.
+      const away=this._hiddenAt ? Date.now()-this._hiddenAt : 0;
+      this._hiddenAt=0;
+      this.checkSync(away>20000);
+    };
+    document.addEventListener('visibilitychange',()=>{
+      if(document.visibilityState==='hidden'){ this._hiddenAt=Date.now(); return; }
+      back();
+    });
+    window.addEventListener('focus', back);
+    window.addEventListener('online', ()=>{ if(this.syncOn()) this.checkSync(true); });
+    /* A slow tick, so a plan open on a laptop while somebody edits it on a phone catches
+       up on its own. Skipped while the tab is hidden — a backgrounded page has nobody
+       reading it, and the visibility handler above covers the moment it is looked at. */
+    setInterval(()=>{
+      if(document.visibilityState!=='visible' || !this.syncOn()) return;
+      this.checkSync();
+    }, SYNC_POLL_MS);
+  }
   async checkSync(force){
     if(!this.syncOn()) return null;
     const now=Date.now();
