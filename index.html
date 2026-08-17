@@ -710,7 +710,7 @@
   .pl-day{display:flex;gap:12px;padding:10px 18px 11px;border-bottom:1px solid var(--pl-hair)}
   .pl-day:has(.pl-row){padding:14px 18px 16px}
   .pl-day.pl-zero{background:#eae9e9}
-  .pl-rail{flex:none;width:34px;text-align:center;display:flex;flex-direction:column;align-items:center}
+  .pl-rail{flex:none;width:44px;text-align:center;display:flex;flex-direction:column;align-items:center}
   .pl-dw{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--pl-faint)}
   .pl-dn{font-size:23px;font-weight:600;line-height:1;margin-top:1px}
   .pl-dc{font-size:9px;letter-spacing:.07em;text-transform:uppercase;color:var(--pl-faint);
@@ -734,10 +734,12 @@
   .pl-bedw{display:inline-flex;align-items:center;gap:3px;vertical-align:-2px}
   .pl-bedw svg{flex:none}
   /* The day's distance, sitting in the room the title row already had. */
-  .pl-mi{flex:none;align-self:flex-start;margin-left:6px;font-size:17px;font-weight:600;
-    line-height:1.15;color:var(--pl-sec);font-variant-numeric:tabular-nums;white-space:nowrap}
-  .pl-mi i{font-size:10px;font-style:normal;font-weight:400;color:var(--pl-faint);margin-left:2px;
-    letter-spacing:.06em;text-transform:uppercase}
+  /* In the rail with the date, not at the end of the title row. One column, one eye-line,
+     tabular figures — a list of days is read down this column and nowhere else. */
+  .pl-mi{margin-top:5px;font-size:16px;font-weight:600;line-height:1;color:var(--pl-ink);
+    font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .pl-mi i{display:block;margin-top:1px;font-style:normal;font-size:8.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--pl-faint)}
   .pl-pill{flex:none;font-family:inherit;font-size:11.5px;padding:5px 11px;border:1px dashed var(--pl-line);
     border-radius:999px;background:#fff;color:var(--pl-mute);cursor:pointer;min-height:30px;white-space:nowrap}
   .pl-pill.on{background:#8a6a1e;color:#fff;border:1px solid #8a6a1e}
@@ -927,9 +929,10 @@
     /* The title takes the whole line, so a town is a town rather than "Rocheste…". The
        distance and the two controls go under it, right-aligned, which costs one short line
        and buys back two from a summary that no longer has to wrap. */
-    .pl-root .pl-top{flex-wrap:wrap;row-gap:3px}
+    /* The title owns the first line; the two controls sit at the right end of the
+       second, where the eye is already going for the mileage rail's opposite number. */
+    .pl-root .pl-top{flex-wrap:wrap;row-gap:3px;justify-content:flex-end}
     .pl-root .pl-toggle{flex:1 1 100%;min-width:100%}
-    .pl-root .pl-mi{margin-left:auto;align-self:center}
     .pl-root .pl-find-out{max-height:38vh}
     .pl-root .pl-daynote{margin-top:0}
   }
@@ -938,6 +941,19 @@
   @media (max-height:520px){
     .pl-root .pl-head{position:static}
     .pl-root .pl-find-out{max-height:60vh}
+  }
+  /* Wide and short — a phone turned on its side, or a squat window. Height is the scarce
+     thing there and width is going spare, so the days run in two columns and the phone
+     width cap comes off. Turning the phone was buying a wider header and three days
+     instead of five; now it buys six or seven, which is what turning it is for. */
+  @media (min-width:740px) and (max-height:600px){
+    .pl-root{max-width:1100px}
+    .pl-root .pl-days{display:grid;grid-template-columns:1fr 1fr;align-items:start}
+    /* The seam between the columns, and no double rule down the middle. */
+    .pl-root .pl-days > .pl-day:nth-child(odd){border-right:1px solid var(--pl-hair)}
+    /* An open day is much taller than a shut one; letting it start its own row keeps the
+       column beside it from being dragged down with it. */
+    .pl-root .pl-days > .pl-day:has(.pl-row){grid-column:1 / -1;border-right:0}
   }  .plan-key-row{display:flex;align-items:center;gap:6px}
   .plan-key-sw{flex:none;width:14px;height:3px;border-radius:2px}
   .plan-key-row span:last-child{font-size:10.5px;color:var(--color-neutral-600);white-space:nowrap}

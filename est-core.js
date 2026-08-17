@@ -8358,6 +8358,10 @@ class TrailApp {
     const bedIc=(mark,size)=>'<span class="pl-bic" style="color:'+(BED_COL[mark]||'#605d5d')+'">'
       +icon(mark==='hotel'?'bed':mark==='lock'?'canallock':'tent', size)+'</span>';
 
+    /* The days get a container of their own so a wide, short window can lay them out in
+       two columns. Turned on only there — see the media query — because on a phone held
+       upright one column IS the design. */
+    h.push('<div class="pl-days">');
     days.forEach((pd,d)=>{
       const b=bounds[d], de=this.planDayEndHour(d);
       const atT=this.planDayTown(d);
@@ -8447,9 +8451,21 @@ class TrailApp {
         /* Which day of the trip, under the date. It goes in the rail because the rail
            already had the slack — the hairline below it is a flex filler, so the number
            costs the row nothing it was using. */
+        /* Date, day number, distance — the three facts that identify a day, in one narrow
+           column down the left of the whole list. The distance used to sit at the right
+           end of the title row, and on a phone it ended up on the second line in among
+           the Zero day and GPX buttons, which is nowhere: it is the number you scan the
+           list for, and scanning wants one eye-line, not a value that moves with the
+           length of a town name. */
         +'<div class="pl-rail"><div class="pl-dw">'+DW[dt.getDay()]+'</div>'
           +'<div class="pl-dn">'+dt.getDate()+'</div>'
           +'<div class="pl-dc">Day '+(d+1)+'</div>'
+          +(plain ? '' : '<div class="pl-mi">'
+            +(prev
+              ? diff(String(Math.round(b.miles)),
+                  nb&&nd&&!nd.zero ? String(Math.round(nb.miles)) : null, 'pl-ins')
+              : String(Math.round(b.miles)))
+            +'<i>mi</i></div>')
           +'<div class="pl-hair" style="background:'+this.planDayCol(d)+'"></div></div>'
         +'<div class="pl-body">'
           +'<div class="pl-top">'
@@ -8463,15 +8479,6 @@ class TrailApp {
               +'<span class="pl-s">'+((away||summary) ? esc(summary)
                 : esc(hours)+' · '+bedSvg(bedCol, bedTip, bedTxt))+'</span>'
             +'</button>'
-            /* The distance, in the empty half of the title row. It was buried at the head
-               of the summary line, which is the line that ellipsises first — and it is the
-               number you scan the list for. */
-            +(plain ? '' : '<span class="pl-mi">'
-              +(prev
-                ? diff(String(Math.round(b.miles)),
-                    nb&&nd&&!nd.zero ? String(Math.round(nb.miles)) : null, 'pl-ins')
-                : String(Math.round(b.miles)))
-              +'<i>mi</i></span>')
             /* A two-state control, labelled by what pressing it does rather than by what
                the day currently is — "Riding" sitting there in a box read as a status
                and nobody could see it was the way to book a rest day. */
@@ -8858,6 +8865,7 @@ class TrailApp {
       }
       h.push('</div></div>');
     });
+    h.push('</div>');
 
     /* Add and drop days from the foot of the list. A trip is however many days it is, and
        a plan that ran out of rows in Utica used to say "442 mi" as though that were the
