@@ -1204,6 +1204,14 @@ const PLAN_NOTE_MAX=120;
    builds fight: the older one round-trips the plan through the account, strips every
    field it has never heard of, and the newer one loyally adopts the result. */
 const PLAN_REC_V=2;
+/* Where a link has to point for somebody else to be able to open it. A plan shared from
+   a laptop running the app on localhost is a plan nobody else can open — that address
+   is that machine, and this is exactly the case where the link is being handed to
+   another person. So a share made from localhost points at the deployed app instead,
+   and says so rather than quietly rewriting what the rider thought they were sending. */
+const SHARE_BASE='https://clj2289.github.io/empire-state-trail/';
+const isLocalHost=()=>/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname)
+  || location.protocol==='file:';
 /* How many matches the plan's own search box shows before it stops. It sits under a
    sticky header on the screen it edits, so it has to leave the plan visible — a panel
    that fills the phone is a second screen, and the rider came here to see their days. */
@@ -7137,15 +7145,50 @@ class TrailApp {
      share button off the screen, so this is a console affordance like window.app itself:
      app.planLink() gives you something to paste, and loadPlan reads it back on open. */
   planLink(){
-    return location.origin+location.pathname+'#plan='+encodePlan(this.planRecord());
-  }
-  /* The same link for somewhere else — the deployed site, or a phone that has never had
-     this plan. Handed over as text rather than opened, because the point is to paste it
-     into another browser. */
-  planLinkFor(origin){
-    return String(origin||location.origin).replace(/\/+$/,'')
-      +(String(origin||'').indexOf('empire-state-trail')>=0 ? '/' : location.pathname)
+    return (isLocalHost() ? SHARE_BASE : location.origin+location.pathname)
       +'#plan='+encodePlan(this.planRecord());
+  }
+  /* Hand the plan to somebody else. Always the same: the link goes on the screen,
+     selected, and a copy is attempted. No branch where nothing happens.
+
+     It used to try the share sheet first, then the clipboard, and only show the link if
+     both refused — and both can refuse silently. navigator.share resolves without doing
+     anything in some browsers, and clipboard writes are rejected without a user gesture,
+     so the rider pressed Share and got no sheet, no copy and no link: three ways to
+     succeed and every one of them invisible. Showing it is the one behaviour that cannot
+     fail, so it happens first and unconditionally; the copy is a convenience on top. */
+  sharePlan(){
+    const url=this.planLink();
+    if(!url || url.indexOf('#plan=')<0 || url.length<80){
+      this.status('Could not build a link for this plan.'); return; }
+    this.planShare=url;
+    this.renderPlan();
+    const f=this.$('planShareIn');
+    if(f){ f.focus(); f.select(); }
+    this.copyShare(true);
+  }
+  /* The copy itself, from the button as well as from Share — a click is a user gesture,
+     which is the thing a browser wants before it will let a page touch the clipboard.
+     execCommand is the fallback and not the other way round: it is deprecated, it works
+     everywhere, and the field it copies from is the one already on the screen. */
+  copyShare(quiet){
+    const url=this.planShare; if(!url) return;
+    const done=()=>this.status('Link copied. Whoever opens it gets this whole plan — the '
+      +'days, the dates, the stops and the beds. No sign-in, nothing to install.'
+      +(isLocalHost() ? ' It points at the published app, since a localhost address only '
+        +'works on this machine.' : ''));
+    const hand=()=>{ if(!quiet) this.status('Select the link and copy it.'); };
+    const old=()=>{
+      const f=this.$('planShareIn');
+      if(!f) return hand();
+      f.focus(); f.select(); f.setSelectionRange(0, url.length);
+      let ok=false;
+      try{ ok=document.execCommand('copy'); }catch(e){}
+      ok ? done() : hand();
+    };
+    if(navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(url).then(done, old);
+    else old();
   }
   /* ---------- draft, save, undo ----------
      A plan is a document, not a running total. Every edit lands in the working copy and is
@@ -7959,6 +8002,7 @@ class TrailApp {
       this.planHist.push({snap:this.planSnapshot(), label:'the plan this device had'});
       this.planRedo.length=0;
       this.applyUrlPlan(p);
+      this.clearPlanHash();
       this.showTab('plan'); this.renderPlan(); this.drawPlanLayer();
       this.status('Loaded the plan from that link — '+p.days.length+' days'
         +(this.planStart?', starting '+this.planDayLabel(0):'')+'. Undo puts back what was here.');
@@ -7966,6 +8010,15 @@ class TrailApp {
   }
   /* One reader for a plan that arrived in a URL, so the boot path and a pasted link cannot
      drift into understanding the same link two different ways. */
+  /* replaceState, not a new entry: the link was a way of delivering the plan, not a place
+     in the rider's history to go back to. Wrapped because a file:// page is not allowed to
+     rewrite its own URL and losing the plan over that would be absurd. */
+  clearPlanHash(){
+    try{
+      if(location.hash.indexOf('plan=')<0) return;
+      history.replaceState(null, '', location.pathname+location.search);
+    }catch(e){}
+  }
   applyUrlPlan(p){
     if(isFinite(p.speed) && p.speed>0) this.avgSpeed=p.speed;
     if(isFinite(p.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,p.anchorTM));
@@ -8005,7 +8058,15 @@ class TrailApp {
       this.planSnap();
     } else { this.planRebuild(); this._planAuto=true; }
     this.planBaseline();
-    if(fromUrl){ this.savePlan(); return; }
+    if(fromUrl){
+      this.savePlan();
+      /* And take it out of the address bar. Left there, every reload re-applies the plan
+         the link carried — so a rider who opens a shared link, spends an evening editing
+         it and then reloads gets the evening thrown away and the original back, with
+         nothing to say why. */
+      this.clearPlanHash();
+      return;
+    }
     /* An unsaved draft from the last visit goes back on top of the saved plan. The work is
        still there when the phone comes back — and because the baseline was taken from the
        saved copy first, the screen still knows it has not been saved and can still say
@@ -8143,6 +8204,12 @@ class TrailApp {
           +esc(this.planRedo[this.planRedo.length-1].label)+'">Redo</button>' : '')
         +'<button type="button" class="pl-hb" data-plan="gpx" title="Download the whole trip '
           +'as a GPX — the track, your stops, your places and every night’s town">GPX</button>'
+        /* The plan, as something you can send. Everything in it travels: the dates, the
+           days off the trail and their notes, every stop and which day it is on, and the
+           beds. Whoever opens it needs no account and nothing installed. */
+        +'<button type="button" class="pl-hb" data-plan="share" title="Copy a link to this '
+          +'whole plan — the dates, the days, the stops and the beds. Anyone who opens it '
+          +'sees exactly this, with no sign-in">Share</button>'
         +'<button type="button" class="pl-auto" data-plan="auto">Auto-plan</button>'
         /* No Save. Every edit is already saved and already on its way up, and the cloud
            says how that is going — which is the only part a rider cannot see for
@@ -8229,6 +8296,15 @@ class TrailApp {
          written by the very action that rewrites this header. */
       +'<div id="planSay" class="pl-say"'+(this._planSaidMsg?'':' hidden')+'>'
         +esc(this._planSaidMsg||'')+'</div>'
+      /* Only when the browser refused both the share sheet and the clipboard. The link
+         itself, selected, with the plainest possible instruction. */
+      +(this.planShare ? '<div class="pl-sharerow">'
+        +'<span class="pl-k">Copy this link</span>'
+        +'<input id="planShareIn" class="pl-sharein" type="text" readonly value="'
+          +esc(this.planShare)+'" aria-label="A link to this plan">'
+        +'<button type="button" class="pl-hb" data-plan="sharec">Copy</button>'
+        +'<button type="button" class="pl-hb" data-plan="sharex">Done</button>'
+      +'</div>' : '')
       +'<div id="planFindOut" class="pl-find-out" hidden></div>'
       /* One bar, and only for a proposal you have not answered yet. A preview is the one
          thing on this screen that is genuinely pending — days are drawn struck through
@@ -9041,6 +9117,9 @@ class TrailApp {
       const act=b.dataset.plan, d=+b.dataset.d;
       if(act==='auto'){ this.autoPlan(); this.renderPlan(); }
       else if(act==='gpx'){ this.gpxSave(null); }
+      else if(act==='share'){ this.sharePlan(); }
+      else if(act==='sharec'){ this.copyShare(false); }
+      else if(act==='sharex'){ this.planShare=''; this.renderPlan(); }
       else if(act==='gpxday'){ this.gpxSave(d); }
       /* A day the search found. Opens it as well as scrolling to it — the rider asked
          where something was, and the answer is the day with its stops showing. The search
