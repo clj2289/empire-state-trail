@@ -441,6 +441,8 @@ const P = {
   // three-quarter view needs detail this size cannot hold.
   car:'M3 16.4v-3.1l2.2-4.8A2.4 2.4 0 0 1 7.4 7h9.2a2.4 2.4 0 0 1 2.2 1.5l2.2 4.8v3.1|M3 13.3h18|c7.5 16.6 1.9|c16.5 16.6 1.9',
   med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z',
+  // Something to know about before you get there, not something to stop at.
+  warn:'M12 3 2 20h20L12 3Z|M12 10v5|M12 17.6v.01',
   ruler:'M4 15 15 4l5 5-11 11z|M7.5 11.5l1.7 1.7|M10.5 8.5l1.7 1.7|M13.5 5.5l1.7 1.7',
   /* The little man you drag onto the map, and the one icon here that is a silhouette
      rather than a line drawing. Every other glyph in this table describes a thing; this
@@ -1172,20 +1174,22 @@ const PLAN_STOP_CAT={'chris':'your pick', 'nb-grocery':'resupply', 'nb-food':'fo
    everywhere else in this app and must not start meaning "lunch" here. */
 const PLAN_STOP_COL={'your pick':'#6a4fae', 'resupply':'#0f6a8b', 'food':'#a2551f',
   'shop':'#605d5d', 'water':'#2b6a84', 'bike shop':'#4a7a3a', 'pharmacy':'#8a3a3a',
-  'attraction':'#6a4fae'};
+  'attraction':'#6a4fae', 'lodging':'#3b3a6a', 'hazard':'#b3261e', 'transport':'#0f6a8b'};
 /* Worth a detour, in order. Your own picks first because you chose them, then the things
    that are only there once — a sight, a lock, water — and the interchangeable ones last:
    there is another coffee up the road, there is not another aqueduct. */
-const PLAN_STOP_RANK={'your pick':0, 'attraction':1, 'water':2, 'bike shop':3, 'pharmacy':4,
-  'resupply':5, 'food':6, 'shop':7};
+const PLAN_STOP_RANK={'your pick':0, 'hazard':0, 'attraction':1, 'water':2, 'bike shop':3,
+  'pharmacy':4, 'lodging':4, 'transport':4, 'resupply':5, 'food':6, 'shop':7};
 /* What one of your own places actually IS. "Your pick" says who chose it, not what it is,
    and a day listing four of them in the same violet says nothing about which one is
    lunch. Every kind here is one the planner already knows, so a place you call water gets
    the corridor's water colour and its drop, and none of this is a second taxonomy.
    'your pick' stays first because it is the honest answer before you have said anything. */
-const MY_KINDS=['your pick','food','water','resupply','shop','bike shop','pharmacy','attraction'];
+const MY_KINDS=['your pick','food','water','resupply','shop','bike shop','pharmacy',
+  'attraction','lodging','hazard','transport'];
 const KIND_ICON={'your pick':'target', 'food':'food', 'water':'drop', 'resupply':'cart',
-  'shop':'store', 'bike shop':'bike', 'pharmacy':'med', 'attraction':'star'};
+  'shop':'store', 'bike shop':'bike', 'pharmacy':'med', 'attraction':'star',
+  'lodging':'bed', 'hazard':'warn', 'transport':'train'};
 /* What a kind used to be called. Records already on the rider's account carry the old
    word, and a kind that is no longer in MY_KINDS is dropped back to 'your pick' — which
    would quietly un-say something they had said. */
@@ -1233,6 +1237,38 @@ const SYNC_POLL_MS=60000;
    is that machine, and this is exactly the case where the link is being handed to
    another person. So a share made from localhost points at the deployed app instead,
    and says so rather than quietly rewriting what the rider thought they were sending. */
+/* How far off the route an imported place may be before it is treated as the wrong
+   match. A bare "Hampton Inn" geocodes to A Hampton Inn, and the corridor is what makes
+   it the right one. Generous, because a rider may keep somewhere an hour away on purpose,
+   and still tight enough to catch a hit in another state. */
+const IMPORT_MAX_OFF_MI=60;
+/* A note grows every time somebody else reports the same place. Long enough for three or
+   four accounts, short enough that a popup is still a popup. */
+const PLACE_NOTE_MAX=600;
+/* What a row's `type` column means in the app's own vocabulary. Anything not here is not
+   thrown away: a negative report about something becomes a hazard, everything else falls
+   back to "your pick", and the original word goes to the head of the note either way. A
+   table written by somebody else will always have words this app has never heard of, and
+   inventing a pin category per word would make a legend nobody can read. */
+const TYPE_KIND={lodging:'lodging', hotel:'lodging', motel:'lodging', inn:'lodging',
+  camp:'lodging', campground:'lodging', camping:'lodging', hostel:'lodging',
+  food:'food', restaurant:'food', cafe:'food', bakery:'food', diner:'food',
+  hazard:'hazard', warning:'hazard', danger:'hazard',
+  transport:'transport', bus:'transport', train:'transport', ferry:'transport',
+  shuttle:'transport', water:'water', shop:'shop', store:'shop', grocery:'resupply',
+  resupply:'resupply', bike:'bike shop', 'bike shop':'bike shop', pharmacy:'pharmacy',
+  attraction:'attraction', sight:'attraction'};
+/* A row about the whole route rather than a spot on it. "Restroom availability ·
+   statewide" and "Ride direction (wind)" are advice, and advice does not have a
+   coordinate — pinning it somewhere would be inventing one. Skipped and named, so the
+   rider knows the row was read and can put it wherever notes belong. */
+const NOT_A_PLACE=new RegExp('^(statewide|state ?wide|whole route|entire route|general'
+  +'|various|n/a|-|)$'
+  // Regions, which are not places either. "central NY" is two hundred miles of trail and
+  // a geocoder will still hand back a point in the middle of it, which is a pin that
+  // claims to know something it does not.
+  +'|^(central|western|eastern|northern|southern|upstate|downstate)\\s+(new york|ny)$'
+  +'|corridor|towns\\s+(new york|ny)$', 'i');
 const SHARE_BASE='https://clj2289.github.io/empire-state-trail/';
 const isLocalHost=()=>/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname)
   || location.protocol==='file:';
@@ -2949,6 +2985,11 @@ class TrailApp {
     // than a spot you can see. A form, so the phone keyboard's Go key submits it.
     const apf=this.$('apForm');
     if(apf) apf.addEventListener('submit',e=>{ e.preventDefault(); this.submitAddPlace(); });
+    const impb=this.$('impGo');
+    if(impb) impb.addEventListener('click',()=>{
+      const t=this.$('impText');
+      this.importPlaces(t ? t.value : '');
+    });
     // One vocabulary, written out in one place. See MY_KINDS.
     const apk=this.$('apKind');
     if(apk) apk.innerHTML=MY_KINDS.map(k=>'<option value="'+esc(k)+'">'+esc(k)+'</option>').join('');
@@ -5362,10 +5403,18 @@ class TrailApp {
       t.name.toLowerCase()===r.name.toLowerCase() && miBetween([t.lat,t.lng],[r.lat,r.lng])<8)));
     this.renderFind(rows, (rows.length||onRoute)?'':'Nothing found for \u201c'+raw+'\u201d.');
   }
-  async geocode(q){
-    const c=this.map?this.map.getCenter():{lat:42.9,lng:-76.0};
+  /* `near` is the point results are biased towards, and it defaults to the middle of the
+     map — right for the Find bar, where "the pub" means the one you are looking at. Wrong
+     for an import: a table of places along six hundred miles of trail has nothing to do
+     with where the map happens to be sitting, and with it parked on Buffalo, "Brewster
+     NY" came back as somewhere near Niagara rather than the Brewster at TM 60. Pass null
+     and only the bbox constrains it. */
+  async geocode(q, near){
+    const c=near===null ? null
+      : (near || (this.map?this.map.getCenter():{lat:42.9,lng:-76.0}));
     const u=PHOTON+'?limit=6&lang=en&q='+encodeURIComponent(q)
-      +'&lat='+c.lat.toFixed(3)+'&lon='+c.lng.toFixed(3)+'&bbox='+FIND_BOX;
+      +(c ? '&lat='+c.lat.toFixed(3)+'&lon='+c.lng.toFixed(3) : '')
+      +'&bbox='+FIND_BOX;
     const r=await fetch(u);
     if(!r.ok) throw new Error('HTTP '+r.status);
     return (((await r.json())||{}).features||[]).map(f=>{
@@ -11294,8 +11343,10 @@ class TrailApp {
      planner's stop list for whichever day rides past it. Doing fewer than three left the
      rider wondering which of them had actually happened. */
   async addMyPoi(o){
-    const lat=+o.y, lng=+o.x;
-    if(!isFinite(lat) || !isFinite(lng)) return null;
+    const lat=Number(o.y), lng=Number(o.x);
+    // Number.isFinite and not the global: the global says null and '' are finite numbers,
+    // and both of those arrive here as 0°,0° — a real coordinate, in the Atlantic.
+    if(!Number.isFinite(lat) || !Number.isFinite(lng) || (lat===0 && lng===0)) return null;
     const name=String(o.n||'').trim() || 'A place';
     this.myPois=this.myPois||[];
     // Same name within a hundred yards is the same place, tapped twice.
@@ -11552,6 +11603,223 @@ class TrailApp {
       +(doc.spurs ? ', riding out to '+doc.spurs+' stop'+(doc.spurs===1?'':'s')+' and back'
         : '')+'.');
     return doc;
+  }
+  /* ---------- a list of places, pasted in ----------
+     A rider comes back from a Facebook group with a dozen places somebody else has
+     already been to, in a table. Adding those one at a time through the form is a job,
+     and the reason they never get added. This takes the table.
+
+     Columns are read by NAME from the header row, so any order works and unknown columns
+     are ignored — the exact set varies with whoever made the table. Only `name` is
+     required; everything else sharpens the result or goes into the note. */
+  parseCsv(txt){
+    const rows=[];
+    let cur=[], field='', q=false;
+    const src=String(txt||'').replace(/\r\n?/g,'\n');
+    for(let i=0;i<src.length;i++){
+      const c=src[i];
+      if(q){
+        if(c==='"'){ if(src[i+1]==='"'){ field+='"'; i++; } else q=false; }
+        else field+=c;
+      }
+      else if(c==='"') q=true;
+      else if(c===','){ cur.push(field); field=''; }
+      else if(c==='\n'){ cur.push(field); rows.push(cur); cur=[]; field=''; }
+      else field+=c;
+    }
+    if(field.length || cur.length){ cur.push(field); rows.push(cur); }
+    return rows.filter(r=>r.some(v=>String(v).trim()!==''));
+  }
+  /* One row of a pasted table, turned into the shape addMyPoi wants. The note is built
+     from every column that is not a coordinate or a name, because a place somebody else
+     recommended is only worth having with the reason attached — "Difficult approach,
+     narrow shoulder plus underpass" is the whole value of that row. */
+  rowToPlace(o){
+    const val=k=>String(o[k]==null?'':o[k]).trim();
+    const name=val('name'); if(!name) return null;
+    const type=val('type').toLowerCase();
+    const sentRaw=val('sentiment').toLowerCase();
+    const kind=TYPE_KIND[type]
+      || (MY_KINDS.indexOf(type)>0 ? type
+        : (sentRaw==='negative' ? 'hazard' : ''));
+    const sent=val('sentiment');
+    const bits=[];
+    /* The row's own word for what this is, kept at the front. The app has ten kinds and
+       these tables have thirty; the word is often the most specific thing in the row —
+       "surface", "route_alt", "price_signal" — and it costs one token to keep. */
+    if(type && !TYPE_KIND[type]) bits.push(type.replace(/_/g,' '));
+    if(sent && sent!=='mention_only') bits.push(sent.replace(/_/g,' '));
+    if(val('bike_storage')) bits.push('bikes: '+val('bike_storage'));
+    if(val('on_route')==='no') bits.push('off the route');
+    if(val('notes')) bits.push(val('notes'));
+    const who=[val('source_author'), val('source_date')].filter(Boolean).join(', ');
+    if(who) bits.push('— '+who);
+    /* A link left inside the notes, which is where it lands when the table has no column
+       for one. Pulled out so the pin gets a working link rather than a URL in the middle
+       of a sentence. */
+    const inNote=(val('notes').match(/https?:\/\/\S+/)||[])[0]||'';
+    /* Number.isFinite, not isFinite. The global coerces first, so isFinite(null) is true
+       and isFinite('') is true — which is how a row with no lat column reported a finite
+       latitude, skipped the lookup it needed, and was saved at 0°,0° in the Gulf of
+       Guinea while the importer said "added 11 of 11". */
+    const num=k=>{ const v=val(k); if(v==='') return null;
+      const n=Number(v); return Number.isFinite(n) ? n : null; };
+    /* "near Poughkeepsie NY" is a place plus a hedge, and the hedge is not part of the
+       address a geocoder can use. */
+    const town=(val('town')||val('address')).replace(/^near\s+/i,'');
+    // Advice about the whole route, not a spot on it. Reported rather than pinned.
+    if(NOT_A_PLACE.test(town.trim())) return {n:name, advice:true};
+    return {n:name, k:kind, a:town, u:val('source_url')||val('url')||inNote,
+      p:val('phone'), d:bits.join(' · '),
+      q:[name, town].filter(Boolean).join(', '),
+      lat:num('lat'), lng:num('lng')!=null ? num('lng') : num('lon')};
+  }
+  /* Of everything the geocoder offered, the one nearest this trail. Photon is asked with
+     a proximity bias, and that bias is wherever the map happens to be sitting — which for
+     an import is meaningless and actively wrong: with the map on Buffalo, "Kingston NY"
+     came back as something four miles from the Niagara end rather than the Kingston at
+     TM 115, and "Brewster NY" did the same. The question an import is asking is always
+     "which of these is on the Empire State Trail", so that is the question this answers.
+     Null when even the best of them is too far to be the right one. */
+  nearestHit(list, maxOff){
+    let best=null, bestOff=Infinity;
+    (list||[]).forEach(h=>{
+      if(!Number.isFinite(h.lat) || !Number.isFinite(h.lng)) return;
+      const pr=projectRoute(h.lat, h.lng);
+      const off=(pr && pr.off!=null) ? pr.off : Infinity;
+      if(off<bestOff){ bestOff=off; best=h; }
+    });
+    return (best && bestOff<=(maxOff==null?IMPORT_MAX_OFF_MI:maxOff)) ? best : null;
+  }
+  /* Two rows about one place. These tables are built from threads, so the same hotel
+     turns up twice with two people's reports — which is not noise, it is corroboration,
+     and it is the most valuable thing in the table. They fold into one place carrying
+     both notes rather than one of them winning and the other being dropped. Matched on
+     name and town, because that is all a row has before anything is looked up. */
+  mergeRows(recs){
+    const out=[], byKey={};
+    recs.forEach(r=>{
+      const key=normQ(r.n)+'|'+normQ(r.a||'');
+      const at=byKey[key];
+      if(at===undefined){ byKey[key]=out.length; out.push({...r, srcs:1}); return; }
+      const prev=out[at];
+      prev.srcs++;
+      if(r.d && prev.d.indexOf(r.d)<0) prev.d=prev.d+' // '+r.d;
+      // First non-empty wins for the single-valued fields: earlier rows are usually the
+      // fuller report, and a blank must never overwrite something already said.
+      ['k','u','p'].forEach(f=>{ if(!prev[f] && r[f]) prev[f]=r[f]; });
+      if(prev.lat==null && r.lat!=null){ prev.lat=r.lat; prev.lng=r.lng; }
+    });
+    return out;
+  }
+  /* Geocoded one at a time, on purpose: this is somebody else's free service and a
+     dozen rows at once from every rider who pastes a table is how it stops being free.
+     Each row reports its own outcome, because "9 of 11 added" with no word on the other
+     two is not an answer. */
+  async importPlaces(txt){
+    const rows=this.parseCsv(txt);
+    if(rows.length<2){ this.impStat('Paste a table with a header row and at least one place.', true); return; }
+    const head=rows[0].map(h=>String(h).trim().toLowerCase().replace(/\s+/g,'_'));
+    let recs=rows.slice(1).map(r=>{
+      const o={}; head.forEach((h,i)=>{ o[h]=r[i]; });
+      return this.rowToPlace(o);
+    }).filter(Boolean);
+    const advice=recs.filter(r=>r.advice).map(r=>r.n);
+    recs=recs.filter(r=>!r.advice);
+    if(!recs.length){ this.impStat('Nothing in that table has a place in it.', true); return; }
+    // Merged once, and the count taken from the same pass — calling it twice was a
+    // second full merge whose only purpose was to be measured.
+    const rawRows=recs.length;
+    recs=this.mergeRows(recs);
+    const folded=rawRows-recs.length;
+    const go=this.$('impGo'); if(go) go.disabled=true;
+    const added=[], failed=[], already=[], farOff=[], grew=[], roughly=[];
+    for(let i=0;i<recs.length;i++){
+      const r=recs[i];
+      this.impStat('Looking up '+(i+1)+' of '+recs.length+' — '+r.n+'…');
+      const ok=v=>Number.isFinite(v) && v!==0;
+      let lat=r.lat, lng=r.lng, rough=false;
+      if(!(ok(lat) && ok(lng))){
+        /* Three tries, and the third is a different question. A geocoder finds NAMES, and
+           half of what riders post is not one: "Rt 32 approach to Wallkill Valley Trail"
+           is a description of a place on a road, and "Gunks Campground (American Alpine
+           Club)" is a name with an organisation stapled to it. So: the row as written,
+           then the name with its parenthetical and any trailing clause removed, then the
+           town on its own — which is not where the place is, and says so on the pin
+           rather than pretending to a precision it does not have. */
+        const bare=r.n.replace(/\s*\([^)]*\)/g,'').split(/\s+[-–—]\s+/)[0].trim();
+        const tries=[r.q];
+        if(bare && bare!==r.n) tries.push([bare, r.a].filter(Boolean).join(', '));
+        for(const t of tries){
+          try{ const hit=this.nearestHit(await this.geocode(t, null));
+            if(hit){ lat=hit.lat; lng=hit.lng; break; } }catch(e){}
+        }
+        /* The town on its own, and held to a tighter limit than a named place: this is
+           already a guess, and a guess twenty miles off the route is not worth pinning. */
+        if(!(ok(lat) && ok(lng)) && r.a){
+          try{ const hit=this.nearestHit(await this.geocode(r.a, null), 12);
+            if(hit){ lat=hit.lat; lng=hit.lng; rough=true; } }catch(e){}
+        }
+      }
+      if(!(ok(lat) && ok(lng))){ failed.push(r.n); continue; }
+      /* And it has to be somewhere near this trail. A bare "Hampton Inn" will find a
+         Hampton Inn; the question is which one, and a pin fifty miles off the route is
+         not an answer to a question about the Empire State Trail. Reported rather than
+         dropped quietly, so the rider can add a coordinate for it. */
+      const pr=projectRoute(lat,lng);
+      if(!(pr && pr.off!=null && pr.off<=IMPORT_MAX_OFF_MI)){ farOff.push(r.n); continue; }
+      // A coordinate given in the table is taken as read; anything looked up has already
+      // been chosen for being near the route, so this only catches a supplied one.
+      /* Already saved — so this is a second report of somewhere the rider already has,
+         and the new note is added to the old one rather than thrown away. Skipping it was
+         losing exactly the part worth having: the other rider's account of the place. */
+      const have=(this.myPois||[]).find(z=>normQ(z.n)===normQ(r.n)
+        && abs(+z.y-lat)<0.02 && abs(+z.x-lng)<0.02);
+      if(have){
+        if(r.d && String(have.d||'').indexOf(r.d)<0){
+          have.d=[have.d, r.d].filter(Boolean).join(' // ').slice(0, PLACE_NOTE_MAX);
+          if(!have.k && r.k) have.k=r.k;
+          if(!have.u && r.u) have.u=r.u;
+          grew.push(r.n);
+        } else already.push(r.n);
+        continue;
+      }
+      const note=(rough ? 'Pin is on '+r.a+', not the exact spot — check before relying on it. '
+        : '')+String(r.d||'');
+      const p=await this.addMyPoi({n:r.n, y:lat, x:lng, a:r.a, p:r.p, u:r.u,
+        d:note.slice(0, PLACE_NOTE_MAX), k:r.k});
+      if(p){ added.push(p); if(rough) roughly.push(r.n); } else failed.push(r.n);
+    }
+    if(go) go.disabled=false;
+    if(grew.length){ this.poiCache(this.myPois); this.pushPois();
+      this.POIS=this.POIS.filter(z=>z.asset!=='chris')
+        .concat((this.myPois||[]).map(z=>this.poiRecord(z)));
+      this.POIS.forEach((z,i)=>{ z.i=i; });
+      this._byCat=null; this._bedTowns=null; this.buildPOILayers(); }
+    this.renderNearby();
+    if(this.screen==='plan') this.renderPlan();
+    this.impStat('Added '+added.length+' of '+recs.length+'.'
+      +(folded ? ' '+folded+' second report'+(folded===1?'':'s')+' folded in.' : '')
+      +(grew.length ? ' Added another account to: '+grew.join(', ')+'.' : '')
+      +(roughly.length ? ' Placed at the town only, so move the pin when you know where it'
+        +' really is: '+roughly.join(', ')+'.' : '')
+      +(already.length ? ' '+already.length+' already saved, unchanged.' : '')
+      +(failed.length ? ' Could not find: '+failed.join(', ')+'.' : '')
+      +(farOff.length ? ' Found somewhere too far from the trail to be right: '
+        +farOff.join(', ')+'.' : '')
+      +((failed.length||farOff.length)
+        ? ' Add lat and lng columns for those, or add them by hand.' : '')
+      +(advice.length ? ' '+advice.length+' row'+(advice.length===1?' was':'s were')
+        +' about the whole route rather than a place, so nothing was pinned for '
+        +(advice.length===1?'it':'them')+': '+advice.join('; ')+'.' : '')
+      +(this.syncOn() ? ' They are on your account, so every device gets them.'
+        : ' Signed out, so they are on this device only — sign in on More and they go up.'),
+      !!failed.length);
+  }
+  impStat(msg, bad){
+    const el=this.$('impStat'); if(!el) return;
+    el.textContent=msg||'';
+    el.classList.toggle('bad', !!bad);
   }
   apStat(msg, bad){
     const el=this.$('apStat'); if(!el) return;

@@ -1361,6 +1361,13 @@
      blank space for a message that has not happened yet. */
   .ap-stat:empty{display:none}
   .ap-stat{font-size:12px;line-height:1.45;color:var(--color-neutral-700)}
+  /* Wide and monospaced: what goes in here is a table, and a table you cannot see the
+     columns of is one you cannot check before importing. */
+  .imp-text{width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+    line-height:1.5;padding:8px;color:var(--color-text);background:var(--color-surface);
+    border:1px solid var(--color-neutral-400);border-radius:4px;resize:vertical;
+    white-space:pre;overflow-wrap:normal;overflow-x:auto}
+  .imp-text:focus{outline:none;border-color:var(--color-accent)}
   .ap-stat.bad{color:#b3261e}
   /* The Stop button on a search row. Narrow, right-aligned, and quiet until it means
      something: an outline while the place is only addable, filled once it is on a day. */
@@ -2337,6 +2344,27 @@
             <button id="apGo" type="submit" class="ap-go">Save it</button>
             <div id="apStat" class="ap-stat" role="status"></div>
           </form>
+        </details>
+        <!-- A dozen places somebody else has already been to, in one paste. Riders come
+             back from the trail groups with tables like this; adding them one at a time
+             through the form above is the reason they never get added at all. -->
+        <details id="addList" class="filters">
+          <summary class="filters-sum">
+            <span class="filters-caret" aria-hidden="true"></span>
+            <span class="filters-t">Import a list of places</span>
+            <span class="filters-state"></span>
+          </summary>
+          <div class="ap-form">
+            <div class="ap-hint">Paste a table with a header row. <b>name</b> is the only
+              column that must be there; <b>town</b>, <b>type</b>, <b>notes</b>,
+              <b>sentiment</b>, <b>bike_storage</b>, <b>source_author</b>,
+              <b>source_url</b> and the rest are used where present. Add <b>lat</b> and
+              <b>lng</b> columns and nothing is looked up.</div>
+            <textarea id="impText" class="imp-text" rows="6" spellcheck="false"
+              placeholder="type,name,town,notes&#10;food,Broad Street Bagel Company,Kinderhook NY,Lunch stop"></textarea>
+            <button id="impGo" type="button" class="ap-go">Import them</button>
+            <div id="impStat" class="ap-stat" role="status"></div>
+          </div>
         </details>
         <!-- Native <details> so the toggle needs no JS and stays keyboard- and
              screen-reader-correct; the only script involved remembers the state. -->
