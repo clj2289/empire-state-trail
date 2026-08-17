@@ -8219,6 +8219,17 @@ class TrailApp {
            themselves. */
         +this.syncBtnHtml()
       +'</div>'
+      /* Folded, and shut by default. Where the trip starts, the day it starts, the pace
+         and the target are four things a rider sets once and then rides — and they were
+         costing three rows of a sticky header on every single visit. On a phone that
+         header was most of the screen, and in landscape it was nearly all of it. What is
+         left above the days is the title, the controls and the search. */
+      +'<details class="pl-set"'+(this.planSetOpen?' open':'')+'>'
+      +'<summary class="pl-set-sum"><span class="pl-set-k">Trip</span>'
+        +'<span class="pl-set-v">'+esc([this.shortTown(this.placeNameAt(anchor)),
+            this.planDayLabel(0).replace(/^\w+, /,''),
+            speed+' mph', Math.round(this.wxPerDay||60)+' mi a day'].join(' · '))+'</span>'
+        +'<span class="pl-set-c" aria-hidden="true"></span></summary>'
       +'<div class="pl-head-2">'
         +'<span class="pl-field"><span class="pl-k">Starting at</span>'
         /* "Here" has to say where here IS. A bare milepost is the one thing on this
@@ -8277,7 +8288,7 @@ class TrailApp {
         +'<button type="button" class="pl-pin" data-plan="tomap" title="See the days on the map" aria-label="See the days on the map">'
         +'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>'
         +'</button>'
-      +'</div>'
+      +'</div></details>'
       /* Search, on the screen it gets answered on. Everything done here is "put that
          place on this day", and that meant leaving for Nearby, finding the place, coming
          back, and then hunting the list for the day it landed on. One box: it looks in
@@ -8873,6 +8884,10 @@ class TrailApp {
        figure and are replaced when the router answers, so a slow network delays a number
        rather than the plan. */
     this.loadDetours();
+    /* renderPlan replaces this screen wholesale, and a <details> the rider opened would
+       shut itself on the next tap anywhere. */
+    const st=el.querySelector('.pl-set');
+    if(st) st.addEventListener('toggle',()=>{ this.planSetOpen=st.open; });
     // The map instance survives the rewrite; this puts it back where it belongs.
     this.planMini();
     // The header was just rewritten, so the results under it are stale by definition.

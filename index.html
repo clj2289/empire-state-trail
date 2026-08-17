@@ -475,8 +475,12 @@
   .pl-root *{box-sizing:border-box}
   .pl-head{position:sticky;top:0;z-index:6;background:var(--pl-bg);padding:8px 18px 10px;
     border-bottom:1px solid #201e1d}
-  .pl-head-1{display:flex;align-items:flex-end;gap:10px}
-  .pl-title-wrap{flex:1;min-width:0}
+  /* Wraps, so the title is never squeezed by the row of buttons beside it. Unwrapped and
+     flex:1, "Ride plan" got about a hundred pixels on a phone: the title broke over two
+     lines and the summary under it broke over seven, which is how a header came to own
+     most of the screen. */
+  .pl-head-1{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
+  .pl-title-wrap{flex:1 1 240px;min-width:0}
   .pl-title{font-size:22px;font-weight:600;letter-spacing:-.015em;line-height:1.1}
   .pl-sum{font-size:11.5px;color:var(--pl-mute);margin-top:1px;font-variant-numeric:tabular-nums}
   .pl-auto{flex:none;font-family:inherit;font-size:11.5px;padding:5px 10px;background:transparent;
@@ -489,6 +493,20 @@
     min-height:28px}
   .pl-hb:hover{background:rgba(32,30,29,.07)}
   .pl-head-2{display:flex;align-items:center;gap:14px;margin-top:9px;flex-wrap:wrap}
+  /* The four things you set once. Shut, they are one line; open, they are the row they
+     always were. */
+  .pl-set{margin-top:8px}
+  .pl-set-sum{display:flex;align-items:baseline;gap:8px;cursor:pointer;list-style:none;
+    padding:2px 0}
+  .pl-set-sum::-webkit-details-marker{display:none}
+  .pl-set-k{flex:none;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--pl-faint)}
+  .pl-set-v{flex:1;min-width:0;font-size:12px;color:var(--pl-sec);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pl-set-c{flex:none;width:0;height:0;border-left:4px solid transparent;
+    border-right:4px solid transparent;border-top:5px solid var(--pl-faint);
+    transform:translateY(-1px)}
+  .pl-set[open] .pl-set-c{transform:rotate(180deg) translateY(-1px)}
   /* One day's GPX, on the day's own row. Quieter than the header's — that one is the
      whole trip and this is one line of it — and last in the row, so a rest day losing it
      just shortens the row instead of moving the controls beside it. */
@@ -896,7 +914,31 @@
   /* ══ The plan on the map ══ Markers and the day card. Everything here is transient or
      lives inside the layers control — no band of its own over the map. */
   .plan-key{display:flex;flex-direction:column;gap:3px;margin:4px 0 2px 2px}
-  .plan-key-row{display:flex;align-items:center;gap:6px}
+
+  /* ---- a phone, and a phone on its side ----
+     Every selector carries .pl-root, because a media query adds no specificity: the plain
+     .pl-toggle rule further down the sheet outranked the one in here on a tie, and the
+     title went on being squeezed to "Buffalo → ..." inside a block written to stop it. */
+  @media (max-width:560px){
+    .pl-root .pl-head{padding:6px 14px 8px}
+    .pl-root .pl-title{font-size:19px}
+    .pl-root .pl-day{padding:8px 14px 9px;gap:9px}
+    .pl-root .pl-day:has(.pl-row){padding:12px 14px 14px}
+    /* The title takes the whole line, so a town is a town rather than "Rocheste…". The
+       distance and the two controls go under it, right-aligned, which costs one short line
+       and buys back two from a summary that no longer has to wrap. */
+    .pl-root .pl-top{flex-wrap:wrap;row-gap:3px}
+    .pl-root .pl-toggle{flex:1 1 100%;min-width:100%}
+    .pl-root .pl-mi{margin-left:auto;align-self:center}
+    .pl-root .pl-find-out{max-height:38vh}
+    .pl-root .pl-daynote{margin-top:0}
+  }
+  /* Landscape on a phone: a couple of hundred pixels of height, all told. A header that
+     stays put owns most of it, so here it scrolls away with everything else. */
+  @media (max-height:520px){
+    .pl-root .pl-head{position:static}
+    .pl-root .pl-find-out{max-height:60vh}
+  }  .plan-key-row{display:flex;align-items:center;gap:6px}
   .plan-key-sw{flex:none;width:14px;height:3px;border-radius:2px}
   .plan-key-row span:last-child{font-size:10.5px;color:var(--color-neutral-600);white-space:nowrap}
   .plan-night{display:flex;align-items:center;gap:4px;white-space:nowrap;
