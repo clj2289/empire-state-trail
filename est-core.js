@@ -1213,6 +1213,17 @@ const KIND_ICON={'your pick':'target', 'food':'food', 'water':'drop', 'resupply'
    would quietly un-say something they had said. */
 const KIND_WAS={'sight':'attraction'};
 const cleanKind=k=>{ const v=KIND_WAS[k]||k; return MY_KINDS.indexOf(v)>0 ? v : ''; };
+/* One of your places, as an identity: the name and the spot, to a hundred yards. The same
+   test addMyPoi uses to spot the same place tapped twice, so two devices agree about which
+   records are the same record without needing an id field the older ones do not carry. */
+const poiId=o=>String(o&&o.n||'').trim().toLowerCase()+'@'
+  +(+o.y||0).toFixed(3)+','+(+o.x||0).toFixed(3);
+/* And a whole list as one string, for the only question worth asking on a poll: is what
+   the account holds different from what is on this screen? Sorted, so two devices that
+   added the same places in a different order are not told they disagree. Every field the
+   rider can edit is in it — a renamed kind or a merged note is a change like any other. */
+const poiSig=list=>(list||[]).map(o=>poiId(o)+'|'+(o.k||'')+'|'+(o.d||'')+'|'+(o.a||'')
+  +'|'+(o.p||'')+'|'+(o.u||'')).sort().join('\n');
 const PLAN_STOP_OFF_MI=1.5;
 /* Below this a stop is on the route for all practical purposes, and asking a router to
    trace two hundred yards is a network call to be told what you can already see. */
@@ -1287,9 +1298,33 @@ const NOT_A_PLACE=new RegExp('^(statewide|state ?wide|whole route|entire route|g
   // claims to know something it does not.
   +'|^(central|western|eastern|northern|southern|upstate|downstate)\\s+(new york|ny)$'
   +'|corridor|towns\\s+(new york|ny)$', 'i');
-const SHARE_BASE='https://clj2289.github.io/empire-state-trail/';
-const isLocalHost=()=>/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname)
-  || location.protocol==='file:';
+/* ---------- what a PDF needs to know about type ----------
+   Advance widths for Helvetica and Helvetica-Bold, ASCII 32-126, in thousandths of the
+   point size. Two of the fourteen fonts every PDF reader is required to have, so nothing
+   has to be embedded — but a reader is also not going to break lines for us, so these are
+   how pdfWrap knows what fits. Straight out of the Adobe metrics. */
+const PDF_W_R=[278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,
+  556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,
+  1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,
+  667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,
+  333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,
+  556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+const PDF_W_B=[278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,
+  556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,
+  975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,
+  667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,
+  333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,
+  611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+/* The characters this app writes that ASCII has no room for. A number is the WinAnsi byte
+   to escape to; a string is a transliteration, for the ones Windows never found a slot
+   for. The arrow is the reason this table exists at all — every riding day's title has one
+   in it, and there is no arrow anywhere in WinAnsiEncoding. */
+const PDF_HI={'\u00b7':0xB7, '\u2013':0x96, '\u2014':0x97, '\u00b0':0xB0, '\u2019':0x92,
+  '\u2018':0x91, '\u201c':0x93, '\u201d':0x94, '\u2026':0x85, '\u00d7':0xD7,
+  '\u2192':'to', '\u2190':'from', '\u2212':'-', '\u2022':'\\267', '\u00a0':' '};
+const PDF_HI_W={'\u00b7':278, '\u2013':556, '\u2014':1000, '\u00b0':400, '\u2019':222,
+  '\u2018':222, '\u201c':333, '\u201d':333, '\u2026':1000, '\u00d7':584,
+  '\u2192':778, '\u2190':1112, '\u2212':584, '\u2022':350, '\u00a0':278};
 /* How many matches the plan's own search box shows before it stops. It sits under a
    sticky header on the screen it edits, so it has to leave the plan visible — a panel
    that fills the phone is a second screen, and the rider came here to see their days. */
@@ -1371,39 +1406,16 @@ function snapPlanToTowns(days, bedded, anchor, sgn){
     return {...pd, miles};
   });
 }
-/* The plan as a URL fragment — base64 JSON, no server. Round-trips through #plan=.
-
-   The WHOLE plan, not just its days. It used to carry three fields, so a link moved the
-   shape of the trip and quietly left behind the start date, every stop that had been
-   chosen, which day each of those was on, and every bed booked — and a link is the only
-   way a plan crosses between two origins, since localhost and the deployed site have
-   separate storage and the API key's referrer rule means localhost cannot reach the
-   account at all. A link that drops most of the plan is the wrong tool for the one job
-   only it can do.
-
-   btoa() throws on anything above U+00FF, and this now carries free text the rider typed —
-   an em dash in "Drive up — Beekman Arms" was enough to make the whole link come back as
-   the empty string, silently, because the catch below swallowed it. So: UTF-8 first. */
-function b64utf8(str){
-  const bytes=new TextEncoder().encode(str);
-  let bin='';
-  // A chunk at a time: String.fromCharCode(...bytes) blows the stack on a long plan.
-  for(let i=0;i<bytes.length;i+=0x2000)
-    bin+=String.fromCharCode.apply(null, bytes.subarray(i, i+0x2000));
-  return btoa(bin).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_');
-}
 function unb64utf8(b64){
   const bin=atob(String(b64).replace(/-/g,'+').replace(/_/g,'/'));
   const bytes=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
   return new TextDecoder().decode(bytes);
 }
-function encodePlan(rec){
-  try{
-    return b64utf8(JSON.stringify({d:rec.days, s:rec.speed, a:rec.anchorTM,
-      st:rec.stay, pk:rec.picked, sd:rec.stopDays, t:rec.startDate, v:rec.v}));
-  }catch(e){ return ''; }
-}
+/* Nothing writes one of these any more — the Share button that did is gone, because an
+   account carries the plan to every browser it is open in and a link only ever carried a
+   frozen copy. Reading them stays: links that were sent before it went have to go on
+   working, and somebody's wife has one in a text message. */
 function decodePlan(raw){
   const m=String(raw||'').match(/[#?&]?plan=([A-Za-z0-9+/=_-]+)/);
   try{
@@ -1729,7 +1741,7 @@ class TrailApp {
     /* The undo stack — a snapshot of the whole plan before each edit, with a name for the
        edit — and the last saved copy, which is both what Discard goes back to and what
        every "was 55 mi" note on the screen is measured against. */
-    this.planHist=[]; this.planRedo=[]; this.planSavedSnap=null; this.planPreview=null;
+    this.planHist=[]; this.planRedo=[]; this.planSavedSnap=null;
     // The plan as it stood before the last change — see planWas.
     this.planWasSnap=null;
     /* Off-device sync — see the FB_URL block up top. 'off' means no account on this device,
@@ -1871,6 +1883,11 @@ class TrailApp {
     this.searches=[]; this.searchLayer=null; this.searchMarks={};
     // Your own places, as the raw {n,y,x,…} records the account stores.
     this.myPois=[];
+    /* Whether this tab has ever managed to READ that list off the account. Until it has,
+       the list on screen is this device's memory and must not be pushed back up — see
+       pushPois. poiNew is the places added here that have not made it up yet, poiPushAt
+       the moment we last wrote. */
+    this.poiRead=false; this.poiNew=[]; this.poiPushAt=0; this._poiCheck=0;
     /* One switch per category, driving the list AND the pins together. They were
        briefly independent, which meant the map could show a pin whose row the list
        had filtered away — and a place you can see is a place you expect to be able
@@ -7392,9 +7409,6 @@ class TrailApp {
   autoPlan(){
     this.planEdit('the automatic plan', ()=>this.planRebuild());
   }
-  /* The plan as a link — base64 JSON in the fragment, no server. The design took the
-     share button off the screen, so this is a console affordance like window.app itself:
-     app.planLink() gives you something to paste, and loadPlan reads it back on open. */
   /* ---------- the itinerary as a short code ----------
      A printed page can carry the whole plan as a #plan= link, and it did — nine hundred
      characters of base64 across six lines at the top of the itinerary. Nobody types that,
@@ -7452,77 +7466,226 @@ class TrailApp {
       +'. Your stops and beds are untouched; Undo puts the old plan back.');
     return true;
   }
-  planLink(){
-    return (isLocalHost() ? SHARE_BASE : location.origin+location.pathname)
-      +'#plan='+encodePlan(this.planRecord());
-  }
-  /* The itinerary as a document. Every day open, whether or not it is open on screen —
-     a printed plan that only shows the day you happened to be looking at is not an
-     itinerary — and every control hidden, because a button on paper is a smudge.
-     Browsers put "Save as PDF" in their own print dialog, so this is the PDF export and
-     it needs no library to be one. */
-  printPlan(){
-    const was=this.planOpenDay, wasStops=this.planOpenStops, wasQ=this.planQ;
-    this.planQ='';
-    this.showTab('plan');
-    /* Printed with the folds SHUT. The row already carries the whole day — date, towns,
-       distance, hours, where you sleep and every stop with its mileage — and the fold is
-       the machinery for changing it, which is not what paper is for. */
-    this.planOpenDay=null; this.planOpenStops=null;
-    this.printAt=new Date();
-    this.renderPlan();
-    const done=()=>{
-      this.planOpenDay=was; this.planOpenStops=wasStops; this.planQ=wasQ;
-      this.printAt=null; this.renderPlan();
-    };
-    /* after() is not fired by every browser, and a plan left stripped for print would be
-       a plan with no controls on it — so the timer is the one that must not be missed. */
-    let restored=false;
-    const once=()=>{ if(restored) return; restored=true; done(); };
-    if(window.onafterprint!==undefined) window.addEventListener('afterprint', once, {once:true});
-    setTimeout(()=>{ window.print(); setTimeout(once, 1200); }, 60);
-  }
-  /* Hand the plan to somebody else. Always the same: the link goes on the screen,
-     selected, and a copy is attempted. No branch where nothing happens.
+  /* ---------- the itinerary as a file ----------
+     A PDF, written out here a byte at a time.
 
-     It used to try the share sheet first, then the clipboard, and only show the link if
-     both refused — and both can refuse silently. navigator.share resolves without doing
-     anything in some browsers, and clipboard writes are rejected without a user gesture,
-     so the rider pressed Share and got no sheet, no copy and no link: three ways to
-     succeed and every one of them invisible. Showing it is the one behaviour that cannot
-     fail, so it happens first and unconditionally; the copy is a convenience on top. */
-  sharePlan(){
-    const url=this.planLink();
-    if(!url || url.indexOf('#plan=')<0 || url.length<80){
-      this.status('Could not build a link for this plan.'); return; }
-    this.planShare=url;
-    this.renderPlan();
-    const f=this.$('planShareIn');
-    if(f){ f.focus(); f.select(); }
-    this.copyShare(true);
+     The PDF button used to call window.print(), on the reasoning that every browser puts
+     "Save as PDF" in its own print dialog. True — and still a dialog, a paper-size menu
+     and a headers-and-footers checkbox standing between a button labelled PDF and a PDF.
+     A button that says it saves a file should save a file, the way the GPX button beside
+     it already does.
+
+     Nothing is embedded and no library is shipped: Helvetica is one of the fourteen fonts
+     every reader is required to have. That is why the whole itinerary is a few kilobytes,
+     and also why PDF_W_R and PDF_W_B up at the top have to exist — a PDF carries no idea
+     how wide its own text is, so every line break in this document is measured here. */
+  /* One string, as the bytes that go between the brackets of a PDF literal. Everything
+     leaves as ASCII so the file's length in characters is its length in bytes, which is
+     what the cross-reference table at the end is counting. */
+  pdfStr(s){
+    let out='';
+    for(const ch of String(s==null?'':s)){
+      const c=ch.charCodeAt(0);
+      if(ch==='\\' || ch==='(' || ch===')'){ out+='\\'+ch; continue; }
+      if(c>=32 && c<127){ out+=ch; continue; }
+      const hi=PDF_HI[ch];
+      if(hi!=null){ out+=(typeof hi==='string') ? hi : '\\'+hi.toString(8).padStart(3,'0'); continue; }
+      // Latin-1 sits where WinAnsiEncoding puts it, so accented names come through whole.
+      if(c>=0xA0 && c<=0xFF){ out+='\\'+c.toString(8).padStart(3,'0'); continue; }
+      /* Anything else: strip the accent and keep the letter rather than dropping the
+         character. A place with an unmapped mark in its name is still a place you have to
+         be able to read off the page. */
+      const bare=ch.normalize('NFD').replace(/[̀-ͯ]/g,'');
+      out+=/^[\x20-\x7e]+$/.test(bare) ? bare : '?';
+    }
+    return out;
   }
-  /* The copy itself, from the button as well as from Share — a click is a user gesture,
-     which is the thing a browser wants before it will let a page touch the clipboard.
-     execCommand is the fallback and not the other way round: it is deprecated, it works
-     everywhere, and the field it copies from is the one already on the screen. */
-  copyShare(quiet){
-    const url=this.planShare; if(!url) return;
-    const done=()=>this.status('Link copied. Whoever opens it gets this whole plan — the '
-      +'days, the dates, the stops and the beds. No sign-in, nothing to install.'
-      +(isLocalHost() ? ' It points at the published app, since a localhost address only '
-        +'works on this machine.' : ''));
-    const hand=()=>{ if(!quiet) this.status('Select the link and copy it.'); };
-    const old=()=>{
-      const f=this.$('planShareIn');
-      if(!f) return hand();
-      f.focus(); f.select(); f.setSelectionRange(0, url.length);
-      let ok=false;
-      try{ ok=document.execCommand('copy'); }catch(e){}
-      ok ? done() : hand();
+  // How wide that string sets, in points, at this size and weight.
+  pdfWidth(s, size, bold){
+    const w=bold?PDF_W_B:PDF_W_R;
+    let t=0;
+    for(const ch of String(s==null?'':s)){
+      const c=ch.charCodeAt(0);
+      t+=(c>=32 && c<127) ? w[c-32] : (PDF_HI_W[ch]!=null ? PDF_HI_W[ch] : (bold?556:500));
+    }
+    return t*size/1000;
+  }
+  // Broken to fit, on spaces where it can and mid-word where a single word is too long.
+  pdfWrap(s, size, bold, max){
+    const words=String(s==null?'':s).split(/\s+/).filter(Boolean), out=[];
+    let line='';
+    const push=()=>{ if(line){ out.push(line); line=''; } };
+    words.forEach(word=>{
+      let w=word;
+      while(this.pdfWidth(w, size, bold)>max){
+        // A word wider than the column: take as much of it as fits and carry the rest.
+        let n=1;
+        while(n<w.length && this.pdfWidth(w.slice(0,n+1), size, bold)<=max) n++;
+        push(); out.push(w.slice(0,n)); w=w.slice(n);
+      }
+      const test=line ? line+' '+w : w;
+      if(line && this.pdfWidth(test, size, bold)>max){ push(); line=w; }
+      else line=test;
+    });
+    push();
+    return out.length?out:[''];
+  }
+  /* The document. Built as a list of pages, each a list of drawing operators, so the
+     footer can be stamped on afterwards — "page 2 of 4" cannot be written until the last
+     page exists. */
+  pdfDoc(){
+    const W=612, H=792, M=54, RAIL=58, BOT=56;      // US Letter, three-quarter-inch margins
+    const X=M+RAIL, COL=W-M-X;                       // the body column, right of the date rail
+    const days=this.planP(), bounds=this.planBounds();
+    const pages=[]; let ops=[], y=H-M;
+    const flush=()=>{ pages.push(ops); ops=[]; y=H-M; };
+    const at=(s,x,ty,size,bold,grey)=>{
+      if(s==='') return;
+      ops.push((grey==null?0:grey).toFixed(2)+' g BT /'+(bold?'F2':'F1')+' '+size
+        +' Tf 1 0 0 1 '+x.toFixed(1)+' '+ty.toFixed(1)+' Tm ('+this.pdfStr(s)+') Tj ET');
     };
-    if(navigator.clipboard && navigator.clipboard.writeText)
-      navigator.clipboard.writeText(url).then(done, old);
-    else old();
+    const right=(s,xr,ty,size,bold,grey)=>at(s, xr-this.pdfWidth(s,size,bold), ty, size, bold, grey);
+    const rule=(ty,x1,x2,grey)=>ops.push((grey==null?0.86:grey).toFixed(2)
+      +' G 0.6 w '+x1.toFixed(1)+' '+ty.toFixed(1)+' m '+x2.toFixed(1)+' '+ty.toFixed(1)+' l S');
+    const room=need=>{ if(y-need<BOT) flush(); };
+
+    /* The masthead, once. The itinerary code is on it because it is the only part of a
+       printed page that can be read back into an app: a page of type cannot be parsed
+       into a plan without a PDF library and a lot of guessing, but 57 characters can be
+       typed in. */
+    const tot=bounds.reduce((a,b,i)=>a+(days[i].zero?0:b.miles),0);
+    const ridden=bounds.filter((b,i)=>!days[i].zero && b.miles>0.5).length;
+    const zs=days.filter(x=>x.zero && !x.off).length, offN=days.filter(x=>x.off).length;
+    at('EMPIRE STATE TRAIL', M, y, 8, false, 0.45); y-=22;
+    at(this.destName()===''?'Itinerary':'Ride plan', M, y, 21, true, 0.05); y-=17;
+    const sub=[ridden+(ridden===1?' riding day':' riding days'), Math.round(tot)+' mi']
+      .concat(zs?[zs+' zero']:[]).concat(offN?[offN+' off the trail']:[])
+      .concat(days.length?[this.planDayLabel(0).replace(/^\w+, /,'')
+        +(days.length>1 ? ' – '+this.planDayLabel(days.length-1).replace(/^\w+, /,'') : '')]:[])
+      .concat([this.dir==='B2NYC'?'Buffalo to NYC':'NYC to Buffalo']).join(' · ');
+    at(sub, M, y, 9.5, false, 0.3); y-=16;
+    this.pdfWrap('Itinerary code '+this.planCode()+' — type this into Import on the Nearby '
+      +'tab to rebuild these days on another device. Stops, beds and notes are not in it; '
+      +'they travel with the account.', 8, false, W-2*M)
+      .forEach(l=>{ at(l, M, y, 8, false, 0.45); y-=10; });
+    y-=8; rule(y, M, W-M, 0.75); y-=20;
+
+    const sgn=this.dirSign(), DW=['SUN','MON','TUE','WED','THU','FRI','SAT'];
+    days.forEach((pd,d)=>{
+      const b=bounds[d], atT=this.planDayTown(d), dt=this.planDateFor(d);
+      const kind=this.dayKind(pd), away=!!pd.off;
+      const term=sgn<0 ? 0 : TOTAL;
+      const spent=!pd.zero && b.miles<0.5;
+      const fin=!pd.zero && !spent && abs(b.end-term)<=1;
+      const fromN=this.placeNameAt(b.start);
+      const toN=fin ? this.destName() : atT ? atT.n : 'between towns';
+      const title=away ? (pd.note || 'Off the trail')
+        : kind==='rest' ? 'Rest day at '+fromN
+        : kind==='offbike' ? 'Off the bike at '+fromN
+        : spent ? (abs(b.start-term)<=1 ? 'Nothing left to ride' : 'Nothing to ride this day')
+        : fromN+' to '+toN;
+      const stay=this.planStayFor(d, this.planLodging(atT, b.end));
+      const facts=(away ? ['Driving — not on the trail']
+        : pd.zero ? ['Rest day']
+        : spent ? []
+        : [Math.round(b.miles)+' mi',
+           this.planTick(pd.start)+'–'+this.planTick(Math.round(this.planDayEndHour(d)))])
+        .concat(away||spent ? [] : [fin ? 'the end of the trail'
+          : stay ? stay.name
+          : (atT&&(atT.hotel||atT.camp)) ? this.bedWord(atT) : 'nowhere booked'])
+        .join(' · ');
+      const stops=this.planWayStops(d, b.start, b.end).filter(x=>this.stopHere(x,d));
+      const noteL=(pd.note && !away) ? this.pdfWrap(pd.note, 9, false, COL) : [];
+      const titleL=this.pdfWrap(title, 11.5, true, COL);
+
+      /* A day is one thing and must not be split down the middle. Where the whole of it
+         will not fit, it starts the next page — except when it could not fit any page, in
+         which case splitting is the only way it gets printed at all. */
+      const need=14*titleL.length+12*noteL.length+13+11*stops.length+16;
+      if(need<H-M-BOT) room(need); else room(40);
+
+      at(DW[dt.getDay()], M, y, 7.5, true, 0.45);
+      at(String(dt.getDate()), M, y-17, 16, true, 0.05);
+      at('Day '+(d+1), M, y-29, 7.5, false, 0.45);
+      titleL.forEach(l=>{ at(l, X, y, 11.5, true, 0.05); y-=14; });
+      if(facts){ at(facts, X, y, 9, false, 0.3); y-=13; }
+      noteL.forEach(l=>{ at(l, X, y, 9, false, 0.42); y-=12; });
+      stops.forEach((x,n)=>{
+        room(13);
+        const into=(x.mile-b.start)*sgn;
+        const when=(pd.zero||away) ? '' : (into>=0.05 ? fmtMi(into)+' mi' : 'start');
+        at(String(n+1)+'.', X, y, 8.5, false, 0.5);
+        at(when, X+16, y, 8.5, false, 0.3);
+        const nx=X+58;
+        at(this.pdfWrap(x.name, 9, false, COL-58-64)[0], nx, y, 9, false, 0.05);
+        right(mpTxt(x.mile), W-M, y, 8.5, false, 0.45);
+        y-=11;
+      });
+      y-=6;
+      if(d<days.length-1){ rule(y, X, W-M, 0.9); y-=14; }
+    });
+    flush();
+
+    // The footer, now that there is a page count to put in it.
+    const code=this.planCode();
+    pages.forEach((pg,i)=>{
+      const line='Empire State Trail · '+code;
+      pg.push('0.55 g BT /F1 7.5 Tf 1 0 0 1 '+M+' 34 Tm ('+this.pdfStr(line)+') Tj ET');
+      const pn='Page '+(i+1)+' of '+pages.length;
+      pg.push('0.55 g BT /F1 7.5 Tf 1 0 0 1 '
+        +(W-M-this.pdfWidth(pn,7.5,false)).toFixed(1)+' 34 Tm ('+this.pdfStr(pn)+') Tj ET');
+    });
+
+    /* And the file. Objects in a flat list, then a cross-reference table of byte offsets —
+       which is why nothing above may emit a character above 127: a Blob writes a string as
+       UTF-8, and one two-byte character would put every offset after it out by one. */
+    const objs=[];
+    objs.push('<< /Type /Catalog /Pages 2 0 R >>');
+    objs.push(null);                                   // 2: the page tree, filled in below
+    objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+    objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+    const kids=[];
+    pages.forEach((pg,i)=>{
+      const pageId=5+i*2, contId=6+i*2;
+      kids.push(pageId+' 0 R');
+      objs[pageId-1]='<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+W+' '+H+']'
+        +' /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents '+contId+' 0 R >>';
+      const body=pg.join('\n');
+      objs[contId-1]='<< /Length '+body.length+' >>\nstream\n'+body+'\nendstream';
+    });
+    objs[1]='<< /Type /Pages /Kids ['+kids.join(' ')+'] /Count '+pages.length+' >>';
+
+    let out='%PDF-1.4\n';
+    const off=[];
+    objs.forEach((o,i)=>{ off.push(out.length); out+=(i+1)+' 0 obj\n'+o+'\nendobj\n'; });
+    const xref=out.length;
+    out+='xref\n0 '+(objs.length+1)+'\n0000000000 65535 f \n';
+    off.forEach(o=>{ out+=String(o).padStart(10,'0')+' 00000 n \n'; });
+    out+='trailer\n<< /Size '+(objs.length+1)+' /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF\n';
+    return {pdf:out, pages:pages.length, days:days.length};
+  }
+  /* Straight to a file, the same way the GPX button does it — no dialog, no print
+     preview, nothing to agree to. */
+  pdfSave(){
+    let doc;
+    try{ doc=this.pdfDoc(); }
+    catch(e){ this.status('Could not write the itinerary out.'); return null; }
+    const file=('empire-state-trail-itinerary'
+      +(this.planStart?'-'+this.planStart:'')).replace(/[^a-z0-9-]+/gi,'-')
+      .replace(/-+/g,'-').toLowerCase()+'.pdf';
+    try{
+      // Latin-1, not UTF-8: the cross-reference offsets above are counted in characters.
+      const bytes=new Uint8Array(doc.pdf.length);
+      for(let i=0;i<doc.pdf.length;i++) bytes[i]=doc.pdf.charCodeAt(i) & 0xff;
+      const url=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
+      const a=document.createElement('a');
+      a.href=url; a.download=file;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+    }catch(e){ this.status('Could not save the file.'); return null; }
+    this.status('Saved '+file+' — '+doc.days+(doc.days===1?' day':' days')+' on '
+      +doc.pages+(doc.pages===1?' page':' pages')+'.');
+    return doc;
   }
   /* ---------- draft, save, undo ----------
      A plan is a document, not a running total. Every edit lands in the working copy and is
@@ -7549,7 +7712,6 @@ class TrailApp {
     this.planHist.push({snap:before, label:label||'that change'});
     if(this.planHist.length>40) this.planHist.shift();
     this.planRedo=[];   // a fresh edit is a new branch; there is nothing to go forward to
-    this.planPreview=null;
     this._planAuto=false;
     // Local write is synchronous; the push it queues is debounced, so a run of taps on
     // one slider is one upload rather than thirty.
@@ -7571,7 +7733,6 @@ class TrailApp {
      only useful if you can step forward again without doing it a second time by hand. */
   undoPlan(){
     const h=this.planHist.pop(); if(!h) return null;
-    this.planPreview=null;   // a proposal measured against a plan that is about to change
     const now=this.planSnapshot();
     if(!this.planRestore(h.snap)) return null;
     this.planWasSnap=now;
@@ -7582,7 +7743,6 @@ class TrailApp {
   }
   redoPlan(){
     const r=this.planRedo.pop(); if(!r) return null;
-    this.planPreview=null;
     const now=this.planSnapshot();
     if(!this.planRestore(r.snap)) return null;
     this.planWasSnap=now;
@@ -7857,19 +8017,28 @@ class TrailApp {
       const away=this._hiddenAt ? Date.now()-this._hiddenAt : 0;
       this._hiddenAt=0;
       this.checkSync(away>20000);
+      this.checkPois(away>20000);
     };
     document.addEventListener('visibilitychange',()=>{
       if(document.visibilityState==='hidden'){ this._hiddenAt=Date.now(); return; }
       back();
     });
     window.addEventListener('focus', back);
-    window.addEventListener('online', ()=>{ if(this.syncOn()) this.checkSync(true); });
+    window.addEventListener('online', ()=>{
+      if(!this.syncOn()) return;
+      this.checkSync(true);
+      /* Forced, because coming back online is the one moment a tab that has been running
+         on its cached copy can finally read the account — and until it does, nothing it
+         adds is allowed up. */
+      this.checkPois(true);
+    });
     /* A slow tick, so a plan open on a laptop while somebody edits it on a phone catches
        up on its own. Skipped while the tab is hidden — a backgrounded page has nobody
        reading it, and the visibility handler above covers the moment it is looked at. */
     setInterval(()=>{
       if(document.visibilityState!=='visible' || !this.syncOn()) return;
       this.checkSync();
+      this.checkPois();
     }, SYNC_POLL_MS);
   }
   async checkSync(force){
@@ -7965,7 +8134,7 @@ class TrailApp {
     }
     /* Redo belonged to the plan that just went; a proposal about it is stale for the same
        reason. */
-    this.planRedo=[]; this.planPreview=null; this._planAuto=false;
+    this.planRedo=[]; this._planAuto=false;
     /* Saved, not pushed. It came FROM up there — sending it straight back would only stamp
        a fresh time on a record that already has one and start the other device wondering
        whether it is behind. */
@@ -8207,44 +8376,34 @@ class TrailApp {
      happened yet: the rows draw what they are now with a line under each saying what this
      would make it, and the bar carries Apply and Cancel. Cheaper than modelling a
      "proposed plan" everywhere, because the proposal is just another snapshot. */
-  planPreviewOf(label, fn){
+  /* The four buttons that move days other than the one you pressed them on used to
+     PROPOSE: the rows redrew as a diff, a band appeared across the plan, and nothing
+     happened until Apply. Two decisions for one intention. Pressing "Auto-plan the rest"
+     is not a question about auto-planning the rest — and the answer to the second
+     decision was always yes, or you would not have pressed the first.
+
+     So they happen, and Undo takes them back, which is the same safety net every other
+     edit on this screen has had all along and the one a rider already knows where to find.
+     The only thing worth keeping from the preview was its refusal to push a no-op onto the
+     undo stack. */
+  planTry(label, fn){
     const before=this.planSnapshot();
-    try{ fn(); }catch(e){ this.planRestore(before); this.planPreview=null; return false; }
-    const after=this.planSnapshot();
-    this.planRestore(before);
-    if(after===before){ this.planPreview=null; this.planChanged();
+    let after;
+    try{ fn(); after=this.planSnapshot(); }
+    catch(e){ this.planRestore(before); this.planChanged(); return false; }
+    if(after===before){ this.planRestore(before); this.planChanged();
       this.status('That would not change anything.'); return false; }
-    this.planPreview={label, after};
-    this.planChanged();
+    this.planRestore(before);
+    this.planEdit(label, ()=>this.planRestore(after));
+    this.status(label+' — Undo puts the plan back.');
     return true;
   }
-  applyPreview(){
-    const p=this.planPreview; if(!p) return false;
-    this.planPreview=null;
-    this.planEdit(p.label, ()=>this.planRestore(p.after));
-    return true;
-  }
-  cancelPreview(){ if(!this.planPreview) return false;
-    this.planPreview=null; this.planChanged(); return true; }
   // The name a milepost would go by in a day's title: the finish by name, else its place.
   planEndName(mile){
     const term=this.dirSign()<0 ? 0 : TOTAL;
     if(abs(mile-term)<=1) return this.destName();
     const t=planTownAt(this.bedTowns(), mile);
     return t ? t.n : mpTxt(mile);
-  }
-  /* How many days a proposal would touch — for the count in the preview bar. */
-  planPreviewCount(view){
-    if(!view) return 0;
-    const days=this.planP(), b=this.planBounds();
-    let n=Math.abs(view.days.length-days.length);
-    days.forEach((pd,i)=>{
-      const nd=view.days[i], nb=view.bounds[i];
-      if(!nd || !nb) return;
-      if(!!nd.zero!==!!pd.zero || Math.round(nb.miles)!==Math.round(b[i].miles)
-        || Math.round(nb.start)!==Math.round(b[i].start)) n++;
-    });
-    return n;
   }
   /* Re-plan the days after this one automatically, leaving everything up to and including
      it alone. The days that get rebuilt lose the bed booked for them, because it was a bed
@@ -8514,18 +8673,6 @@ class TrailApp {
     /* What the plan looked like when it was last saved, and how many days now differ from
        it. Computed once for the header and handed to each row, because "3 days changed"
        and the "was 55 mi" on the rows have to be counting the same thing. */
-    /* A proposal nobody has agreed to yet. While one is up the rows draw themselves as a
-       diff — the old town struck through with the new one beside it, the old mileage the
-       same — and the bar carries Apply and Cancel instead of the save controls. */
-    const prev=this.planPreview ? this.planViewOf(this.planPreview.after) : null;
-    /* The value that is going away ruled through, the one replacing it beside it. Only a
-       proposal uses this now: teal, matching the Preview bar, so a struck-through town and
-       the bar above it are obviously about the same thing. */
-    const diff=(oldV,newV,cls)=> (oldV!=null && newV!=null && oldV!==newV)
-      ? '<s class="pl-del">'+esc(oldV)+'</s><span class="'+cls+'">'+esc(newV)+'</span>'
-      : esc(newV==null ? oldV : newV);
-    const pvN=prev ? this.planPreviewCount(prev) : 0;
-    const pvD=prev ? prev.days.length-days.length : 0;
     const was=this.planWas();
     /* How far the plan falls short of the end of the trail. Named in the header, because
        "7 riding days · 442 mi" over a 582-mile trail is a number that looks like an answer
@@ -8552,24 +8699,28 @@ class TrailApp {
            something they just did and already saw in the status line — it holds a strip
            of the screen open to narrate the past. The way back still has to exist, so it
            is a button, and the label it would undo is on its tooltip. */
-        +(this.planHist.length ? '<button type="button" class="pl-hb" data-plan="undo" title="Undo '
-          +esc(this.planHist[this.planHist.length-1].label)+'">Undo</button>' : '')
-        +(this.planRedo.length ? '<button type="button" class="pl-hb" data-plan="redo" title="Redo '
-          +esc(this.planRedo[this.planRedo.length-1].label)+'">Redo</button>' : '')
+        /* Always both, and greyed when there is nothing behind them. They used to appear
+           only once there was something to undo, which meant the one control a rider
+           wants to KNOW is there before they touch anything was invisible until after
+           they had. A disabled button is a promise; an absent one is a surprise. */
+        +'<button type="button" class="pl-hb" data-plan="undo"'+(this.planHist.length
+            ? ' title="Undo '+esc(this.planHist[this.planHist.length-1].label)+'"'
+            : ' disabled title="Nothing to undo yet"')+'>Undo</button>'
+        +'<button type="button" class="pl-hb" data-plan="redo"'+(this.planRedo.length
+            ? ' title="Redo '+esc(this.planRedo[this.planRedo.length-1].label)+'"'
+            : ' disabled title="Nothing to redo"')+'>Redo</button>'
         +'<button type="button" class="pl-hb" data-plan="gpx" title="Download the whole trip '
           +'as a GPX — the track, your stops, your places and every night’s town">GPX</button>'
-        /* The plan, as something you can send. Everything in it travels: the dates, the
-           days off the trail and their notes, every stop and which day it is on, and the
-           beds. Whoever opens it needs no account and nothing installed. */
-        /* Print, which on every phone and desktop browser is also Save as PDF. No library:
-           the page already knows how to lay itself out, and a print stylesheet turns the
-           plan into a document without shipping a PDF writer to do it. */
-        +'<button type="button" class="pl-hb" data-plan="print" title="Print the itinerary, '
-          +'or save it as a PDF — every day, its stops and where you sleep, on paper">PDF</button>'
-        +'<button type="button" class="pl-hb" data-plan="share" title="Copy a link to this '
-          +'whole plan — the dates, the days, the stops and the beds. Anyone who opens it '
-          +'sees exactly this, with no sign-in">Share</button>'
-        +'<button type="button" class="pl-auto" data-plan="auto">Auto-plan</button>'
+        +'<button type="button" class="pl-hb" data-plan="pdf" title="Save the itinerary as '
+          +'a PDF — every day, its stops and where you sleep, as a file">PDF</button>'
+        /* No Share, and no Auto-plan. Share handed out a link, which was a way of sending
+           somebody a COPY: they opened it, it froze at whatever the plan was that minute,
+           and the next edit never reached them. Everyone on this trip signs into the same
+           account, and that account already carries the plan to every browser it is open
+           in, within the minute, by itself. A link was the worse half of a feature that
+           already existed. Auto-plan is on each day's own fold, where it says which day it
+           is planning from — up here it was a button that rewrote the whole trip with no
+           mention of where from. */
         /* No Save. Every edit is already saved and already on its way up, and the cloud
            says how that is going — which is the only part a rider cannot see for
            themselves. */
@@ -8666,15 +8817,6 @@ class TrailApp {
          written by the very action that rewrites this header. */
       +'<div id="planSay" class="pl-say"'+(this._planSaidMsg?'':' hidden')+'>'
         +esc(this._planSaidMsg||'')+'</div>'
-      /* Only when the browser refused both the share sheet and the clipboard. The link
-         itself, selected, with the plainest possible instruction. */
-      +(this.planShare ? '<div class="pl-sharerow">'
-        +'<span class="pl-k">Copy this link</span>'
-        +'<input id="planShareIn" class="pl-sharein" type="text" readonly value="'
-          +esc(this.planShare)+'" aria-label="A link to this plan">'
-        +'<button type="button" class="pl-hb" data-plan="sharec">Copy</button>'
-        +'<button type="button" class="pl-hb" data-plan="sharex">Done</button>'
-      +'</div>' : '')
       +'<div id="planFindOut" class="pl-find-out" hidden></div>'
       /* The masthead of the printed page, and nowhere on screen. The link is on it because
          it is the only part of a PDF that can be read back: a page of type cannot be
@@ -8692,24 +8834,6 @@ class TrailApp {
           +'device. Stops, beds and notes are not in it; they travel with your account, '
           +'or with Share.</div>'
       +'</div>'
-      /* One bar, and only for a proposal you have not answered yet. A preview is the one
-         thing on this screen that is genuinely pending — days are drawn struck through
-         and nothing is committed until Apply — so it earns a band across the plan in a
-         way "here is what you last did" never did. */
-      +(prev ? '<div class="pl-unsaved pl-prevbar">'
-        +'<span class="pl-uk">Preview</span>'
-        +'<span class="pl-ut">'+esc(this.planPreview.label)+' · '
-          +(pvN ? pvN+(pvN===1?' day changes':' days change') : 'nothing changes')
-          +(pvD>0 ? ' · '+pvD+' more day'+(pvD>1?'s':'')+' on the end' : '')
-          +(pvD<0 ? ' · '+(-pvD)+' day'+(pvD<-1?'s':'')+' dropped' : '')+'</span>'
-        +'<button type="button" class="pl-ub pl-ub-go" data-plan="applyprev">Apply</button>'
-        +'<button type="button" class="pl-ub" data-plan="cancelprev">Cancel</button>'
-        /* Undo and redo stay reachable underneath a proposal: cancelling gets you out of
-           the preview, undo gets you out of the edit that made you want one. */
-        +(this.planHist.length ? '<button type="button" class="pl-ub" data-plan="undo">Undo</button>' : '')
-        +(this.planRedo.length ? '<button type="button" class="pl-ub" data-plan="redo">Redo</button>' : '')
-      +'</div>'
-      : '')
       +this.syncPanelHtml()
     +'</div>');
 
@@ -8770,31 +8894,11 @@ class TrailApp {
         : done ? 'Nothing left to ride'
         : idle ? 'Nothing to ride this day'
         : fromN+' → '+toN;
-      /* The same line as a diff, when a proposal is up: the towns that would change are
-         struck through with their replacements beside them, so what the button does is
-         readable on the rows themselves rather than described in a sentence. */
-      const nb=prev ? prev.bounds[d] : null, nd=prev ? prev.days[d] : null;
-      const gone=!!prev && !nd;
-      /* Only the destination is ruled through. Where a day STARTS is the day before it's
-         destination, already struck through on the row above — diffing both ends put four
-         town names in a title with room for two, and the ellipsis ate the new one, which
-         is the half you were reading it for. */
       const wasB=was&&was.bounds[d], wasD=was&&was.days[d];
       const plain=pd.zero || spent;
-      /* Three states for one line. A proposal rules through what this day says now and
-         puts what it would say beside it; unsaved work rules through what the SAVED plan
-         said and puts what it says now beside it; otherwise it is just the day. */
       /* An off-trail day's own words in the title, because "Albion → Albion" is not what
          that day is. What the rider typed is the only thing that day is about. */
-      /* A PROPOSAL rules through what the day says now and puts what it would say beside
-         it, because nothing has happened yet and the pair is the whole question. An EDIT
-         does not: that is the plan reporting back what you just did to it, on the row you
-         did it on, and it is the same running commentary the last-change band used to
-         carry across the top. You moved the day. You know. Undo is in the header. */
-      const titleHtml= away ? esc(pd.note || 'Off the trail')
-        : (prev && !plain && nb && nd && !nd.zero)
-          ? esc(this.placeNameAt(nb.start))+' → '+diff(toN, this.planEndName(nb.end), 'pl-ins')
-        : esc(title);
+      const titleHtml=esc(away ? (pd.note || 'Off the trail') : title);
       /* Two halves, because they answer different questions: when you are on the bike,
          and where you get off it. Only the second half carries the bed glyph and its
          colour. In front of the whole line both of them read as qualifying the hours —
@@ -8822,7 +8926,7 @@ class TrailApp {
         : 'No beds pinned where day '+(d+1)+' ends';
 
       h.push('<div class="pl-day'+(pd.zero&&!away?' pl-zero':'')+(away?' pl-away':'')
-        +(gone?' pl-day-del':'')+'" data-d="'+d+'">'
+        +'" data-d="'+d+'">'
         /* Which day of the trip, under the date. It goes in the rail because the rail
            already had the slack — the hairline below it is a flex filler, so the number
            costs the row nothing it was using. */
@@ -8835,7 +8939,7 @@ class TrailApp {
           +'<div class="pl-top">'
             +'<button type="button" class="pl-toggle" data-plan="open" data-d="'+d+'">'
               +'<span class="pl-tl">'+(warn?warnSvg:'')
-                +'<span class="pl-t"'+(warn&&!prev?' style="color:#b3261e"':'')+'>'+titleHtml+'</span>'
+                +'<span class="pl-t"'+(warn?' style="color:#b3261e"':'')+'>'+titleHtml+'</span>'
                 +caretSvg(open)+'</span>'
               /* `away ||` and not just `summary`: a travel day whose note is already the
                  title has nothing left to say, and an empty summary was falling through to
@@ -8846,12 +8950,7 @@ class TrailApp {
                  date rail, where it read as part of the date. It belongs with the day's
                  other facts, first, because it is the first of them. */
               +'<span class="pl-s">'
-                +(plain ? '' : '<b class="pl-smi">'
-                  +(prev
-                    ? diff(String(Math.round(b.miles)),
-                        nb&&nd&&!nd.zero ? String(Math.round(nb.miles)) : null, 'pl-ins')
-                    : String(Math.round(b.miles))+' mi')
-                  +'</b>')
+                +(plain ? '' : '<b class="pl-smi">'+Math.round(b.miles)+' mi</b>')
                 /* The separator travels with the text that follows it rather than sitting
                    between them as a text node of its own: this line is a flex row, a bare
                    " · " becomes an item in it, and an item can be wrapped onto a line by
@@ -8881,7 +8980,7 @@ class TrailApp {
                deciding what it is — but that put a file you want on the morning you ride
                behind opening the day and scrolling past three dropdowns. Taking one day
                to a head unit is a thing you do FROM the list. */
-            +(pd.zero||gone ? '' : '<button type="button" class="pl-hb pl-gpxb" data-plan="gpxday"'
+            +(pd.zero ? '' : '<button type="button" class="pl-hb pl-gpxb" data-plan="gpxday"'
               +' data-d="'+d+'" aria-label="Download day '+(d+1)+' as a GPX"'
               +' title="Download day '+(d+1)+' as a GPX — the track plus your stops, your'
               +' places and where you sleep">GPX</button>')
@@ -8901,13 +9000,12 @@ class TrailApp {
          off-trail day the note is already the title, so only the offer appears. */
       if(pd.note && !away) h.push('<button type="button" class="pl-daynote"'
         +' data-plan="notego" data-d="'+d+'" title="Change this note">'+esc(pd.note)+'</button>');
-      else if(!gone && !(away && pd.note))
+      else if(!(away && pd.note))
         h.push('<button type="button" class="pl-daynote pl-daynote-add"'
           +' data-plan="notego" data-d="'+d+'">'
           +(away ? '+ what is this day?' : '+ note')+'</button>');
-      if(gone) h.push('<div class="pl-chg pl-chg-x"><span class="pl-chg-d"></span>this day goes</div>');
       /* A day an earlier one rode past, with the two ways out of it right there. */
-      if(idle && !prev) h.push('<div class="pl-idle">'+warnSvg
+      if(idle) h.push('<div class="pl-idle">'+warnSvg
         +'<span>Day '+d+' already rides all the way to '+esc(fromN)+', so there are no miles left for this one.</span>'
         +'<button type="button" class="pl-fix" data-plan="pull" data-d="'+d+'"'
           +' title="Delete this empty day: every day after it happens one date earlier, and a new day is planned onto the end">'
@@ -8933,7 +9031,7 @@ class TrailApp {
          riding past anything — but a rest day in a town is exactly when a rider goes to
          the museum, and the day that has the time for it was the one day that could not
          hold a stop at all. */
-      if(!gone){
+      {
         const mine=this.planWayStops(d, b.start, b.end).filter(x=>this.stopHere(x,d));
         /* How far into the day it is, which is the number a rider actually rides to. An
            absolute milepost says where a place is on the trail; "8 mi in" says when to
@@ -9074,7 +9172,7 @@ class TrailApp {
            so the row goes. */
         const nb1=bounds[d+1], wb1=was && was.bounds[d+1];
         const absorbed=!!(nb1 && wb1 && abs(nb1.end-wb1.end)<1);
-        if(!prev && delta!==0 && laterRides && absorbed){
+        if(delta!==0 && laterRides && absorbed){
           /* One line, then the three answers. The old version explained the situation in
              four clauses before offering anything, which read as an interruption rather
              than a choice — and the rider already knows what they just did. What they do
@@ -9103,7 +9201,7 @@ class TrailApp {
            when the only decisions left are Apply and Cancel, and not on the last day,
            which has no rest to plan. A day off the trail keeps it: "we drove up, now plan
            the ride from here" is one of the better reasons to press it. */
-        else if(!prev && laterRides)
+        else if(laterRides)
           h.push('<div class="pl-after pl-after-1">'
             +'<button type="button" class="pl-fix" data-plan="replan" data-d="'+d+'"'
               +' title="Throw away every day after this one and plan them again from where'
@@ -9293,7 +9391,6 @@ class TrailApp {
 
     h.push('<div class="pl-foot">Saved on this phone. The Outlook graph and the map read these days. '
       +'Beds and stops are the app’s own pins — NY State’s register, the OpenStreetMap corridor and your own picks.</div>');
-    el.classList.toggle('pl-previewing', !!prev);
     el.innerHTML=h.join('');
     /* Asked for after the render, not during it: the rows go up with the straight-line
        figure and are replaced when the router answers, so a slow network delays a number
@@ -9563,10 +9660,7 @@ class TrailApp {
       const act=b.dataset.plan, d=+b.dataset.d;
       if(act==='auto'){ this.autoPlan(); this.renderPlan(); }
       else if(act==='gpx'){ this.gpxSave(null); }
-      else if(act==='print'){ this.printPlan(); }
-      else if(act==='share'){ this.sharePlan(); }
-      else if(act==='sharec'){ this.copyShare(false); }
-      else if(act==='sharex'){ this.planShare=''; this.renderPlan(); }
+      else if(act==='pdf'){ this.pdfSave(); }
       else if(act==='gpxday'){ this.gpxSave(d); }
       /* A day the search found. Opens it as well as scrolling to it — the rider asked
          where something was, and the answer is the day with its stops showing. The search
@@ -9628,20 +9722,17 @@ class TrailApp {
         this.status(l ? 'Put back what it was before '+l+'.' : 'Nothing left to undo.'); }
       else if(act==='redo'){ const l=this.redoPlan(); this.renderPlan();
         this.status(l ? 'Back to '+l+' again.' : 'Nothing to redo.'); }
-      /* The four that move days other than this one are proposed, not done: the rows
-         redraw as a diff and nothing is committed until Apply. */
-      else if(act==='spread'){ this.planPreviewOf('Even daily miles', ()=>this.spreadFrom_(d)); this.renderPlan(); }
+      // The four that move days other than this one. They happen; Undo is the way back.
+      else if(act==='spread'){ this.planTry('Even daily miles', ()=>this.spreadFrom_(d)); this.renderPlan(); }
       else if(act==='cascade'){ if(!this.planWas())
           this.status('Save the plan once first — there is nothing to measure the shift against.');
-        else this.planPreviewOf('Shift every town along', ()=>this.cascadeFrom_(d));
+        else this.planTry('Shift every town along', ()=>this.cascadeFrom_(d));
         this.renderPlan(); }
-      else if(act==='replan'){ this.planPreviewOf('Auto-plan the rest', ()=>this.replanFrom_(d)); this.renderPlan(); }
-      else if(act==='pull'){ this.planPreviewOf('Move the rest a day earlier', ()=>this.pullForward_(d)); this.renderPlan(); }
+      else if(act==='replan'){ this.planTry('Auto-plan the rest', ()=>this.replanFrom_(d)); this.renderPlan(); }
+      else if(act==='pull'){ this.planTry('Move the rest a day earlier', ()=>this.pullForward_(d)); this.renderPlan(); }
       else if(act==='zerohere'){ this.planEdit('calling day '+(d+1)+' a rest day', ()=>{
           this.planDays=this.planP().map((x,i)=> i===d ? {...x, zero:true, miles:0} : x); });
         this.renderPlan(); }
-      else if(act==='applyprev'){ this.applyPreview(); this.renderPlan(); }
-      else if(act==='cancelprev'){ this.cancelPreview(); this.renderPlan(); }
       else if(act==='addfirst'){ this.planEdit('a day at the start', ()=>{
           const days=this.planP().slice();
           if(days.length>=PLAN_DAYS_MAX) return;
@@ -11546,6 +11637,11 @@ class TrailApp {
     if(this.syncOn()){
       try{
         const rec=await this.dbFetch(this.poiPath(), {method:'GET'});
+        /* Heard back. Note that separately from what came back: an account with no places
+           in it yet and an account that would not answer look identical from here, and
+           telling them apart is the difference between seeding an empty account and
+           emptying a full one. */
+        this.poiRead=true;
         if(rec && Array.isArray(rec.pois)){ data=rec.pois; from='cloud'; }
       }catch(e){ /* no signal: the cached copy below is exactly what this is for */ }
     }
@@ -11559,12 +11655,19 @@ class TrailApp {
     if(!Array.isArray(data)) return [];
     this.myPois=data.filter(o=>isFinite(+o.y) && isFinite(+o.x));
     /* Seed the account from whatever this device already had — the file on a first run, or
-       the cached copy on a device that has been used signed out. The test is whether the
-       CLOUD had them, not where these came from: a device with a cache would otherwise
-       never fill an empty account, and the list would look like it had emptied itself the
-       moment it moved off the file. */
-    if(from!=='cloud' && this.syncOn() && this.myPois.length) this.pushPois();
+       the cached copy on a device that has been used signed out. Two tests, not one:
+       the account did not have them, AND the account actually said so. It used to be the
+       first alone, which meant a database that timed out on start-up was answered by
+       uploading the seed file over a full account — three places where there had been
+       thirty-three, on every tab that opened during the outage. */
+    if(from!=='cloud' && this.syncOn() && this.poiRead && this.myPois.length) this.pushPois();
     if(from!=='cache') this.poiCache(this.myPois);
+    /* Signed in and holding a list the account never gave us. Say so: the list on screen
+       is this device's memory of it, and until a read succeeds nothing typed here can go
+       up without risking exactly the overwrite the line above now refuses to make. */
+    if(this.syncOn() && !this.poiRead)
+      this.status('Could not read your places from the account just now — showing the copy '
+        +'on this device. Anything you add is kept here until it can be read.');
     return this.myPois.map(o=>this.poiRecord(o));
   }
   /* Re-read the list and swap it into POIS in place. Used after a sign-in, when the copy
@@ -11609,15 +11712,89 @@ class TrailApp {
     }catch(e){}
     return null;
   }
-  // The whole list, every time. It is a dozen records — a merge would be more code than data.
+  /* The whole list, every time — it is a few dozen records, and a field-by-field merge
+     would be more code than data. Sending the whole list is also why this is the one call
+     that can destroy something: a PUT replaces, so a tab that pushes a list it never read
+     erases the difference. Hence poiRead. A tab that has not managed to read the account
+     keeps its additions on the device and says so, and the next successful read picks them
+     up — see adoptPois. */
   async pushPois(){
     if(!this.syncOn()) return false;
+    if(!this.poiRead){
+      this.status('Kept on this device — your places could not be read from the account '
+        +'yet, so sending this list up would overwrite what is there.');
+      return false;
+    }
+    /* Stamped before the write, not only after it. A poll fired in the same breath as an
+       edit — deleting a place is exactly that — gets its answer from before the write
+       lands, and adopting that answer puts the place straight back. */
+    this.poiPushAt=Date.now();
     try{
       await this.dbFetch(this.poiPath(), {method:'PUT',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({savedAt:Date.now(), pois:this.myPois||[]})});
+      this.poiPushAt=Date.now();
+      this.poiNew=[];
       return true;
     }catch(e){ this.status('Saved here, but not sent up — '+this.syncErr(e)); return false; }
+  }
+  /* ---------- the same places on the other tab ----------
+     The plan has been asking the account for news on every focus and every slow tick for a
+     while now. The places never did: they were fetched once, at start-up, and that was the
+     whole of it. So a tab left open on Monday went on showing Monday's places for as long
+     as it stayed open, while a tab opened this morning showed today's — two windows onto
+     one account, disagreeing, with no way to tell which one was right by looking.
+
+     Same triggers as the plan, and deliberately simpler: there is no draft to protect and
+     nothing to weigh up, because the account IS the list. The only question is whether
+     what is up there differs from what is here. */
+  async checkPois(force){
+    if(!this.syncOn()) return null;
+    const now=Date.now();
+    if(!force && now-this._poiCheck<45000) return null;
+    this._poiCheck=now;
+    const mark=this.poiPushAt;
+    let rec=null;
+    try{ rec=await this.dbFetch(this.poiPath(), {method:'GET'}); }
+    catch(e){ return null; }        // no answer is not news, and never a reason to change
+    const first=!this.poiRead;
+    this.poiRead=true;
+    /* Two ways this answer can be older than what is on this screen: a write went out just
+       before it, or one went out while it was in the air. Adopting either undoes the edit
+       that caused it — delete a place and watch it come back. */
+    if(this.poiPushAt!==mark || Date.now()-this.poiPushAt<8000) return null;
+    const list=(rec && Array.isArray(rec.pois)) ? rec.pois : [];
+    if(poiSig(list)===poiSig(this.myPois||[])) return null;
+    /* An account that answers with nothing is only news if we believe it. On the very
+       first read of a tab that has been running on its cached copy, an empty answer is
+       far more likely to be an account this device has yet to seed — leave it to the
+       push below rather than wiping the screen. */
+    if(!list.length && first && (this.myPois||[]).length){ this.pushPois(); return null; }
+    return this.adoptPois(list);
+  }
+  /* Take the account's list as the truth, keeping only what this device has that the
+     account has never been told about. Not a union: a plain merge would resurrect every
+     place deleted on the other phone, since a deletion looks exactly like a record this
+     copy happens to have and that one does not. poiNew is the difference — the places
+     added here while the account was unreachable. */
+  adoptPois(list){
+    const have={}; list.forEach(o=>{ have[poiId(o)]=1; });
+    const unsent=(this.poiNew||[]).filter(o=>!have[poiId(o)]);
+    const before=(this.myPois||[]).length;
+    this.myPois=list.filter(o=>Number.isFinite(+o.y) && Number.isFinite(+o.x)).concat(unsent);
+    this.poiCache(this.myPois);
+    this.POIS=this.POIS.filter(z=>z.asset!=='chris')
+      .concat(this.myPois.map(z=>this.poiRecord(z)));
+    this.POIS.forEach((z,i)=>{ z.i=i; });
+    this._byCat=null; this._bedTowns=null;
+    this.buildPOILayers();
+    if(this.screen==='plan') this.renderPlan();
+    if(this.screen==='nearby') this.renderNearby();
+    if(unsent.length) this.pushPois();     // and now they can go up
+    const n=this.myPois.length;
+    if(n!==before) this.status('Your places: '+n+' now, from your account'
+      +(unsent.length ? ' (plus '+unsent.length+' added here, now sent up)' : '')+'.');
+    return n;
   }
   /* Adding a place is three things at once: the record, the pin, and the row in the
      planner's stop list for whichever day rides past it. Doing fewer than three left the
@@ -11644,6 +11821,9 @@ class TrailApp {
     const rec={n:name, y:lat, x:lng, a:String(o.a||''), p:String(o.p||''),
       u:String(o.u||''), d:String(o.d||''), k:cleanKind(o.k)};
     this.myPois.push(rec);
+    // Remembered as unsent until a push says otherwise, so a read that lands in between
+    // adopts the account's list without dropping this. Cleared by pushPois.
+    (this.poiNew=this.poiNew||[]).push(rec);
     const p=this.poiRecord(rec);
     this.POIS.push(p);
     if(opt && opt.defer) return p;
