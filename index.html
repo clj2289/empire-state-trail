@@ -1388,7 +1388,7 @@
   /* The Stop button on a search row. Narrow, right-aligned, and quiet until it means
      something: an outline while the place is only addable, filled once it is on a day. */
   .stopcell{width:1%;white-space:nowrap;text-align:right}
-  .poi-add{font-family:inherit;font-size:11.5px;font-weight:600;line-height:1;cursor:pointer;
+  .poi-add{font-family:inherit;font-size:11.5px;font-weight:600;line-height:1;min-height:32px;cursor:pointer;
     padding:5px 9px;color:var(--color-accent);background:transparent;
     border:1px solid var(--color-accent);border-radius:999px;white-space:nowrap}
   .poi-add:hover{background:color-mix(in srgb,var(--color-accent) 10%,transparent)}
@@ -1399,12 +1399,17 @@
   .poi-keepb:hover{background:rgba(32,30,29,.06)}
   /* Delete this place. Quiet until it is armed, then unmistakable — the second tap
      removes it from every device the rider owns. */
-  .poi-del{flex:none;margin-left:4px;font-family:inherit;font-size:14px;line-height:1;
-    padding:3px 7px;min-height:26px;color:var(--color-neutral-500);background:transparent;
-    border:1px solid transparent;border-radius:999px;cursor:pointer}
+  .poi-del{flex:none;margin-left:4px;font-family:inherit;font-size:15px;line-height:1;
+    display:inline-grid;place-items:center;min-width:34px;min-height:34px;padding:0 6px;
+    color:var(--color-neutral-500);background:transparent;border:1px solid transparent;
+    border-radius:999px;cursor:pointer}
   .poi-del:hover{color:#b3261e;border-color:var(--color-divider)}
-  .poi-del.arm{font-size:11px;font-weight:600;padding:3px 9px;color:#fff;background:#b3261e;
-    border-color:#b3261e}
+  /* Where the row has room for a word rather than a mark. Same height as + Stop beside
+     it, because the two should be equally easy to hit and only one of them is final. */
+  .poi-del-w{font-size:11.5px;font-weight:600;padding:0 12px;min-width:0;
+    border-color:var(--color-divider)}
+  .poi-del.arm{font-size:11.5px;font-weight:600;padding:0 12px;min-width:0;color:#fff;
+    background:#b3261e;border-color:#b3261e}
   .poi-kept{flex:none;font-size:10.5px;color:#1d6b3f;white-space:nowrap;padding:0 2px}
   .poi-add[disabled]{color:var(--color-neutral-500);border-color:var(--color-neutral-400);
     cursor:default;opacity:.7}
@@ -2065,6 +2070,49 @@
   .town-maj{font-size:14.5px;letter-spacing:.005em}
   /* You: the blue dot, with the soft halo every phone map gives it. */
   .me-dot{filter:drop-shadow(0 0 4px rgba(26,115,232,.55)) drop-shadow(0 1px 3px rgba(0,0,0,.35))}
+  /* ---------- on paper ----------
+     The plan is already a document: the row carries the date, the towns, the distance,
+     the hours, where you sleep and every stop with its mileage. Printing is therefore
+     mostly a matter of taking the app away from around it — and browsers put "Save as
+     PDF" in the same dialog, so this is the PDF export. */
+  .pl-print{display:none}
+  @media print{
+    /* Only the plan, and all of it. Screens are absolutely positioned and clipped for a
+       phone; on paper they have to become ordinary flowing blocks or the page prints one
+       viewport tall and stops. */
+    .tabbar,.map-fabs,.map-panel,#map,#svPane,#mapFind,#measureBar,#gate,#toast,
+    .screen-title{display:none!important}
+    html,body,.phone-app,.screens{position:static!important;overflow:visible!important;
+      height:auto!important;background:#fff!important}
+    .screens > .screen{display:none!important}
+    .screens > .screen[data-screen="plan"]{display:block!important;position:static!important;
+      overflow:visible!important;height:auto!important}
+    .pl-root{max-width:none!important;background:#fff!important;padding:0!important}
+    .pl-head{position:static!important;border-bottom:0!important;padding:0!important}
+    /* Every control, gone. A button on paper is a smudge with a shadow. */
+    .pl-head-1,.pl-set,.pl-find,.pl-find-out,.pl-say,.pl-sharerow,.pl-add,.pl-foot,
+    .pl-pill,.pl-hb,.pl-auto,.pl-syncline,.pl-daynote-add,.pl-after,.pl-disc,
+    .pl-minibox,.pl-prevbar,.pl-toggle svg,.pl-t svg{display:none!important}
+    .pl-print{display:block;margin:0 0 14px;padding:0 0 10px;
+      border-bottom:1.5px solid #201e1d}
+    .pl-print-t{font-size:20px;font-weight:600;letter-spacing:-.015em}
+    .pl-print-s{margin-top:2px;font-size:11.5px;color:#3a3737;
+      font-variant-numeric:tabular-nums}
+    .pl-print-l{margin-top:6px;font-size:8.5px;color:#6b6767;word-break:break-all}
+    /* A day should not be split across a page break — half an itinerary entry on the
+       bottom of one sheet is worse than a short page. */
+    .pl-day{break-inside:avoid;page-break-inside:avoid;padding:9px 0 10px!important;
+      border-bottom:1px solid rgba(32,30,29,.25)!important;background:none!important}
+    .pl-day.pl-away{background:none!important}
+    .pl-toggle{cursor:default}
+    .pl-picked-b{cursor:default}
+    .pl-picked-b:hover{background:none!important}
+    /* Ink, not screen colour: teal links and grey captions vanish on a laser printer. */
+    .pl-t,.pl-picked-n,.pl-picked-i,.pl-smi{color:#000!important}
+    .pl-s,.pl-picked-m,.pl-picked-k,.pl-dc,.pl-dw{color:#333!important}
+    .pl-bedw,.pl-bedw *{color:#000!important}
+    a{color:#000!important;text-decoration:none}
+  }
 </style>
 </head>
 <body class="ds-broadsheet">
@@ -2375,11 +2423,13 @@
         <details id="addList" class="filters">
           <summary class="filters-sum">
             <span class="filters-caret" aria-hidden="true"></span>
-            <span class="filters-t">Import a list of places</span>
+            <span class="filters-t">Import an itinerary or a list of places</span>
             <span class="filters-state"></span>
           </summary>
           <div class="ap-form">
-            <div class="ap-hint">Paste a table with a header row. <b>name</b> is the only
+            <div class="ap-hint">Paste an <b>itinerary code</b> off a printed plan
+              (it starts <code>EST1-</code>) to rebuild its days here — or a table of
+              places. For a table: <b>name</b> is the only
               column that must be there; <b>town</b>, <b>type</b>, <b>notes</b>,
               <b>sentiment</b>, <b>bike_storage</b>, <b>source_author</b>,
               <b>source_url</b> and the rest are used where present. Add <b>lat</b> and

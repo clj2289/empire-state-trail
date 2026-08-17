@@ -3063,7 +3063,12 @@ class TrailApp {
     const impb=this.$('impGo');
     if(impb) impb.addEventListener('click',()=>{
       const t=this.$('impText');
-      this.importPlaces(t ? t.value : '');
+      const v=t ? t.value : '';
+      /* One box, two things it might be given. An itinerary code and a table of places
+         are both "here is something I copied", and asking the rider which drawer it goes
+         in before they can paste it is a question the text itself answers. */
+      if(/EST1-/i.test(v)) this.applyPlanCode(v);
+      else this.importPlaces(v);
     });
     // One vocabulary, written out in one place. See MY_KINDS.
     const apk=this.$('apKind');
@@ -4606,15 +4611,19 @@ class TrailApp {
      Two taps. It is irreversible, it goes straight up to the account and therefore to
      every other device, and it is a 24px target on a phone next to a button people press
      often — one accidental tap should not lose a place somebody wrote a note on. */
-  delBtnHtml(p){
+  delBtnHtml(p, full){
     if(p.asset!=='chris') return '';
     const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
     const armed=this._delArm===p.name+'@'+at;
-    return '<button type="button" class="poi-del'+(armed?' arm':'')+'"'
+    /* Where there is room, a word. A bare × is a 26px target on a phone sitting next to a
+       pill twice its size, and the two are not equally easy to hit — which matters most
+       for the one that cannot be undone. In the table's own column there is only room for
+       the mark, so there it keeps a 34px box around it instead. */
+    return '<button type="button" class="poi-del'+(full?' poi-del-w':'')+(armed?' arm':'')+'"'
       +' data-poidel2="'+esc(p.name||'')+'" data-at="'+at+'"'
       +' title="'+(armed ? 'Tap again to delete '+esc(p.name)+'. It goes from this device'
         +' and from every other one you sign in on' : 'Delete '+esc(p.name))+'">'
-      +(armed ? 'Delete?' : '×')+'</button>';
+      +(armed ? 'Delete?' : (full ? 'Delete' : '×'))+'</button>';
   }
   stopBtnHtml(p){
     const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
@@ -4875,7 +4884,7 @@ class TrailApp {
           +(p.addr?'<div class="poi-detail-r">'+esc(p.addr)+'</div>':'')
           +(p.phone?'<div class="poi-detail-r"><a href="tel:'+esc(p.phone)+'">'+esc(p.phone)+'</a></div>':'')
           +(p.url?'<div class="poi-detail-r"><a href="'+esc(p.url)+'" target="_blank" rel="noopener">Its own page ↗</a></div>':'')
-          +'<div class="poi-detail-b">'+this.stopBtnHtml(p)+this.delBtnHtml(p)+'</div>'
+          +'<div class="poi-detail-b">'+this.stopBtnHtml(p)+this.delBtnHtml(p, true)+'</div>'
         +'</div>';
       });
       if(rows.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+rows.length)+'</button>';
@@ -7386,9 +7395,92 @@ class TrailApp {
   /* The plan as a link — base64 JSON in the fragment, no server. The design took the
      share button off the screen, so this is a console affordance like window.app itself:
      app.planLink() gives you something to paste, and loadPlan reads it back on open. */
+  /* ---------- the itinerary as a short code ----------
+     A printed page can carry the whole plan as a #plan= link, and it did — nine hundred
+     characters of base64 across six lines at the top of the itinerary. Nobody types that,
+     and on paper it is not a link, it is a wall.
+
+     This is the itinerary and nothing else: when it starts, and for each day what kind of
+     day it is and how far it goes. Not the stops, not the beds, not the notes — those are
+     on the account and in the share link, and they are not what somebody is retyping off
+     a sheet of paper. Ninety characters for a ten-day trip, one line, and legible enough
+     to read down a phone. */
+  planCode(){
+    const days=this.planP(), b=this.planBounds();
+    const kindLetter={ride:'r', rest:'z', offbike:'b', drive:'o'};
+    const legs=days.map((pd,i)=>(kindLetter[this.dayKind(pd)]||'r')
+      +Math.round(b[i]?b[i].miles:0)).join('.');
+    return 'EST1-'+Math.round(this.planStartMile()*10)+'-'
+      +(this.planStart||'today')+'-'+legs;
+  }
+  /* And back. Deliberately forgiving about spacing and case: this arrives retyped off
+     paper or pasted out of a PDF, where a line break lands wherever the column ended. */
+  readPlanCode(txt){
+    const m=/EST1-(\d+)-(\d{4}-\d{2}-\d{2}|today)-([rzbo0-9.\s]+)/i.exec(String(txt||''));
+    if(!m) return null;
+    const anchor=(+m[1])/10;
+    if(!isFinite(anchor)) return null;
+    const legs=m[3].replace(/\s+/g,'').split('.').filter(Boolean);
+    const kind={r:'ride', z:'rest', b:'offbike', o:'drive'};
+    const days=legs.map(t=>{
+      const k=kind[t[0].toLowerCase()]; const mi=+t.slice(1);
+      if(!k || !isFinite(mi)) return null;
+      return {miles:k==='ride'?Math.max(0,Math.min(200,mi)):0,
+        start:this.wxRideStart, end:null,
+        zero:k!=='ride', off:k==='drive', k:(k==='offbike'?'offbike':''), note:''};
+    }).filter(Boolean);
+    if(!days.length || days.length!==legs.length) return null;
+    return {anchor, start:m[2]==='today' ? null : m[2], days};
+  }
+  /* Reading one replaces the days, the dates and where the trip starts, and nothing else.
+     The stops and the beds on this device are left exactly where they are: the code never
+     carried them, so it has nothing to say about them, and silently clearing them because
+     a piece of paper did not mention them would be the worst possible reading of it. */
+  applyPlanCode(txt){
+    const r=this.readPlanCode(txt);
+    if(!r){ this.impStat('That does not look like an itinerary code. It starts with EST1-.',
+      true); return false; }
+    this.planEdit('the itinerary from a code', ()=>{
+      this.planAnchor=Math.max(0, Math.min(TOTAL, r.anchor));
+      this.planStart=this.cleanDate(r.start);
+      this.planDays=r.days.slice(0, PLAN_DAYS_MAX);
+    });
+    this.savePlan();
+    this.showTab('plan'); this.renderPlan(); this.drawPlanLayer(); this.renderAll();
+    this.status('Read the itinerary — '+r.days.length+' days'
+      +(this.planStart ? ' from '+this.planDayLabel(0) : '')
+      +'. Your stops and beds are untouched; Undo puts the old plan back.');
+    return true;
+  }
   planLink(){
     return (isLocalHost() ? SHARE_BASE : location.origin+location.pathname)
       +'#plan='+encodePlan(this.planRecord());
+  }
+  /* The itinerary as a document. Every day open, whether or not it is open on screen —
+     a printed plan that only shows the day you happened to be looking at is not an
+     itinerary — and every control hidden, because a button on paper is a smudge.
+     Browsers put "Save as PDF" in their own print dialog, so this is the PDF export and
+     it needs no library to be one. */
+  printPlan(){
+    const was=this.planOpenDay, wasStops=this.planOpenStops, wasQ=this.planQ;
+    this.planQ='';
+    this.showTab('plan');
+    /* Printed with the folds SHUT. The row already carries the whole day — date, towns,
+       distance, hours, where you sleep and every stop with its mileage — and the fold is
+       the machinery for changing it, which is not what paper is for. */
+    this.planOpenDay=null; this.planOpenStops=null;
+    this.printAt=new Date();
+    this.renderPlan();
+    const done=()=>{
+      this.planOpenDay=was; this.planOpenStops=wasStops; this.planQ=wasQ;
+      this.printAt=null; this.renderPlan();
+    };
+    /* after() is not fired by every browser, and a plan left stripped for print would be
+       a plan with no controls on it — so the timer is the one that must not be missed. */
+    let restored=false;
+    const once=()=>{ if(restored) return; restored=true; done(); };
+    if(window.onafterprint!==undefined) window.addEventListener('afterprint', once, {once:true});
+    setTimeout(()=>{ window.print(); setTimeout(once, 1200); }, 60);
   }
   /* Hand the plan to somebody else. Always the same: the link goes on the screen,
      selected, and a copy is attempted. No branch where nothing happens.
@@ -8469,6 +8561,11 @@ class TrailApp {
         /* The plan, as something you can send. Everything in it travels: the dates, the
            days off the trail and their notes, every stop and which day it is on, and the
            beds. Whoever opens it needs no account and nothing installed. */
+        /* Print, which on every phone and desktop browser is also Save as PDF. No library:
+           the page already knows how to lay itself out, and a print stylesheet turns the
+           plan into a document without shipping a PDF writer to do it. */
+        +'<button type="button" class="pl-hb" data-plan="print" title="Print the itinerary, '
+          +'or save it as a PDF — every day, its stops and where you sleep, on paper">PDF</button>'
         +'<button type="button" class="pl-hb" data-plan="share" title="Copy a link to this '
           +'whole plan — the dates, the days, the stops and the beds. Anyone who opens it '
           +'sees exactly this, with no sign-in">Share</button>'
@@ -8579,6 +8676,22 @@ class TrailApp {
         +'<button type="button" class="pl-hb" data-plan="sharex">Done</button>'
       +'</div>' : '')
       +'<div id="planFindOut" class="pl-find-out" hidden></div>'
+      /* The masthead of the printed page, and nowhere on screen. The link is on it because
+         it is the only part of a PDF that can be read back: a page of type cannot be
+         parsed into a plan without a PDF library and a lot of guessing, but a URL can be
+         typed or clicked and it carries the whole thing — dates, days, stops, beds. */
+      +'<div class="pl-print">'
+        +'<div class="pl-print-t">Empire State Trail — '+esc(this.destName()===''?'itinerary':'ride plan')+'</div>'
+        +'<div class="pl-print-s">'+ridden+(ridden===1?' riding day · ':' riding days · ')
+          +Math.round(tot)+' mi'+(zs?' · '+zs+' zero':'')+(offN?' · '+offN+' off the trail':'')
+          +(days.length ? ' · '+esc(this.planDayLabel(0))
+            +(days.length>1 ? ' to '+esc(this.planDayLabel(days.length-1)) : '') : '')
+          +' · '+esc(this.dir==='B2NYC'?'Buffalo → NYC':'NYC → Buffalo')+'</div>'
+        +'<div class="pl-print-l"><b>Itinerary code</b> '+esc(this.planCode())
+          +' — type this into Import on the Nearby tab to rebuild these days on another '
+          +'device. Stops, beds and notes are not in it; they travel with your account, '
+          +'or with Share.</div>'
+      +'</div>'
       /* One bar, and only for a proposal you have not answered yet. A preview is the one
          thing on this screen that is genuinely pending — days are drawn struck through
          and nothing is committed until Apply — so it earns a band across the plan in a
@@ -9450,6 +9563,7 @@ class TrailApp {
       const act=b.dataset.plan, d=+b.dataset.d;
       if(act==='auto'){ this.autoPlan(); this.renderPlan(); }
       else if(act==='gpx'){ this.gpxSave(null); }
+      else if(act==='print'){ this.printPlan(); }
       else if(act==='share'){ this.sharePlan(); }
       else if(act==='sharec'){ this.copyShare(false); }
       else if(act==='sharex'){ this.planShare=''; this.renderPlan(); }
