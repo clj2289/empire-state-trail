@@ -486,9 +486,15 @@
   /* Undo and redo, up in the header with the other controls. They used to sit in a band
      across the plan that appeared after every edit to narrate what had just happened;
      the way back is worth keeping, the running commentary is not. */
+  /* The controls as one block. `margin-left:auto` puts them at the far end of the title's
+     line while they fit; the moment they do not, the whole block drops to a line of its
+     own and starts at the left margin like everything else on the screen — rather than
+     the two-here-three-there stagger you get from letting five buttons wrap one at a
+     time. flex-wrap stays off inside it: this group breaks as a unit or not at all. */
+  .pl-acts{flex:none;margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:nowrap}
   .pl-hb{flex:none;font-family:inherit;font-size:11.5px;padding:4px 10px;background:transparent;
     color:var(--pl-ink);border:1px solid var(--pl-line);border-radius:999px;cursor:pointer;
-    min-height:28px}
+    min-height:28px;white-space:nowrap}
   .pl-hb:hover:not([disabled]){background:rgba(32,30,29,.07)}
   /* Undo and redo are always on the header now, so their off state has to read as off
      rather than as a button that did nothing when you pressed it. */
@@ -543,29 +549,54 @@
      for, and a panel that fills the phone is a second screen. */
   .pl-find-out{margin:9px -18px -10px;max-height:44vh;overflow:auto;
     border-top:1px solid var(--pl-line)}
+  /* The fold, and the count, as a rule across the top of the panel rather than a control
+     sitting on it — the whole bar is the target, so it does not have to look like a button
+     to be one. Sticky, because the list scrolls inside itself and the way back out of
+     forty rows should not be forty rows up. */
+  .pl-find-bar{display:flex;align-items:center;gap:8px;width:100%;padding:5px 18px 6px;
+    background:var(--pl-bg);border:0;border-bottom:1px solid var(--pl-hair);
+    font-family:inherit;text-align:left;cursor:pointer;position:sticky;top:0;z-index:1}
+  .pl-find-bar:hover{background:rgba(32,30,29,.05)}
+  .pl-find-bn{flex:none;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--pl-faint)}
+  .pl-find-bq{flex:1;min-width:0;font-size:11.5px;color:var(--pl-mute);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pl-find-bar svg{flex:none;color:var(--pl-faint)}
   .pl-find-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;
     padding:8px 18px 3px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
     color:var(--pl-faint)}
   .pl-find-h span{letter-spacing:.06em;font-variant-numeric:tabular-nums}
   /* Name and what it is on the left, the number flush right — the same shape as a day
      row, which is the row directly underneath it. */
+  /* Sized as a list, not as a stack of cards. At 14.5px the names were the largest type
+     on the screen — larger than the day titles the panel is lying on top of — and eight of
+     them with a two-line subtitle each filled the phone. */
   .pl-find-r{display:grid;grid-template-columns:1fr auto;column-gap:10px;width:100%;
     min-width:0;text-align:left;background:transparent;border:0;
-    border-top:1px solid var(--pl-hair);padding:7px 18px;font-family:inherit;
+    border-top:1px solid var(--pl-hair);padding:5px 18px;font-family:inherit;
     color:inherit;cursor:pointer}
   .pl-find-h + .pl-find-r,.pl-find-h + .pl-find-p .pl-find-r{border-top:0}
-  .pl-find-r b{grid-column:1;font-size:14.5px;font-weight:600;line-height:1.2;
+  .pl-find-r b{grid-column:1;font-size:13px;font-weight:600;line-height:1.25;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pl-find-r em{grid-column:1;font-style:normal;font-size:10.5px;color:var(--pl-mute);
     margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pl-find-r i{grid-column:2;grid-row:1/3;align-self:center;font-style:normal;
-    font-size:11px;color:var(--pl-mute);white-space:nowrap;font-variant-numeric:tabular-nums}
+    font-size:10.5px;color:var(--pl-faint);white-space:nowrap;font-variant-numeric:tabular-nums}
   .pl-find-r:hover{background:rgba(32,30,29,.05)}
   /* A row that is both something to look at and something to add: the name is the button
      that shows it on the map, the Stop control is its own target beside it. */
-  .pl-find-p{display:flex;align-items:center;gap:8px;border-top:1px solid var(--pl-hair)}
+  .pl-find-p{display:flex;align-items:center;gap:6px;border-top:1px solid var(--pl-hair)}
   .pl-find-p .pl-find-r{flex:1;border-top:0;padding-right:0}
-  .pl-find-p .poi-add{flex:none;margin-right:18px}
+  /* The two adds, sized for a list. The Nearby table gives these a 32px pill because there
+     is one per row and the row is tall; here there are two on every row, and at full size
+     they took more of the width than the names they were offering to add. */
+  .pl-find-p .poi-add{flex:none;margin-right:0;font-size:10.5px;min-height:26px;padding:3px 8px}
+  .pl-find-p .poi-add:last-child,.pl-find-p .poi-kept:last-child{margin-right:18px}
+  /* "Added" is a state, not an offer. Filled accent, it was the loudest thing in the panel
+     — a row that needs nothing further from the rider was shouting over the seven that
+     do. Same words, said quietly. */
+  .pl-find-p .poi-add.on{color:#0b5f79;background:#e8f2f6;border-color:#bcd9e3}
+  .pl-find-p .poi-add.on:hover{background:#dbeaf1}
   .pl-find-n{padding:7px 18px;font-size:11px;color:var(--pl-mute);
     border-top:1px solid var(--pl-hair)}
   /* The day a search jumped to, said for a second and then gone. */
@@ -672,9 +703,6 @@
      one line the design asks for. */
   .pl-head-2 select{max-width:120px;text-overflow:ellipsis}
   .pl-to{flex:1;min-width:0;font-size:14px}
-  .pl-pin{flex:none;margin-left:auto;display:inline-flex;align-items:center;justify-content:center;
-    width:32px;height:32px;background:#fff;color:var(--pl-link);border:1px solid var(--pl-line);
-    border-radius:999px;cursor:pointer}
   .pl-day{display:flex;gap:12px;padding:10px 18px 11px;border-bottom:1px solid var(--pl-hair)}
   .pl-day:has(.pl-row){padding:14px 18px 16px}
   .pl-day.pl-zero{background:#eae9e9}
@@ -714,6 +742,10 @@
   .pl-row{display:flex;align-items:baseline;gap:8px;margin-top:10px}
   .pl-row-w{gap:14px;flex-wrap:wrap;margin-top:9px}
   .pl-right{margin-left:auto}
+  /* A select clips its label where a line of text would ellipsise it, so a town carrying a
+     milepost, a distance and a bed count ends mid-word — "Rochester · TM 456.9 · 61 mi ·
+     40 hote". Only the shut state is affected; the list still opens with every line whole. */
+  .pl-root .pl-to{text-overflow:ellipsis}
   .pl-nobed{margin-top:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .pl-nobed-k{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#b3261e}
   .pl-nobed-none{font-size:11.5px;color:var(--pl-mute)}
@@ -829,14 +861,21 @@
   /* What kind of day it is, and what it is for. Above the riding controls, because on a
      day you are driving to the start those controls answer a question nobody asked. */
   /* The day's own note, and where there is none, the offer of one — same line, same
-     place, so the row does not jump when one is written. A button, because tapping it is
-     how you edit it. */
-  .pl-daynote{display:block;margin:2px 0 0;padding:1px 0;font-family:inherit;font-size:11px;
-    line-height:1.35;color:var(--pl-sec);font-style:italic;text-align:left;
-    background:transparent;border:0;cursor:pointer}
-  .pl-daynote:hover{color:var(--pl-link)}
-  .pl-daynote-add{color:var(--pl-faint);font-style:normal;font-size:10px;
-    letter-spacing:.04em}
+     place, so the row does not jump when one is written. It is a text field drawn as the
+     line of text it holds: no box, no border, nothing to say "form" about it until it has
+     the caret, and then a single rule underneath so you can see what you are typing into.
+     The point is that the words do not move when you tap them. */
+  .pl-daynote{display:block;width:100%;margin:2px 0 0;padding:1px 0;font-family:inherit;
+    font-size:11px;line-height:1.35;color:var(--pl-sec);font-style:italic;text-align:left;
+    background:transparent;border:0;border-bottom:1px solid transparent;border-radius:0;
+    cursor:text;-webkit-appearance:none;appearance:none}
+  .pl-daynote:hover{color:var(--pl-link);border-bottom-color:var(--pl-hair)}
+  .pl-daynote:focus{outline:none;color:var(--pl-ink);border-bottom-color:#0088b0}
+  /* The placeholder is the offer, so it has to read as one rather than as faint grey
+     nothing — and it must not go italic like the note it stands in for. */
+  .pl-daynote::placeholder{color:var(--pl-faint);font-style:normal;font-size:10px;
+    letter-spacing:.04em;opacity:1}
+  .pl-daynote-add{font-style:normal}
   /* A day of the trip spent off the trail, kept SHORT. It holds a date and a sentence and
      nothing else — given the full height of a riding day it turned two lines of "driving
      up" into a third of the screen, and a trip that starts with two of them opened on
@@ -852,12 +891,27 @@
      a rest, a day off the bike, and a day in the car. */
   .pl-kinds{flex:none;display:inline-flex;border:1px solid var(--pl-line);border-radius:999px;
     overflow:hidden;background:#fff}
-  .pl-kind{font-family:inherit;font-size:11px;padding:4px 10px;min-height:28px;
+  .pl-kind{display:inline-flex;align-items:center;gap:5px;
+    font-family:inherit;font-size:11px;padding:4px 10px;min-height:28px;
     background:transparent;color:var(--pl-mute);border:0;border-left:1px solid var(--pl-hair);
     cursor:pointer;white-space:nowrap}
+  /* Faint against the label while the kind is not chosen, full strength when it is: the
+     glyph is the part that has to survive being seen on the row later, so this is where
+     the rider learns which mark means which day. */
+  .pl-kind .ic{flex:none;opacity:.75}
+  .pl-kind.on .ic{opacity:1}
   .pl-kind:first-child{border-left:0}
   .pl-kind:hover{background:rgba(0,136,176,.08);color:var(--pl-link)}
   .pl-kind.on{background:#0088b0;color:#fff}
+  /* The kind of day, on the row. Sits on the title's baseline rather than above it, and
+     takes the muted colour so it reads as a label on the day and not as a warning about
+     it — the one glyph on this row that IS a warning is red and belongs to a different
+     class entirely. */
+  .pl-kmark{flex:none;display:inline-flex;align-items:center;color:var(--pl-mute);
+    margin-right:6px}
+  /* Insert, remove, download: three things done to the day rather than to its numbers,
+     ruled off from the fields above them. */
+  .pl-dayacts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:2px}
   .pl-root .pl-notein{flex:1;min-width:120px;font-family:inherit;font-size:12.5px;
     color:var(--pl-ink);padding:3px 2px 4px;background:transparent;border:0;
     border-bottom:1px solid rgba(32,30,29,.28);border-radius:0}
@@ -908,8 +962,22 @@
        second, where the eye is already going for the mileage rail's opposite number. */
     .pl-root .pl-top{flex-wrap:wrap;row-gap:3px;justify-content:flex-end}
     .pl-root .pl-toggle{flex:1 1 100%;min-width:100%}
-    .pl-root .pl-find-out{max-height:38vh}
+    /* The panel bleeds to the header's own edges by pulling its margins back through the
+       header's padding — and that padding is 14px here, not the 18px it is everywhere
+       else. Left at -18 it hung 4px off each side of the phone, which is a page you can
+       drag sideways. Its rows come in to match. */
+    .pl-root .pl-find-out{max-height:38vh;margin-left:-14px;margin-right:-14px}
+    .pl-root .pl-find-bar,.pl-root .pl-find-h,.pl-root .pl-find-r,
+    .pl-root .pl-find-n{padding-left:14px;padding-right:14px}
+    .pl-root .pl-find-p .pl-find-r{padding-right:0}
+    .pl-root .pl-find-p .poi-add:last-child,
+    .pl-root .pl-find-p .poi-kept:last-child{margin-right:14px}
     .pl-root .pl-daynote{margin-top:0}
+    /* Nothing is flush right on a phone. `margin-left:auto` is there to put the miles at
+       the far end of a row it shares with the hours — and when that row wraps, which it
+       does at this width, it strands the field alone against the right edge with the plan
+       reading left. */
+    .pl-root .pl-right{margin-left:0}
     /* A stop row becomes a small grid on a narrow screen. As a flex row the name sat
        between two fixed columns and a kind that can read "attraction · 0.7 mi ride out",
        which left it about a hundred pixels: first it was cut to "Erie …", then, once it
@@ -928,6 +996,38 @@
     .pl-root .pl-picked-k:empty{display:none}
     .pl-root .pl-smi{font-size:20px}
   }
+  /* ---- the sideways slide, and why 16px is not a design decision ----
+     Safari on iOS zooms the whole page in whenever a field it is about to focus has text
+     under 16px, and it does not zoom back out. That is the entire story behind "the screen
+     slides left to right when I edit a note": the note field was 12.5px, tapping it scaled
+     the page up past the width of the phone, and from then on every scroll had a sideways
+     component and the header ran off the edge. No amount of layout work fixes it, because
+     nothing is overflowing — the viewport is simply smaller than the page now.
+     So on a touch screen every field the rider can type into sits exactly on the threshold.
+     The four that are sized in ems of their own content get their widths back below.
+     Written against the same selectors the fields are styled with rather than a blanket
+     `input` — a media query adds no specificity, so `.pl-root input` sitting in here loses
+     to the plain `.pl-root .pl-notein` above and the field stays 12.5px. Equal specificity
+     and further down the sheet is what actually wins. */
+  @media (pointer:coarse){
+    input[type=text],input[type=search],input[type=date],
+    input[type=email],input[type=password],input[type=tel],input[type=url],
+    textarea,.pl-root .pl-notein,.pl-root .pl-date,.pl-root .pl-num,.pl-find input,
+    .pl-root .pl-daynote,
+    .pl-root select,.pl-root input[type=number],.map-find input,.poi-search input,
+    .poi-band input,.lyr-add-in,.ap-f>input,.gate-in{font-size:16px}
+    .pl-root input[type=number]{width:46px}
+    .pl-root .pl-num[data-plan=speed]{width:38px}
+    .poi-band input{width:76px}
+    .pl-head-2 select{max-width:150px}
+  }
+  /* Nothing in this app scrolls sideways on purpose except the outlook strip, which does
+     its own scrolling inside itself. A page that can be dragged left is always a bug here,
+     and it is worth catching at the root rather than one stray row at a time.
+     `clip`, not `hidden`: hidden turns the root into a scroll container, and a scroll
+     container between the page and a `position:sticky` element is exactly what stops it
+     sticking — the plan's header would have come unstuck from the top of the screen. */
+  html,body{overflow-x:clip}
   /* Landscape on a phone: a couple of hundred pixels of height, all told. A header that
      stays put owns most of it, so here it scrolls away with everything else. */
   @media (max-height:520px){

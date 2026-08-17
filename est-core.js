@@ -451,6 +451,15 @@ const P = {
   // Side-on, because that is the shape a car is: roofline, beltline, two wheels. A
   // three-quarter view needs detail this size cannot hold.
   car:'M3 16.4v-3.1l2.2-4.8A2.4 2.4 0 0 1 7.4 7h9.2a2.4 2.4 0 0 1 2.2 1.5l2.2 4.8v3.1|M3 13.3h18|c7.5 16.6 1.9|c16.5 16.6 1.9',
+  /* The other three kinds of day, so a run of days can be read down the rail without
+     opening any of them. A walking figure for a day off the bike — the one kind of day
+     that is defined by what you do instead, and the only human figure at this size that
+     survives being a line drawing. A mug for a rest day: not a bed, because a bed on this
+     screen already means the hotel, and every day has one of those. */
+  walk:'c12.6 3.6 2|M12.6 6.1 10.8 12.3l3.6 3.1.9 4.8|M10.8 12.3 8.3 14.8l-1 4.5'
+      +'|M13.6 8.1l3.3 1.5|M11.5 8.5 8.2 10.5',
+  mug:'M5 7.5h11v5.6a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z|M16 9.4h1.6a2.6 2.6 0 0 1 0 5.2H16'
+     +'|M8.4 2.6v2.2|M12.4 2.6v2.2',
   med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z',
   // Something to know about before you get there, not something to stop at.
   warn:'M12 3 2 20h20L12 3Z|M12 10v5|M12 17.6v.01',
@@ -1243,11 +1252,16 @@ const PLAN_STOP_EITHER_MI=3;
    and "not on the trail", so a museum day in Rochester had to be filed as a rest.
    `zero` and `off` stay the source of truth for everything that asks about miles and
    position — this only names the one distinction they cannot draw. See dayKind. */
+/* Four kinds, and a mark for each. Rest and Off the bike do the same arithmetic — no
+   miles, everything after moves a date — and side by side as two words they read as one
+   idea written twice. They are not: one is a day you take because the legs need it, the
+   other is a day you spend somewhere on purpose. The glyph is what carries that
+   difference down the list, where the labels are not shown at all. */
 const PLAN_DAY_KINDS=[
-  {k:'ride',    t:'Riding'},
-  {k:'rest',    t:'Rest'},
-  {k:'offbike', t:'Off the bike'},
-  {k:'drive',   t:'Driving'}
+  {k:'ride',    t:'Riding',       ic:'bike'},
+  {k:'rest',    t:'Rest',         ic:'mug'},
+  {k:'offbike', t:'Off the bike', ic:'walk'},
+  {k:'drive',   t:'Driving',      ic:'car'}
 ];
 const PLAN_NOTE_MAX=120;
 /* Which shape of plan record this build writes. A record with no `v` at all was
@@ -1732,6 +1746,7 @@ class TrailApp {
     /* The plan's own search. Not saved with the plan and not shared with the map's box:
        it is a question you are asking right now, not a setting. */
     this.planQ=''; this._planGeo=null; this._planGeoQ=null; this._planGeoT=null;
+    this.planFindShut=false;
     /* Which day a chosen stop goes on, when the rider has said. Absent means the day that
        rides past it — an answer derived from the milepost, so re-planning the trip carries
        the stop along with the days instead of stranding it. See stopDaysOf. */
@@ -7346,7 +7361,10 @@ class TrailApp {
      is what a rest day does; taking it back plans the tail on again until the trail runs
      out. Neither pretends the trip is still the same length. */
   setZeroDay(d, on){
-    this.planEdit(on ? 'a rest day on day '+(d+1) : 'taking back the rest day', ()=>
+    /* Named for the edit, because this is the word Undo's tooltip shows. "Taking back the
+       rest day" was written when the off switch could only ever be pressed on a rest day;
+       it deletes whichever day it is given now. */
+    this.planEdit(on ? 'a rest day above day '+(d+1) : 'day '+(d+1)+', taken out', ()=>
       this.setZeroDay_(d, on));
   }
   /* Everything keyed by a day index, moved when a day is inserted or taken out. planStay
@@ -7383,9 +7401,20 @@ class TrailApp {
       // pushed down, which is the one day the rider was certainly thinking about.
       this.shiftDayKeys(d, 1);
     } else {
+      /* Top up only a plan that was already finishing at the end of the trail. Taking out
+         a day that rides nothing leaves exactly as many miles to ride as before, so on a
+         plan that was already short the top-up is not repairing this edit — it is
+         finishing the trip, which nobody asked it to do here. Pressed on an eleven-day
+         plan that stopped at Nassau, "remove this day" handed back fourteen days. */
+      const sgn=this.dirSign(), term=sgn<0 ? 0 : TOTAL;
+      const endOf=list=>{
+        const bs=planDayBounds(list, this.planStartMile(), sgn, TOTAL);
+        return bs.length ? bs[bs.length-1].end : this.planStartMile();
+      };
+      const arrived=abs(endOf(days)-term)<=1;
       days.splice(d, 1);
       this.shiftDayKeys(d+1, -1, d);
-      this.planTopUp(days);
+      if(arrived) this.planTopUp(days);
     }
     this.planDays=days;
   }
@@ -8635,6 +8664,10 @@ class TrailApp {
     if(!pd.zero) return 'ride';
     return pd.k==='offbike' ? 'offbike' : 'rest';
   }
+  dayKindIcon(k, size){
+    const f=PLAN_DAY_KINDS.find(x=>x.k===k);
+    return f ? icon(f.ic, size||14) : '';
+  }
   dayKindLabel(k){
     const f=PLAN_DAY_KINDS.find(x=>x.k===k);
     return f ? f.t : 'Riding';
@@ -8703,6 +8736,12 @@ class TrailApp {
            only once there was something to undo, which meant the one control a rider
            wants to KNOW is there before they touch anything was invisible until after
            they had. A disabled button is a promise; an absent one is a surprise. */
+        /* One group, not five loose buttons. Left to wrap individually against a title
+           that takes the whole first line, they broke wherever they happened to run out
+           of room — two on the end of the title's line, three on the next — and the row
+           read as a spill rather than a set. As one item the whole set moves together:
+           beside the title where there is room, on its own line where there is not. */
+        +'<div class="pl-acts">'
         +'<button type="button" class="pl-hb" data-plan="undo"'+(this.planHist.length
             ? ' title="Undo '+esc(this.planHist[this.planHist.length-1].label)+'"'
             : ' disabled title="Nothing to undo yet"')+'>Undo</button>'
@@ -8725,6 +8764,7 @@ class TrailApp {
            says how that is going — which is the only part a rider cannot see for
            themselves. */
         +this.syncBtnHtml()
+        +'</div>'
       +'</div>'
       /* Folded, and shut by default. Where the trip starts, the day it starts, the pace
          and the target are four things a rider sets once and then rides — and they were
@@ -8733,9 +8773,22 @@ class TrailApp {
          left above the days is the title, the controls and the search. */
       +'<details class="pl-set"'+(this.planSetOpen?' open':'')+'>'
       +'<summary class="pl-set-sum"><span class="pl-set-k">Trip</span>'
-        +'<span class="pl-set-v">'+esc([this.shortTown(this.placeNameAt(anchor)),
+        /* Both ends of it. This line named where the trip starts and then went straight
+           to the date, which on a screen whose entire subject is Buffalo to New York left
+           out the half a rider actually checks. The far end is where the plan FINISHES,
+           which is not always the end of the trail — while days are still missing those
+           are different places, and saying "NYC" on a plan that stops at Hudson would be
+           the one line here that is not true. */
+        +'<span class="pl-set-v">'+esc([
+            this.shortTown(this.placeNameAt(anchor))+' → '
+              +(short<=0.5 ? this.destName()
+                : this.shortTown(this.placeNameAt(bounds.length
+                    ? bounds[bounds.length-1].end : anchor))),
             this.planDayLabel(0).replace(/^\w+, /,''),
-            speed+' mph', Math.round(this.wxPerDay||60)+' mi a day'].join(' · '))+'</span>'
+            /* "12 mph" beside a pace field reads as a moving average and is not one —
+               the fold underneath spells that out, and this line is the one most riders
+               will ever see. */
+            speed+' mph avg', Math.round(this.wxPerDay||60)+' mi a day'].join(' · '))+'</span>'
         +'<span class="pl-set-c" aria-hidden="true"></span></summary>'
       +'<div class="pl-head-2">'
         +'<span class="pl-field"><span class="pl-k">Starting at</span>'
@@ -8792,9 +8845,9 @@ class TrailApp {
         +' value="'+Math.round(this.wxPerDay||60)+'" data-plan="perday"'
         +' title="What Auto-plan aims at, and how many days it thinks the trip takes. It does not move days you have already planned">'
         +'<span class="pl-unit">mi</span></span>'
-        +'<button type="button" class="pl-pin" data-plan="tomap" title="See the days on the map" aria-label="See the days on the map">'
-        +'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>'
-        +'</button>'
+        /* No map button. It was a third way to reach a tab that is already one tap away
+           on the dock and one tap away from any day's own row, filed at the end of a row
+           about pace and distance where it had nothing to do with either. */
       +'</div></details>'
       /* Search, on the screen it gets answered on. Everything done here is "put that
          place on this day", and that meant leaving for Nearby, finding the place, coming
@@ -8938,7 +8991,16 @@ class TrailApp {
         +'<div class="pl-body">'
           +'<div class="pl-top">'
             +'<button type="button" class="pl-toggle" data-plan="open" data-d="'+d+'">'
+              /* Which kind of day this is, as a mark on the row. The labels for these live
+                 inside the fold, which is no help at all when the question is "which of
+                 these fifteen days am I in a car for" — that question is asked of the
+                 whole list at once, and answered by a glyph or not at all. A riding day
+                 gets none: it is what nearly every row is, and a bicycle drawn fifteen
+                 times is a pattern rather than a mark. */
               +'<span class="pl-tl">'+(warn?warnSvg:'')
+                +(kind==='ride' ? '' : '<span class="pl-kmark" aria-label="'
+                  +esc(this.dayKindLabel(kind))+'" title="'+esc(this.dayKindLabel(kind))+'">'
+                  +this.dayKindIcon(kind,15)+'</span>')
                 +'<span class="pl-t"'+(warn?' style="color:#b3261e"':'')+'>'+titleHtml+'</span>'
                 +caretSvg(open)+'</span>'
               /* `away ||` and not just `summary`: a travel day whose note is already the
@@ -8958,32 +9020,15 @@ class TrailApp {
                 +((away||summary) ? esc(summary)
                   : (plain?'':'· ')+esc(hours)+' · '+bedSvg(bedCol, bedTip, bedTxt))+'</span>'
             +'</button>'
-            /* A two-state control, labelled by what pressing it does rather than by what
-               the day currently is — "Riding" sitting there in a box read as a status
-               and nobody could see it was the way to book a rest day. */
-            /* On a day off the trail this is not a rest-day toggle — off implies zero, so
-               it sat there filled in and labelled "✓ Zero day" on a day the rider had
-               marked as driving. What it actually does to such a day is take it out of the
-               trip, which is the one thing they might want, so it says that instead. */
-            +(away
-              ? '<button type="button" class="pl-pill" data-plan="zero" data-d="'+d+'"'
-                +' title="Take this day out of the trip — every day after it moves one date'
-                +' earlier">− Remove this day</button>'
-              : '<button type="button" class="pl-pill'+(pd.zero?' on':'')+'" data-plan="zero" data-d="'+d+'"'
-                +' aria-pressed="'+(pd.zero?'true':'false')+'" title="'
-                +(pd.zero?'Take this rest day back out of the trip'
-                  : 'INSERT a rest day here — everything after it happens one date later.'
-                    +' To change what THIS day is, open it')+'">'
-                +(pd.zero?'✓ Zero day':'+ Zero day')+'</button>')
-            /* On the row, not down inside the fold. It was filed with the day's own
-               numbers on the theory that you download a day once you have finished
-               deciding what it is — but that put a file you want on the morning you ride
-               behind opening the day and scrolling past three dropdowns. Taking one day
-               to a head unit is a thing you do FROM the list. */
-            +(pd.zero ? '' : '<button type="button" class="pl-hb pl-gpxb" data-plan="gpxday"'
-              +' data-d="'+d+'" aria-label="Download day '+(d+1)+' as a GPX"'
-              +' title="Download day '+(d+1)+' as a GPX — the track plus your stops, your'
-              +' places and where you sleep">GPX</button>')
+            /* Nothing but the day itself on this row. It carried a Zero day pill and a GPX
+               button, and fifteen rows each ending in two controls is a column of buttons
+               with an itinerary somewhere behind it. Both are in the fold now.
+               The pill was also two operations wearing one label: on an ordinary day it
+               INSERTED a rest day above this one, and on a day that was already zero the
+               same button deleted it. Two verbs, one word, and neither of them the thing
+               the Rest kind does — which is to turn THIS day into a rest day without
+               changing how many days the trip has. All three exist; they are three
+               controls now, each saying which one it is. */
           +'</div>');
 
       /* What this row used to be, when it is no longer what was saved. On every day the
@@ -8993,17 +9038,17 @@ class TrailApp {
       // left with the things that have nowhere to be struck through — hours, and a day
       // that changed between riding and resting.
 
-      /* The rider's own note, on the row — and where there is none, the offer of one in
-         its place. It was only ever a field inside the fold, which is a thing you find by
-         opening every day to see what is in it. "Return the car and start riding" belongs
-         to the morning it happens on, and the row is where that morning is. On an
-         off-trail day the note is already the title, so only the offer appears. */
-      if(pd.note && !away) h.push('<button type="button" class="pl-daynote"'
-        +' data-plan="notego" data-d="'+d+'" title="Change this note">'+esc(pd.note)+'</button>');
-      else if(!(away && pd.note))
-        h.push('<button type="button" class="pl-daynote pl-daynote-add"'
-          +' data-plan="notego" data-d="'+d+'">'
-          +(away ? '+ what is this day?' : '+ note')+'</button>');
+      /* The rider's own note, on the row, and editable where it is written. It was a
+         button that opened the day's fold and moved the caret into a field down inside it
+         — three things happening because you touched some words, when the only one you
+         asked for was the caret. It is a field now, drawn as the line of text it is
+         showing: no box, no border until it has the caret, and the same words in the same
+         place before and after the tap. On an off-trail day the note is already the title
+         of the row, so there is nothing to repeat here. */
+      if(!(away && pd.note)) h.push('<input class="pl-daynote'+(pd.note?'':' pl-daynote-add')+'"'
+        +' type="text" maxlength="'+PLAN_NOTE_MAX+'" data-plan="daynote" data-d="'+d+'"'
+        +' value="'+esc(pd.note||'')+'" aria-label="A note for day '+(d+1)+'"'
+        +' placeholder="'+(away?'+ what is this day?':'+ note')+'">');
       /* A day an earlier one rode past, with the two ways out of it right there. */
       if(idle) h.push('<div class="pl-idle">'+warnSvg
         +'<span>Day '+d+' already rides all the way to '+esc(fromN)+', so there are no miles left for this one.</span>'
@@ -9135,12 +9180,17 @@ class TrailApp {
           +PLAN_DAY_KINDS.map(x=>'<button type="button" class="pl-kind'+(x.k===kind?' on':'')+'"'
             +' data-plan="daykind" data-d="'+d+'" data-k="'+x.k+'"'
             +' aria-pressed="'+(x.k===kind?'true':'false')+'"'
-            +' title="'+esc(KTIP[x.k]||'')+'">'+esc(x.t)+'</button>').join('')
+            +' title="'+esc(KTIP[x.k]||'')+'">'+icon(x.ic,13)+esc(x.t)+'</button>').join('')
           +'</span>'
-          +'<input class="pl-notein" type="text" maxlength="'+PLAN_NOTE_MAX+'"'
+          /* Only where the row has no field of its own. Every other day now carries an
+             editable note on the row itself, and two boxes holding one sentence — one of
+             them out of date for as long as you are typing into the other — is worse than
+             either. A day off the trail is the exception: its note IS the title of the
+             row, so the place to change it is in here. */
+          +(away ? '<input class="pl-notein" type="text" maxlength="'+PLAN_NOTE_MAX+'"'
             +' value="'+esc(pd.note||'')+'" data-plan="daynote" data-d="'+d+'"'
             +' aria-label="A note for day '+(d+1)+'"'
-            +' placeholder="'+(away?'Driving up from Albany — Beekman Arms':'A note for this day')+'">'
+            +' placeholder="Driving up from Albany — Beekman Arms">' : '')
         +'</div>');
         h.push('<div class="pl-row pl-row-w"'+(away?' hidden':'')+'>'
           +'<span class="pl-field"><span class="pl-k">Out</span>'
@@ -9150,6 +9200,30 @@ class TrailApp {
             +'<span class="pl-note">'+(pd.end==null?'auto · '+speed+' mph':'set by you')+'</span></span>'
           +'<span class="pl-field pl-right"><span class="pl-k">or set miles</span>'
             +'<input class="pl-num" type="number" inputmode="numeric" min="0" max="160" value="'+Math.round(b.miles)+'" data-plan="miles" data-d="'+d+'"></span>'
+        +'</div>');
+        /* The three things that are done TO a day rather than to its numbers, off the row
+           and in here where each has room to say what it is. Insert and remove change how
+           many days the trip has and move every date after them; the kind selector above
+           changes neither. Download is the odd one out and sits last, away from the two
+           that alter the plan. */
+        h.push('<div class="pl-row pl-dayacts">'
+          +'<button type="button" class="pl-hb" data-plan="zeroins" data-d="'+d+'"'
+            +' title="Put a new rest day in above this one. Day '+(d+1)+' and everything'
+            +' after it happens one date later">+ Rest day above</button>'
+          /* Only on a day that rides nothing. Taking one of those out shortens the trip by
+             a date and changes nothing else. Taking out a RIDING day leaves its miles
+             unridden, and the planner tops the trip back up at the far end to cover them —
+             so "remove this day" would quietly return a plan with MORE days in it than it
+             started with, which is not what those three words promise. To ride fewer days,
+             make them longer. */
+          +(pd.zero && days.length>1
+            ? '<button type="button" class="pl-hb" data-plan="dayrm" data-d="'+d+'"'
+              +' title="Take this day out of the trip. Everything after it moves one date'
+              +' earlier">− Remove this day</button>' : '')
+          +(pd.zero ? '' : '<button type="button" class="pl-hb pl-gpxb" data-plan="gpxday"'
+            +' data-d="'+d+'" aria-label="Download day '+(d+1)+' as a GPX"'
+            +' title="The track for this day plus your stops, your places and where you'
+            +' sleep">GPX · day '+(d+1)+'</button>')
         +'</div>');
         /* What to do with the days after this one. Lengthening a day has to put the
            difference somewhere, and there are three honest places for it to go: let
@@ -9476,15 +9550,17 @@ class TrailApp {
     const x=this.$('planQX'); if(x) x.hidden=!q;
     if(q.length<2){ out.hidden=true; out.innerHTML=''; return; }
     const h=[];
+    let n=0;
     const days=this.planDayHits(q);
     /* No counts on the headings. "Add a stop 6" is a number nobody acts on, and run up
        against its own label it reads as a typo — the list is right underneath and can be
        counted by looking at it. The only count worth printing is the one for rows that
        are NOT there, at the foot. */
-    if(days.length) h.push('<div class="pl-find-h">In your plan</div>'
+    if(days.length){ n+=days.length;
+      h.push('<div class="pl-find-h">In your plan</div>'
       +days.map(r=>'<button type="button" class="pl-find-r" data-plan="jump" data-d="'+r.d+'">'
         +'<b>'+esc(r.title)+'</b><em>'+esc(r.why)+'</em>'
-        +'<i>'+esc(r.num||'')+'</i></button>').join(''));
+        +'<i>'+esc(r.num||'')+'</i></button>').join('')); }
 
     /* The same button the Nearby table carries, so "add this to a day" is one control
        with one set of states wherever the rider meets it — including the disabled state
@@ -9497,13 +9573,16 @@ class TrailApp {
     const own=all.filter(p=>p.asset==='chris');
     const rest=all.filter(p=>p.asset!=='chris');
     const hits=own.concat(rest.slice(0, Math.max(0, PLAN_FIND_MAX-own.length)));
-    if(hits.length){
+    if(hits.length){ n+=hits.length;
       h.push('<div class="pl-find-h">Add a stop</div>'
         +hits.map(p=>{
           const what=p.asset==='chris' ? (p.kind||'your pick')
             : (catCfg(poiCat(p)).label||'');
           /* The milepost on the right in tabular figures, the same place the day rows put
-             their mileage, so a column of these can be read down rather than across. */
+             their mileage, so a column of these can be read down rather than across.
+             Bare, without the "TM" the rest of the app prefixes: in a column of eight it
+             is two characters of the same label repeated eight times, and the one row
+             that is not a milepost says "off route" and cannot be mistaken for one. */
           return '<div class="pl-find-p">'
             +'<button type="button" class="pl-find-r" data-poi="'+p.i+'" data-lat="'+p.lat+'"'
               +' data-lng="'+p.lng+'" data-z="15" title="Show it on the map">'
@@ -9511,7 +9590,7 @@ class TrailApp {
               +'<em>'+esc([what, (p.off!=null && p.off>=0.2) ? p.off.toFixed(1)+' mi off' : '',
                 p.mile!=null && this.dayPast(p.mile)>=0 ? 'day '+(this.dayPast(p.mile)+1) : '']
                 .filter(Boolean).join(' · '))+'</em>'
-              +'<i>'+esc(p.mile!=null ? mpTxt(p.mile) : 'off route')+'</i></button>'
+              +'<i>'+esc(p.mile!=null ? fmtMp(p.mile) : 'off route')+'</i></button>'
             +this.keepBtnHtml(p)+this.stopBtnHtml(p)+'</div>';
         }).join(''));
       if(all.length>hits.length)
@@ -9535,6 +9614,7 @@ class TrailApp {
         seen.push(r);
         return true;
       }).slice(0,4);
+      n+=far.length;
       if(far.length) h.push('<div class="pl-find-h">Elsewhere</div>'
         +far.map(r=>'<div class="pl-find-p">'
           +'<button type="button" class="find-r pl-find-r" data-flat="'+r.lat+'" data-flng="'+r.lng+'"'
@@ -9557,7 +9637,19 @@ class TrailApp {
 
     if(!h.length) h.push('<div class="pl-find-n">Nothing in the plan or on the route '
       +'matches “'+esc(q)+'”.</div>');
-    out.innerHTML=h.join('');
+    /* A way to put the answer down without throwing the question away. The panel can run
+       to forty rows and it opens directly on top of the plan — so the rider who has found
+       their place and now wants to look at the day it landed on had exactly one move,
+       which was to clear the box and type the whole search again afterwards. The bar stays
+       when the list folds, because a search with its results hidden and no sign of them is
+       a search box that has stopped working. */
+    const bar='<button type="button" class="pl-find-bar" data-plan="findfold"'
+      +' aria-expanded="'+(this.planFindShut?'false':'true')+'"'
+      +' title="'+(this.planFindShut?'Show what this found':'Fold these away and keep the search')+'">'
+      +'<span class="pl-find-bn">'+(n ? n+(n===1?' match':' matches') : 'Nothing found')+'</span>'
+      +'<span class="pl-find-bq">'+esc(q)+'</span>'
+      +caretDown(!this.planFindShut)+'</button>';
+    out.innerHTML=bar+(this.planFindShut ? '' : h.join(''));
     out.hidden=false;
   }
   /* Open the day and put it under the eye. Centred rather than scrolled to the top,
@@ -9633,6 +9725,9 @@ class TrailApp {
     el.addEventListener('input',e=>{
       if(!e.target || e.target.id!=='planQ') return;
       this.planQ=e.target.value;
+      // A new question re-opens the answer. Folding one set of results away is not a
+      // standing instruction to hide the next set.
+      this.planFindShut=false;
       this.renderPlanFind();
     });
     /* A phone keyboard's Go key on a search field submits nothing here — there is no
@@ -9668,7 +9763,8 @@ class TrailApp {
          found, and the question has been answered. */
       else if(act==='jump'){ this.planQ=''; this.planOpenDay=d;
         this.renderPlan(); this.planScrollTo(d); }
-      else if(act==='qclear'){ this.planQ=''; this.renderPlanFind();
+      else if(act==='findfold'){ this.planFindShut=!this.planFindShut; this.renderPlanFind(); }
+      else if(act==='qclear'){ this.planQ=''; this.planFindShut=false; this.renderPlanFind();
         const q=this.$('planQ'); if(q){ q.value=''; q.focus(); } }
       /* ---- sync ----
          One control: the cloud. Every edit saves and sends itself, so the only manual
@@ -9681,18 +9777,21 @@ class TrailApp {
             /* checkSync already loaded anything newer and said so; repeating "up to date"
                over the top of that would be the one lie in the sequence. */
             : this.syncNews || 'Up to date.'); }); }
-      else if(act==='tomap'){ this.showTab('map'); this.planFit(); }
       else if(act==='open'){ this.planOpenDay=this.planOpenDay===d?null:d; this.renderPlan(); }
-      /* Opens the day AND puts the caret in the note, because the rider tapped the note.
-         Making them find the field again inside a fold they did not ask to open is the
-         thing that kept notes from being used at all. */
-      else if(act==='notego'){
-        this.planOpenDay=d; this.renderPlan();
-        const el2=this.$('planOut');
-        const f=el2 && el2.querySelector('.pl-day[data-d="'+d+'"] [data-plan="daynote"]');
-        if(f){ f.focus(); f.setSelectionRange(f.value.length, f.value.length);
-          f.scrollIntoView({block:'center'}); } }
-      else if(act==='zero'){ this.setZeroDay(d, !this.planP()[d].zero); this.renderPlan(); }
+      /* No "go to the note" action any more: the note on the row IS the field, so tapping
+         it puts the caret in it and nothing else happens. */
+      /* Two verbs, two buttons. One control that inserted on some days and deleted on
+         others could not be labelled honestly, and the label it settled on ("Zero day")
+         named neither. */
+      else if(act==='zeroins'){ this.setZeroDay(d, true); this.renderPlan(); this.drawPlanLayer();
+        this.status('A rest day above day '+(d+1)+' — everything from there happens a day later.'); }
+      else if(act==='dayrm'){
+        if(this.planP().length<2){ this.status('That is the only day left.'); return; }
+        if(!this.planP()[d].zero){
+          this.status('Day '+(d+1)+' has miles on it — take those off it first, or the trip '
+            +'grows a day at the far end to ride them.'); return; }
+        this.setZeroDay(d, false); this.renderPlan(); this.drawPlanLayer();
+        this.status('Day '+(d+1)+' is out — everything after it moves a date earlier. Undo puts it back.'); }
       else if(act==='lodge'){ this.planOpenLodge=this.planOpenLodge===d?null:d;
         if(this.planOpenLodge!==d) this.planMiniDay=null;
         this.renderPlan(); }
