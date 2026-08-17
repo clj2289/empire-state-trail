@@ -654,6 +654,10 @@
     border:1px solid rgba(32,30,29,.22);border-radius:999px;padding:6px 13px;
     cursor:pointer;margin-top:9px}
   .acct-out:hover{background:rgba(32,30,29,.06)}
+  /* Which build, and from where. Small and last — it is only ever read when two
+     devices disagree, and then it is the first thing worth knowing. */
+  .acct-build{margin-top:10px;font-size:10.5px;line-height:1.5;
+    color:var(--color-neutral-500);font-variant-numeric:tabular-nums}
   .pl-field{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
   .pl-k{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--pl-faint);flex:none}
   .pl-unit{font-size:11.5px;color:var(--pl-mute)}

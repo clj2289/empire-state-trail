@@ -1873,7 +1873,7 @@ class TrailApp {
        rest of init still runs underneath — so signing in reveals an app that is already
        built rather than one that then starts building. */
     this.wireGate(); this.showGate();
-    this.wireAccount(); this.renderAccount();
+    this.wireAccount(); this.renderAccount(); this.checkBuild(); this.wireHashPlan();
     // Before initMap, so the plan's legs are on the map the first time it draws — and
     // after loadPrefs, because a saved plan carries the pace it was built at.
     this.loadPlan();
@@ -7707,7 +7707,8 @@ class TrailApp {
     if(!a){
       el.innerHTML='<div class="set-lbl">Account</div>'
         +'<div class="acct-b">Not signed in. The ride plan is on this device only.</div>'
-        +'<button type="button" class="acct-out" data-acct="in">Sign in</button>';
+        +'<button type="button" class="acct-out" data-acct="in">Sign in</button>'
+        +this.buildLine();
       return;
     }
     const st=this.syncState==='err' ? 'Last sync failed — '+this.syncMsg
@@ -7721,7 +7722,29 @@ class TrailApp {
       +'<div class="acct-b">Sign in with the same email on another device and it keeps the '
         +'same plan. Nothing else this app holds — your own layers, the map, what you have '
         +'passed — ever leaves the device it is on.</div>'
-      +'<button type="button" class="acct-out" data-acct="out">Sign out</button>';
+      +'<button type="button" class="acct-out" data-acct="out">Sign out</button>'
+      +this.buildLine();
+  }
+  /* Which build this device is actually running, and where it came from. Two devices
+     disagreeing about the same plan is nearly always one of them running something older,
+     and until this line existed there was no way to ask which — the answer took a hash of
+     a file nobody could see. The date is the app's own file as the server last changed
+     it, so it stays honest with no build step. */
+  buildLine(){
+    return '<div class="acct-b acct-build">'+esc(this.buildStamp||'Checking this build\u2026')
+      +'<br>'+esc(location.origin)+'</div>';
+  }
+  checkBuild(){
+    fetch('est-core.js', {method:'HEAD', cache:'no-store'}).then(r=>{
+      const t=r.headers.get('last-modified');
+      const d=t ? new Date(t) : null;
+      this.buildStamp = d && !isNaN(d)
+        ? 'Build of '+d.toLocaleDateString([], {month:'short', day:'numeric'})
+          +' '+d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})
+        : 'Build date unavailable';
+      if(this.screen==='settings') this.renderAccount();
+    }).catch(()=>{ this.buildStamp='Build date unavailable (offline)';
+      if(this.screen==='settings') this.renderAccount(); });
   }
   wireAccount(){
     const el=this.$('acctOut'); if(!el || el._wired) return;
@@ -7921,6 +7944,44 @@ class TrailApp {
   /* A shared link wins over the saved plan, because someone who just opened one is
      asking to see it. Restored days are re-snapped onto their towns first — see
      snapPlanToTowns for why that can't wait until something asks. */
+  /* A link pasted into a tab that already has the app open. Changing only the fragment is
+     a same-document navigation: nothing reloads, loadPlan never runs again, and the link
+     appears to do nothing at all — no plan, no error, no sign it was even noticed. That is
+     the likeliest way somebody sends themselves a plan and concludes the link is broken. */
+  wireHashPlan(){
+    if(this._hashWired) return;
+    this._hashWired=true;
+    window.addEventListener('hashchange',()=>{
+      if(location.hash.indexOf('plan=')<0) return;
+      const p=decodePlan(location.hash);
+      if(!p){ this.status('That link did not have a plan in it that I could read.'); return; }
+      // Undoable, because it replaces whatever this device was holding.
+      this.planHist.push({snap:this.planSnapshot(), label:'the plan this device had'});
+      this.planRedo.length=0;
+      this.applyUrlPlan(p);
+      this.showTab('plan'); this.renderPlan(); this.drawPlanLayer();
+      this.status('Loaded the plan from that link — '+p.days.length+' days'
+        +(this.planStart?', starting '+this.planDayLabel(0):'')+'. Undo puts back what was here.');
+    });
+  }
+  /* One reader for a plan that arrived in a URL, so the boot path and a pasted link cannot
+     drift into understanding the same link two different ways. */
+  applyUrlPlan(p){
+    if(isFinite(p.speed) && p.speed>0) this.avgSpeed=p.speed;
+    if(isFinite(p.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,p.anchorTM));
+    this.planDays=p.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
+      start:isFinite(pd.start)?pd.start:this.wxRideStart, end:isFinite(pd.end)?pd.end:null,
+      zero:!!pd.zero, off:!!pd.off,
+      note:String(pd.note==null?'':pd.note).slice(0,PLAN_NOTE_MAX)})).slice(0,PLAN_DAYS_MAX);
+    this._planAuto=false;
+    if(p.stay && typeof p.stay==='object') this.planStay={...p.stay};
+    if(p.picked && typeof p.picked==='object') this.planPicked={...p.picked};
+    this.planStopDays=this.cleanStopDays(p.stopDays);
+    this.planStart=this.cleanDate(p.startDate);
+    this.planSnap();
+    this.planBaseline();
+    this.savePlan();
+  }
   loadPlan(){
     const fromUrl=location.hash.indexOf('plan=')>=0 ? decodePlan(location.hash) : null;
     let saved=fromUrl;
