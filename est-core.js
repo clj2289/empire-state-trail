@@ -1158,26 +1158,31 @@ const PLACE_LIKE=/\block\b|lock\s*\d+|state park|campground|camp\b|marina|preser
    else rather than a second taxonomy invented for this screen. */
 const PLAN_STOP_CAT={'chris':'your pick', 'nb-grocery':'resupply', 'nb-food':'food',
   'nb-convenience':'shop', 'nb-water':'water', 'nb-bike':'bike shop',
-  'nb-pharmacy':'pharmacy', 'Attraction':'sight'};
+  'nb-pharmacy':'pharmacy', 'Attraction':'attraction'};
 /* One colour per kind of stop, so a list of fourteen is scanned rather than read. Kept
    clear of the wind palette's red / amber / green, which mean head / cross / tail
    everywhere else in this app and must not start meaning "lunch" here. */
 const PLAN_STOP_COL={'your pick':'#6a4fae', 'resupply':'#0f6a8b', 'food':'#a2551f',
   'shop':'#605d5d', 'water':'#2b6a84', 'bike shop':'#4a7a3a', 'pharmacy':'#8a3a3a',
-  'sight':'#6a4fae'};
+  'attraction':'#6a4fae'};
 /* Worth a detour, in order. Your own picks first because you chose them, then the things
    that are only there once — a sight, a lock, water — and the interchangeable ones last:
    there is another coffee up the road, there is not another aqueduct. */
-const PLAN_STOP_RANK={'your pick':0, 'sight':1, 'water':2, 'bike shop':3, 'pharmacy':4,
+const PLAN_STOP_RANK={'your pick':0, 'attraction':1, 'water':2, 'bike shop':3, 'pharmacy':4,
   'resupply':5, 'food':6, 'shop':7};
 /* What one of your own places actually IS. "Your pick" says who chose it, not what it is,
    and a day listing four of them in the same violet says nothing about which one is
    lunch. Every kind here is one the planner already knows, so a place you call water gets
    the corridor's water colour and its drop, and none of this is a second taxonomy.
    'your pick' stays first because it is the honest answer before you have said anything. */
-const MY_KINDS=['your pick','food','water','resupply','shop','bike shop','pharmacy','sight'];
+const MY_KINDS=['your pick','food','water','resupply','shop','bike shop','pharmacy','attraction'];
 const KIND_ICON={'your pick':'target', 'food':'food', 'water':'drop', 'resupply':'cart',
-  'shop':'store', 'bike shop':'bike', 'pharmacy':'med', 'sight':'star'};
+  'shop':'store', 'bike shop':'bike', 'pharmacy':'med', 'attraction':'star'};
+/* What a kind used to be called. Records already on the rider's account carry the old
+   word, and a kind that is no longer in MY_KINDS is dropped back to 'your pick' — which
+   would quietly un-say something they had said. */
+const KIND_WAS={'sight':'attraction'};
+const cleanKind=k=>{ const v=KIND_WAS[k]||k; return MY_KINDS.indexOf(v)>0 ? v : ''; };
 const PLAN_STOP_OFF_MI=1.5;
 /* Below this a stop is on the route for all practical purposes, and asking a router to
    trace two hundred yards is a network call to be told what you can already see. */
@@ -1189,6 +1194,9 @@ const PLAN_STOP_MAX=14;
    on the way out, and which of those it is is not the app's to decide. Three miles: far
    enough to cover a town, near enough that it is still somewhere you ride past. */
 const PLAN_STOP_EITHER_MI=3;
+/* A day's own note. Long enough for "drive up from Albany, Beekman Arms, book the
+   shuttle" and short enough that a row stays a row. */
+const PLAN_NOTE_MAX=120;
 /* How many matches the plan's own search box shows before it stops. It sits under a
    sticky header on the screen it edits, so it has to leave the plan visible — a panel
    that fills the phone is a second screen, and the rider came here to see their days. */
@@ -1209,7 +1217,12 @@ function decodeSavedPlan(raw){
   try{
     const o=JSON.parse(raw);
     if(o && Array.isArray(o.days) && o.days.length)
+      /* Every field the loader knows how to read has to be named here — this whitelist is
+         the only way in from disk or a shared link. Anything added to planRecord and not
+         added here is written on every save and silently dropped on every load, which is
+         indistinguishable from not being saved at all. */
       return {days:o.days, speed:o.speed, anchorTM:o.anchorTM, stay:o.stay, picked:o.picked,
+        stopDays:o.stopDays, startDate:o.startDate,
         savedAt:isFinite(o.savedAt)?+o.savedAt:0};
   }catch(e){}
   return null;
@@ -1566,6 +1579,10 @@ class TrailApp {
     // forecast field it was assembled from — kept so a change to the plan re-folds it
     // without re-fetching. Zero days are a per-day flag on the ride plan now.
     this.wxRideStart=8; this.wxRideEnd=17; this.wxStartShift=0;
+    /* The day the trip begins, 'YYYY-MM-DD'. Null until someone says, and then it is
+       part of the plan rather than of this device — it syncs, and it is what every
+       date on the screen counts from. See planStartDate. */
+    this.planStart=null;
     this.wxData=null; this.wxGrids=null; this.wxGridCache={};
     /* The ride plan — see the PLAN_KEY block up top. planDays is the per-day record the
        Outlook, the plan tab and the map all read; planAnchor is the trail mile day one
@@ -7017,22 +7034,42 @@ class TrailApp {
     this.planEdit(on ? 'a rest day on day '+(d+1) : 'taking back the rest day', ()=>
       this.setZeroDay_(d, on));
   }
+  /* Everything keyed by a day index, moved when a day is inserted or taken out. planStay
+     is keyed BY day; planStopDays is keyed by stop and holds day indices in its VALUES,
+     so the two move differently and both have to move — otherwise inserting a rest day
+     leaves the hotel booked for Tuesday sitting on Monday and the stops chosen for
+     Tuesday on Monday with it. `drop` is the index that no longer exists at all; an
+     assignment to it is dropped, which puts that stop back on whichever day rides past
+     it, and that is the right answer for a day that is gone. */
+  shiftDayKeys(from, by, drop){
+    const stay={};
+    Object.keys(this.planStay||{}).forEach(k=>{
+      const i=+k;
+      if(i===drop) return;
+      stay[i>=from ? i+by : i]=this.planStay[k];
+    });
+    this.planStay=stay;
+    const sd={};
+    Object.keys(this.planStopDays||{}).forEach(k=>{
+      const v=(this.planStopDays[k]||[])
+        .filter(i=>i!==drop).map(i=>i>=from ? i+by : i).filter(i=>i>=0)
+        .filter((x,j,a)=>a.indexOf(x)===j).sort((a,b)=>a-b);
+      if(v.length) sd[k]=v;
+    });
+    this.planStopDays=sd;
+  }
   setZeroDay_(d, on){
-    const days=this.planP().slice(), stay={...this.planStay};
-    const shift=(from,by)=>{
-      const out={};
-      Object.keys(stay).forEach(k=>{ const i=+k; out[i>=from ? i+by : i]=stay[k]; });
-      return out;
-    };
+    const days=this.planP().slice();
     if(on){
       days.splice(d, 0, {miles:0, start:this.wxRideStart, end:null, zero:true});
       if(days.length>PLAN_DAYS_MAX) days.length=PLAN_DAYS_MAX;
-      this.planStay=shift(d, 1);
-      delete this.planStay[d];
+      // No `drop` on an insert: nothing has gone, everything from d onward has just moved
+      // along one. Passing d here threw away the stops and the bed on the day being
+      // pushed down, which is the one day the rider was certainly thinking about.
+      this.shiftDayKeys(d, 1);
     } else {
       days.splice(d, 1);
-      this.planStay=shift(d+1, -1);
-      delete this.planStay[d];
+      this.shiftDayKeys(d+1, -1, d);
       this.planTopUp(days);
     }
     this.planDays=days;
@@ -7072,7 +7109,7 @@ class TrailApp {
      there to compare against — it can say which days an edit dragged along with it. */
   planSnapshot(){
     return JSON.stringify({d:this.planP(), s:this.planStay, p:this.planPicked,
-      sd:this.planStopDays, a:this.planStartMile(), v:this.avgSpeed});
+      sd:this.planStopDays, a:this.planStartMile(), v:this.avgSpeed, t:this.planStart});
   }
   // A plan nobody has edited yet is not "unsaved work"; this is what says so.
   planBaseline(){ this.planSavedSnap=this.planSnapshot(); }
@@ -7102,6 +7139,7 @@ class TrailApp {
     this.planDays=s.d.slice(); this.planStay=Object.assign({}, s.s);
     this.planPicked=Object.assign({}, s.p);
     this.planStopDays=Object.assign({}, s.sd);
+    this.planStart=this.cleanDate(s.t);
     if(isFinite(s.a)) this.planAnchor=s.a;
     if(isFinite(s.v) && s.v>0) this.avgSpeed=s.v;
     return true;
@@ -7138,7 +7176,7 @@ class TrailApp {
   planRecord(){
     return {days:this.planP(), speed:this.avgSpeed, anchorTM:this.planStartMile(),
       stay:this.planStay, picked:this.planPicked, stopDays:this.planStopDays,
-      savedAt:Date.now()};
+      startDate:this.planStart, savedAt:Date.now()};
   }
   savePlan(opt){
     const rec=this.planRecord();
@@ -7442,10 +7480,12 @@ class TrailApp {
     if(isFinite(p.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,p.anchorTM));
     this.planDays=p.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
       start:isFinite(pd.start)?pd.start:this.wxRideStart, end:isFinite(pd.end)?pd.end:null,
-      zero:!!pd.zero})).slice(0,PLAN_DAYS_MAX);
+      zero:!!pd.zero, off:!!pd.off,
+      note:String(pd.note==null?'':pd.note).slice(0,PLAN_NOTE_MAX)})).slice(0,PLAN_DAYS_MAX);
     this.planStay=(p.stay && typeof p.stay==='object') ? {...p.stay} : {};
     this.planPicked=(p.picked && typeof p.picked==='object') ? {...p.picked} : {};
     this.planStopDays=this.cleanStopDays(p.stopDays);
+    this.planStart=this.cleanDate(p.startDate);
     this.planSnap();
     if(this.planSnapshot()!==before){
       this.planWasSnap=before;
@@ -7565,6 +7605,11 @@ class TrailApp {
         this.authMsg=made ? 'account made — now untick Authentication → Settings → '
           +'User actions → Enable create (sign-up), so nobody else can make one' : '';
         this.showGate();
+        /* The More tab is built once, on the way in, and sat there saying "Not signed in.
+           The ride plan is on this device only." for the rest of the session — the one
+           screen whose whole job is to report this state was the one screen that never
+           heard it had changed. Sign OUT redrew it; sign in did not. */
+        this.renderAccount();
         this.renderPlan();
         if(this.syncOn()){
           this.checkSync(true).then(()=>this.syncChanged());
@@ -7831,11 +7876,13 @@ class TrailApp {
       if(isFinite(saved.anchorTM)) this.planAnchor=Math.max(0,Math.min(TOTAL,saved.anchorTM));
       this.planDays=saved.days.map(pd=>({miles:Math.max(0,Math.min(200,+pd.miles||0)),
         start:isFinite(pd.start)?pd.start:this.wxRideStart, end:isFinite(pd.end)?pd.end:null,
-        zero:!!pd.zero})).slice(0,PLAN_DAYS_MAX);
+        zero:!!pd.zero, off:!!pd.off,
+        note:String(pd.note==null?'':pd.note).slice(0,PLAN_NOTE_MAX)})).slice(0,PLAN_DAYS_MAX);
       this._planAuto=false;
       if(saved.stay && typeof saved.stay==='object') this.planStay={...saved.stay};
       if(saved.picked && typeof saved.picked==='object') this.planPicked={...saved.picked};
       this.planStopDays=this.cleanStopDays(saved.stopDays);
+      this.planStart=this.cleanDate(saved.startDate);
       this.planSnap();
     } else { this.planRebuild(); this._planAuto=true; }
     this.planBaseline();
@@ -7874,9 +7921,40 @@ class TrailApp {
      is the decision a tourer actually makes; the miles are the consequence. The mileage
      box is still there, pushed right and named "or set miles", for the day that ends
      somewhere with no name. */
-  planDateFor(d){
+  /* ---------- when the trip starts ----------
+     A date, not an offset from today. The plan used to begin on whatever day you happened
+     to be looking at it, which is right for the week you ride and useless for the eleven
+     months before that: a trip set for 20 September has to still say 20 September
+     tomorrow. Held as 'YYYY-MM-DD' and parsed into local midnight by hand — new
+     Date('2026-09-20') is parsed as UTC, which is the day before in every timezone this
+     trail is in. Null means the plan floats on today, which is the honest default before
+     anyone has said otherwise. */
+  planStartDate(){
+    const s=String(this.planStart||'');
+    const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if(m){
+      const dt=new Date(+m[1], +m[2]-1, +m[3]);
+      if(dt.getFullYear()===+m[1] && dt.getMonth()===+m[2]-1) return dt;
+    }
     const now=new Date();
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate()+(this.wxStartShift||0)+d);
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()+(this.wxStartShift||0));
+  }
+  planStartStr(){
+    const d=this.planStartDate();
+    const p=n=>String(n).padStart(2,'0');
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+  }
+  /* Which day of the plan today is — negative before the trip, past the end after it.
+     Everything that says "today" on this screen asks this, so a plan set for September
+     stops claiming that today is day one of it. */
+  todayIndex(){
+    const now=new Date();
+    const t0=new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    return Math.round((t0-this.planStartDate().getTime())/86400000);
+  }
+  planDateFor(d){
+    const s=this.planStartDate();
+    return new Date(s.getFullYear(), s.getMonth(), s.getDate()+d);
   }
   planDayLabel(d){
     return this.planDateFor(d).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
@@ -7890,7 +7968,11 @@ class TrailApp {
     const days=this.planP(), bounds=this.planBounds(), bedded=this.beddedTowns();
     const sgn=this.dirSign(), speed=this.avgSpeed>0?this.avgSpeed:12;
     const tot=bounds.reduce((m,b,i)=>m+(days[i].zero?0:b.miles),0);
-    const zs=days.filter(x=>x.zero).length;
+    /* A rest day and a day you are not on the trail for are both "no miles today" and
+       they are not the same day at all — counting them together told a rider planning two
+       driving days and one rest that they had booked three rest days. */
+    const zs=days.filter(x=>x.zero && !x.off).length;
+    const offN=days.filter(x=>x.off).length;
     const ridden=bounds.filter((b,i)=>!days[i].zero && b.miles>0.5).length;
     const anchor=this.planStartMile();
     /* What the plan looked like when it was last saved, and how many days now differ from
@@ -7924,6 +8006,11 @@ class TrailApp {
         +'<div class="pl-title-wrap"><div class="pl-title">Ride plan</div>'
         +'<div class="pl-sum">'+ridden+(ridden===1?' riding day · ':' riding days · ')+Math.round(tot)+' mi'
           +(zs?' · '+zs+' zero':'')
+          +(offN?' · '+offN+' off the trail':'')
+          /* When it runs, under how long it runs for. Two dates a rider can check against
+             a booking without counting rows. */
+          +(days.length ? ' · '+esc(this.planDayLabel(0).replace(/^\w+, /,''))
+            +(days.length>1 ? ' – '+esc(this.planDayLabel(days.length-1).replace(/^\w+, /,'')) : '') : '')
           +(short>0.5 ? '<span class="pl-shortk"> · '+Math.round(short)+' mi short of '
             +esc(this.destName())+'</span>' : '')+'</div></div>'
         /* Undo lives up here with the other controls rather than in a band across the
@@ -7975,6 +8062,14 @@ class TrailApp {
               .map(t=>'<option value="'+t.tm+'">'+esc(t.n)+' · '+mpTxt(t.tm)+'</option>').join('')
             +'</select>';
         })()+'</span>'
+        /* The day it begins. Beside where it begins, because they are the same decision
+           asked twice, and on the screen that counts every other date from it. A native
+           date field, so the phone gives its own picker and nobody types a format. */
+        +'<span class="pl-field"><span class="pl-k">Starting on</span>'
+        +'<input class="pl-date" type="date" value="'+esc(this.planStartStr())+'"'
+        +' data-plan="startdate" title="The day you set off. Every date on this screen '
+        +'counts from it'+(this.planStart?'':' — not set, so it is following today')+'">'
+        +'</span>'
         /* Named for what it is. "Pace" next to "mph" reads as the moving average a bike
            computer shows, and it is not that — the plan turns this straight into the hour
            you get in, so lunch, locks, photographs and a puncture are all already inside
@@ -8064,6 +8159,11 @@ class TrailApp {
          earlier one rode straight past — "Nothing left to ride · the trail ends at Albion"
          while the day after it rides out of Albion was the plan telling a flat lie about
          itself. That one is a warning, with the way out of it on the row. */
+      /* A day of the trip you are not on the trail for: driving up to the start, a night
+         somewhere before it begins, the drive home. It is a real day — it takes a date and
+         pushes everything after it along — but it rides nothing, so it carries zero with
+         it and every "no miles today" test below keeps working untouched. */
+      const away=!!pd.off;
       const term=sgn<0 ? 0 : TOTAL;
       const spent=!pd.zero && b.miles<0.5;
       const done=spent && abs(b.start-term)<=1;
@@ -8097,8 +8197,10 @@ class TrailApp {
       /* Three states for one line. A proposal rules through what this day says now and
          puts what it would say beside it; unsaved work rules through what the SAVED plan
          said and puts what it says now beside it; otherwise it is just the day. */
-      const titleHtml=
-        (prev && !plain && nb && nd && !nd.zero)
+      /* An off-trail day's own words in the title, because "Albion → Albion" is not what
+         that day is. What the rider typed is the only thing that day is about. */
+      const titleHtml= away ? esc(pd.note || 'Off the trail')
+        : (prev && !plain && nb && nd && !nd.zero)
           ? esc(this.placeNameAt(nb.start))+' → '+diff(toN, this.planEndName(nb.end), 'pl-ins')
         : (!prev && !plain && wasB && wasD && !wasD.zero)
           ? esc(fromN)+' → '+diff(this.planEndName(wasB.end), toN, 'pl-ins-w')
@@ -8111,7 +8213,12 @@ class TrailApp {
       const bedTxt=fin ? 'the end of the trail'
         : stay ? stay.name
         : (atT&&(atT.hotel||atT.camp) ? this.bedWord(atT) : 'no beds');
-      const summary=pd.zero ? 'Rest day'
+      /* Always a phrase, never the hours: a day you are driving up on has no wheels-out
+         time and no use for a count of the hotels along a stretch of trail you are not on.
+         The note is the title on these days, so this line is free to say what kind of day
+         it is. */
+      const summary=away ? 'Not on the trail this day'
+        : pd.zero ? 'Rest day'
         : done ? 'The trail ends at '+fromN
         : idle ? 'An earlier day already reaches '+fromN
         : '';
@@ -8123,7 +8230,8 @@ class TrailApp {
         : (atT&&(atT.hotel||atT.camp)) ? 'Somewhere to sleep is pinned where day '+(d+1)+' ends'
         : 'No beds pinned where day '+(d+1)+' ends';
 
-      h.push('<div class="pl-day'+(pd.zero?' pl-zero':'')+(gone?' pl-day-del':'')+'" data-d="'+d+'">'
+      h.push('<div class="pl-day'+(pd.zero&&!away?' pl-zero':'')+(away?' pl-away':'')
+        +(gone?' pl-day-del':'')+'" data-d="'+d+'">'
         /* Which day of the trip, under the date. It goes in the rail because the rail
            already had the slack — the hairline below it is a flex filler, so the number
            costs the row nothing it was using. */
@@ -8153,10 +8261,18 @@ class TrailApp {
             /* A two-state control, labelled by what pressing it does rather than by what
                the day currently is — "Riding" sitting there in a box read as a status
                and nobody could see it was the way to book a rest day. */
-            +'<button type="button" class="pl-pill'+(pd.zero?' on':'')+'" data-plan="zero" data-d="'+d+'"'
-              +' aria-pressed="'+(pd.zero?'true':'false')+'" title="'
-              +(pd.zero?'Ride this day instead':'Make this a rest day')+'">'
-              +(pd.zero?'✓ Zero day':'+ Zero day')+'</button>'
+            /* On a day off the trail this is not a rest-day toggle — off implies zero, so
+               it sat there filled in and labelled "✓ Zero day" on a day the rider had
+               marked as driving. What it actually does to such a day is take it out of the
+               trip, which is the one thing they might want, so it says that instead. */
+            +(away
+              ? '<button type="button" class="pl-pill" data-plan="zero" data-d="'+d+'"'
+                +' title="Take this day out of the trip — every day after it moves one date'
+                +' earlier">− Remove this day</button>'
+              : '<button type="button" class="pl-pill'+(pd.zero?' on':'')+'" data-plan="zero" data-d="'+d+'"'
+                +' aria-pressed="'+(pd.zero?'true':'false')+'" title="'
+                +(pd.zero?'Ride this day instead':'Make this a rest day')+'">'
+                +(pd.zero?'✓ Zero day':'+ Zero day')+'</button>')
             /* On the row, not down inside the fold. It was filed with the day's own
                numbers on the theory that you download a day once you have finished
                deciding what it is — but that put a file you want on the morning you ride
@@ -8176,6 +8292,9 @@ class TrailApp {
       // that changed between riding and resting.
       const chg=prev ? '' : this.planDayNote(d, was);
       if(chg) h.push('<div class="pl-chg"><span class="pl-chg-d"></span>'+esc(chg)+'</div>');
+      /* The rider's own note, on the row. On an off-trail day it is already the title, so
+         it would only be said twice. */
+      if(pd.note && !away) h.push('<div class="pl-daynote">'+esc(pd.note)+'</div>');
       if(gone) h.push('<div class="pl-chg pl-chg-x"><span class="pl-chg-d"></span>this day goes</div>');
       /* A day an earlier one rode past, with the two ways out of it right there. */
       if(idle && !prev) h.push('<div class="pl-idle">'+warnSvg
@@ -8215,21 +8334,23 @@ class TrailApp {
            a number for somewhere the rider has never been, and the row was inert — the
            only way to see where it actually was ran through opening the day, opening the
            stop picker, and finding it again in a list of fourteen. */
-        if(mine.length) h.push('<ol class="pl-picked">'+mine.map(x=>{
+        if(mine.length) h.push('<ol class="pl-picked">'+mine.map((x,n)=>{
           const into=(x.mile-b.start)*sgn;
           const also=this.stopDaysOf(x.key, x.mile).filter(y=>y!==d);
           return '<li><button type="button" class="pl-picked-b"'
             +(x.poi ? ' data-poi="'+x.poi.i+'"' : '')
             +' data-lat="'+x.lat+'" data-lng="'+x.lng+'" data-z="15"'
             +' title="Show '+esc(x.name)+' on the map">'
-          /* The two mileages side by side, because they are one thought: where the place
-             is on the trail, and how far into today that is. Split either side of the
-             name they were two lookups — read the milepost, cross the row, read the
-             other, hold both. */
-          +'<span class="pl-picked-m">'+esc(mpTxt(x.mile))+'</span>'
-          +'<span class="pl-picked-i">'+(pd.zero ? 'rest day'
-            : (into>=0.05 ? fmtMi(into)+' mi in' : 'at the start'))+'</span>'
+          /* Numbered, so two people on two bikes can say "stop 3" and mean the same place.
+             In ridden order, which is the order they come up in. */
+          +'<span class="pl-picked-no">'+(n+1)+'</span>'
+          /* Ride miles first and in the dark ink; the trail mile after the name and muted.
+             All day the question is how far into today a place is — the milepost is how
+             you know you have arrived at it, which matters once, at the turning. */
+          +'<span class="pl-picked-i">'+(pd.zero||away ? '—'
+            : (into>=0.05 ? fmtMi(into)+' mi' : 'start'))+'</span>'
           +'<span class="pl-picked-n">'+esc(x.name)+'</span>'
+          +'<span class="pl-picked-m">'+esc(mpTxt(x.mile))+'</span>'
           +'<span class="pl-picked-k">'+esc(x.kind)
             +(x.poi ? (this.detourTxt(x.poi) ? ' · '+esc(this.detourTxt(x.poi)) : '')
                     : ((x.off!=null && x.off>=0.2) ? ' · '+x.off.toFixed(1)+' mi off' : ''))
@@ -8283,12 +8404,27 @@ class TrailApp {
               : '⚠ '+mpTxt(b.end)+' · '+Math.round(b.miles)+' mi · between towns, no beds')
           +'</option>'+opts;
 
-        h.push('<div class="pl-row"><span class="pl-k">Ride to</span>'
+        if(!away) h.push('<div class="pl-row"><span class="pl-k">Ride to</span>'
           +'<select class="pl-sel pl-to" data-plan="to" data-d="'+d+'"'+(pd.zero?' disabled':'')+'>'+opts+'</select></div>');
 
         const hrOpts=(list,cur)=>list.map(v=>'<option value="'+v+'"'+(Math.round(cur)===v?' selected':'')+'>'
           +this.planClock(v)+'</option>').join('');
-        h.push('<div class="pl-row pl-row-w">'
+        /* What kind of day it is, and what it is for, above the riding controls — because
+           on a day you are driving up to the start, the riding controls are answering a
+           question nobody asked. The note is on every day, not only these: "book the
+           shuttle" belongs on a riding day too. */
+        h.push('<div class="pl-row pl-row-w pl-dayrow">'
+          +'<label class="pl-check" title="A day of the trip you are not on the trail for —'
+            +' driving up, a night before it starts, the drive home. It still takes a date'
+            +' and still moves everything after it, it just rides nothing">'
+            +'<input type="checkbox" data-plan="offtrail" data-d="'+d+'"'+(away?' checked':'')+'>'
+            +'<span>Not riding the trail this day</span></label>'
+          +'<input class="pl-notein" type="text" maxlength="'+PLAN_NOTE_MAX+'"'
+            +' value="'+esc(pd.note||'')+'" data-plan="daynote" data-d="'+d+'"'
+            +' aria-label="A note for day '+(d+1)+'"'
+            +' placeholder="'+(away?'Driving up from Albany — Beekman Arms':'A note for this day')+'">'
+        +'</div>');
+        h.push('<div class="pl-row pl-row-w"'+(away?' hidden':'')+'>'
           +'<span class="pl-field"><span class="pl-k">Out</span>'
             +'<select class="pl-sel" data-plan="start" data-d="'+d+'">'+hrOpts([4,5,6,7,8,9,10,11,12],pd.start)+'</select></span>'
           +'<span class="pl-field"><span class="pl-k">In</span>'
@@ -8506,6 +8642,12 @@ class TrailApp {
        a plan that ran out of rows in Utica used to say "442 mi" as though that were the
        whole ride. */
     h.push('<div class="pl-add">'
+      /* A day before day one, because the trip starts before the riding does. Added as a
+         day off the trail with no miles in it: it takes a date and pushes every other day
+         along, which is exactly what driving up the day before does to a plan. */
+      +'<button type="button" class="pl-fix" data-plan="addfirst"'
+        +' title="A day before the ride starts — the drive up, or a night near the start.'
+        +' Every day after it moves one date later">+ Day at the start</button>'
       +'<button type="button" class="pl-fix" data-plan="addday">+ Add a day</button>'
       +(days.length>1 ? '<button type="button" class="pl-fix" data-plan="dropday">'
         +'Drop the last day</button>' : '')
@@ -8835,6 +8977,26 @@ class TrailApp {
         this.renderPlan(); }
       else if(act==='applyprev'){ this.applyPreview(); this.renderPlan(); }
       else if(act==='cancelprev'){ this.cancelPreview(); this.renderPlan(); }
+      else if(act==='addfirst'){ this.planEdit('a day at the start', ()=>{
+          const days=this.planP().slice();
+          if(days.length>=PLAN_DAYS_MAX) return;
+          days.unshift({miles:0, start:this.wxRideStart, end:null, zero:true, off:true, note:''});
+          this.planDays=days;
+          /* Everything keyed by day index has to come with it, or the stops the rider put
+             on Tuesday are on Monday now and the hotel they booked is a day out. */
+          this.shiftDayKeys(0, 1);
+        }); this.renderPlan(); this.drawPlanLayer();
+        this.status('Added a day before the start. Everything after it is one date later.'); }
+      /* Converts the day rather than inserting one — "Tuesday is a driving day" is about
+         Tuesday. That is the opposite of the Zero day pill beside it, which INSERTS a rest
+         day and pushes the trip down; both are right, for different questions. */
+      else if(act==='offtrail'){
+        const on=!(this.planP()[d]||{}).off;
+        this.planEdit(on?('day '+(d+1)+' off the trail'):('day '+(d+1)+' back on the trail'),
+          ()=>{ this.planDays=this.planP().map((x,i)=> i===d ? {...x, off:on, zero:on} : x); });
+        this.renderPlan(); this.drawPlanLayer();
+        this.status(on ? 'Day '+(d+1)+' is off the trail — it takes a date but rides nothing.'
+          : 'Day '+(d+1)+' is a riding day again.'); }
       else if(act==='addday'){ this.planEdit('a day on the end', ()=>{
           const days=this.planP().slice();
           if(days.length>=PLAN_DAYS_MAX) return;
@@ -8863,6 +9025,30 @@ class TrailApp {
             ? ' is back to just one of your places.' : ' is marked as '+k.value+'.'));
           this.renderPlan(); this.drawPlanLayer(); this.renderNearby();
         }
+        return;
+      }
+      /* Before the numeric branches, for the same reason the kind select is: its value is
+         a date, and every branch below parses its value as a number. */
+      const sd=e.target.closest('[data-plan="startdate"]');
+      if(sd){
+        const was=this.planStart;
+        this.planStart=this.cleanDate(sd.value);
+        if(this.planStart===was){ sd.value=this.planStartStr(); return; }
+        this.savePlan(); this.planChanged(); this.renderPlan(); this.renderAll();
+        this.status(this.planStart
+          ? 'Day 1 is '+this.planDayLabel(0)+'. Every date on the plan counts from it.'
+          : 'Start date cleared — the plan follows today again.');
+        return;
+      }
+      /* Saved on blur rather than on every keystroke: renderPlan rewrites this whole
+         screen, and doing that between two letters takes the caret out of the field. */
+      const nt=e.target.closest('[data-plan="daynote"]');
+      if(nt){
+        const dd=+nt.dataset.d, txt=String(nt.value||'').slice(0,PLAN_NOTE_MAX).trim();
+        if((this.planP()[dd]||{}).note===txt) return;
+        this.planEdit('the note on day '+(dd+1), ()=>{
+          this.planDays=this.planP().map((x,i)=> i===dd ? {...x, note:txt} : x); });
+        this.renderPlan();
         return;
       }
       const s=e.target.closest('[data-plan]'); if(!s) return;
@@ -9047,11 +9233,12 @@ class TrailApp {
      be at home in August, or off the route, or on a rest day — and a number that keeps
      being shown through all of that is worse than no number, so this returns null rather
      than a figure it cannot stand behind.
-     Today is day -wxStartShift: planDateFor adds the shift to the index, so the day that
-     lands on today's date is the one where the two cancel. */
+     Today is whichever day of the plan the calendar says it is — which, once a start
+     date is set, is very often none of them. A rider looking at their plan in August
+     is not partway through day one of it. */
   mileLeftToday(){
     if(this.myMile==null || this.offTrail || this.planning) return null;
-    const d=-(this.wxStartShift||0), days=this.planP();
+    const d=this.todayIndex(), days=this.planP();
     if(!(d>=0 && d<days.length)) return null;
     const b=this.planBounds()[d]; if(!b) return null;
     if(days[d].zero) return {d:d, zero:true};
@@ -10690,7 +10877,7 @@ class TrailApp {
   poiRecord(o){
     const lat=+o.y, lng=+o.x, pr=projectRoute(lat,lng);
     return {asset:'chris', name:o.n||'(pick)', sub:'', addr:o.a||'', phone:o.p||'',
-      url:o.u||'', note:o.d||'', kind:MY_KINDS.indexOf(o.k)>0?o.k:'',
+      url:o.u||'', note:o.d||'', kind:cleanKind(o.k),
       src:'chris', lat, lng, mile:pr.mile, off:pr.off};
   }
   /* Kept on the device for the same reason the plan is: half this trail has no signal, and
@@ -10729,7 +10916,7 @@ class TrailApp {
        always had and an older device reading this account is not handed a field it does
        not understand. */
     const rec={n:name, y:lat, x:lng, a:String(o.a||''), p:String(o.p||''),
-      u:String(o.u||''), d:String(o.d||''), k:MY_KINDS.indexOf(o.k)>0?o.k:''};
+      u:String(o.u||''), d:String(o.d||''), k:cleanKind(o.k)};
     this.myPois.push(rec);
     this.poiCache(this.myPois);
     const p=this.poiRecord(rec);
@@ -11057,6 +11244,17 @@ class TrailApp {
      point at days that are not there; anything out of range is dropped rather than
      clamped, because "day 14" clamped to the last day is a stop silently moved to a place
      the rider never put it. Losing the override just restores the default. */
+  /* A date off a saved plan, a shared link or the other device. Anything that is not a
+     real calendar day becomes null, which just puts the plan back on today — a start date
+     is not worth throwing a plan away over, and a half-parsed one would quietly move
+     every date on the screen. */
+  cleanDate(v){
+    const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v||''));
+    if(!m) return null;
+    const dt=new Date(+m[1], +m[2]-1, +m[3]);
+    return (dt.getFullYear()===+m[1] && dt.getMonth()===+m[2]-1 && dt.getDate()===+m[3])
+      ? m[0] : null;
+  }
   cleanStopDays(raw){
     const out={};
     if(!raw || typeof raw!=='object') return out;

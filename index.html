@@ -665,6 +665,13 @@
     border-radius:0;cursor:pointer;font-variant-numeric:tabular-nums;-webkit-appearance:none;appearance:none}
   .pl-root select:focus-visible,.pl-root input:focus-visible{outline:1.5px solid #0088b0;outline-offset:2px}
   .pl-root input[type=number]{width:38px;text-align:center;cursor:text}
+  /* The start date, in the same underlined hand as the fields beside it. Deliberately NOT
+     given appearance:none like the others — that strips Chrome's calendar button, which
+     is the whole reason for using a native date field on a phone. */
+  .pl-root .pl-date{font-family:inherit;font-size:13.5px;color:var(--pl-ink);
+    padding:2px 2px 3px;background:transparent;border:0;
+    border-bottom:1px solid rgba(32,30,29,.4);border-radius:0;cursor:pointer;
+    font-variant-numeric:tabular-nums}
   .pl-root .pl-num[data-plan=speed]{width:34px}
   /* The anchor list carries long town names; left to size itself it pushes the pace and
      the map button onto rows of their own. Capped and ellipsised so the header stays the
@@ -728,15 +735,22 @@
     font-family:inherit;font-size:11.5px;text-align:left;color:inherit;
     background:transparent;border:0;cursor:pointer;border-radius:2px}
   .pl-picked-b:hover{background:rgba(32,30,29,.06)}
-  .pl-picked-m{flex:none;min-width:62px;color:var(--pl-ink);font-weight:600;
-    font-variant-numeric:tabular-nums}
+  /* Numbered so two people can say "stop 3" and mean one place. A ring rather than a
+     bare digit: it has to read as a label on the row and not as another distance in a
+     row that is mostly distances. */
+  .pl-picked-no{flex:none;display:grid;place-items:center;width:16px;height:16px;
+    border:1px solid var(--pl-line);border-radius:999px;font-size:9.5px;font-weight:600;
+    color:var(--pl-sec);font-variant-numeric:tabular-nums;align-self:center}
+  /* Ride miles lead, in the dark ink and the wider column: that is the number the day is
+     actually ridden to. */
+  .pl-picked-i{flex:none;min-width:52px;color:var(--pl-ink);font-weight:600;
+    font-variant-numeric:tabular-nums;white-space:nowrap}
   .pl-picked-n{flex:1;min-width:0;color:var(--pl-ink);
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  /* How far into the day, beside the milepost rather than across the row from it: the
-     two are one thought, and a name between them made reading either one a trip past the
-     other. Tabular and fixed-width, so the pair reads as a column down the day. */
-  .pl-picked-i{flex:none;min-width:60px;color:var(--pl-sec);font-size:10.5px;
-    font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* The trail mile, after the name and quiet: it is how you know you have arrived, not
+     how you plan the morning. */
+  .pl-picked-m{flex:none;min-width:58px;text-align:right;color:var(--pl-mute);
+    font-size:10.5px;font-variant-numeric:tabular-nums}
   .pl-picked-k{flex:none;min-width:74px;text-align:right;color:var(--pl-mute);font-size:10.5px}
   .pl-disc{margin-top:10px;border-top:1px solid var(--pl-hair);padding-top:8px}
   .pl-disc-h{display:flex;align-items:center;gap:8px}
@@ -816,6 +830,24 @@
     cursor:pointer;white-space:nowrap}
   .pl-sday:hover{background:rgba(0,136,176,.08);color:var(--pl-link)}
   .pl-sday.on{color:#fff;background:#0088b0;border:1px solid #0088b0}
+  /* What kind of day it is, and what it is for. Above the riding controls, because on a
+     day you are driving to the start those controls answer a question nobody asked. */
+  .pl-daynote{margin:2px 0 0;font-size:11px;color:var(--pl-sec);font-style:italic}
+  .pl-dayrow{gap:10px;align-items:center}
+  .pl-check{flex:none;display:flex;align-items:center;gap:6px;font-size:12px;
+    color:var(--pl-ink);cursor:pointer;white-space:nowrap}
+  .pl-check input{width:15px;height:15px;accent-color:#0088b0;cursor:pointer}
+  .pl-root .pl-notein{flex:1;min-width:120px;font-family:inherit;font-size:12.5px;
+    color:var(--pl-ink);padding:3px 2px 4px;background:transparent;border:0;
+    border-bottom:1px solid rgba(32,30,29,.28);border-radius:0}
+  .pl-root .pl-notein::placeholder{color:var(--pl-faint)}
+  .pl-root .pl-notein:focus{outline:none;border-bottom-color:#0088b0}
+  /* A day of the trip spent off the trail. Ruled off from the riding days rather than
+     shaded like a rest day — it is not a lighter version of a riding day, it is a
+     different kind of day. */
+  .pl-day.pl-away{background:repeating-linear-gradient(135deg,transparent 0 9px,
+    rgba(32,30,29,.035) 9px 18px)}
+  .pl-day.pl-away .pl-t{font-style:italic}
   .pl-sacts{flex:none;display:flex;align-items:center;gap:2px;padding-right:5px}
   .pl-sacts a,.pl-sacts button{display:grid;place-items:center;width:30px;height:30px;
     color:var(--pl-link);background:transparent;border:0;padding:0;cursor:pointer;
