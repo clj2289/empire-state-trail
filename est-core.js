@@ -2902,10 +2902,13 @@ class TrailApp {
     });
     // delegated: any [data-lat] element zooms the map
     document.addEventListener('click',e=>{
-      // .poi-add sits inside a row whose job is "show me where this is". It has its own
-      // job, so the row must not also fire and throw the rider onto the map.
+      // .poi-add and .poi-del sit inside a row whose job is "show me where this is".
+      // They have their own jobs, so the row must not also fire and throw the rider onto
+      // the map — deleting a place and then being flown to where it used to be is a
+      // particularly silly way to answer a tap.
       const el=e.target.closest('[data-lat]');
-      if(!el || e.target.closest('a') || e.target.closest('.poi-add')) return;
+      if(!el || e.target.closest('a') || e.target.closest('.poi-add')
+        || e.target.closest('.poi-del')) return;
       this.markReturn(el);
       if(el.closest('#panelList') && this.panelSnap==='full') this.setPanelSnap('half');
       const pi=el.dataset.poi;
@@ -2986,6 +2989,25 @@ class TrailApp {
       this.renderNearby();
       if(this.screen==='plan') this.renderPlan();
     });
+    /* The row's delete button. Arms on the first tap and does it on the second, and any
+       other tap anywhere disarms it — an armed button left sitting on a row is a trap. */
+    document.addEventListener('click',e=>{
+      const d=e.target.closest('[data-poidel2]');
+      const was=this._delArm;
+      if(!d){ if(was){ this._delArm=null; this.renderNearby(); } return; }
+      e.stopPropagation();
+      const key=d.dataset.poidel2+'@'+d.dataset.at;
+      if(was!==key){ this._delArm=key; this.renderNearby(); return; }
+      this._delArm=null;
+      const [lat,lng]=String(d.dataset.at||'').split(',').map(Number);
+      if(this.removeMyPoi(d.dataset.poidel2, lat, lng))
+        this.status('Deleted '+d.dataset.poidel2+'.'+(this.syncOn()
+          ? ' It is gone from your account, so it goes from your other devices too.'
+          : ' It is gone from this device.'));
+      this.renderNearby();
+      if(this.screen==='plan') this.renderPlan();
+      this.drawPlanLayer();
+    });
     // The typed way in: a form on Nearby, for a place you have an address for rather
     // than a spot you can see. A form, so the phone keyboard's Go key submits it.
     const apf=this.$('apForm');
@@ -3053,7 +3075,9 @@ class TrailApp {
       const d=e.target.closest('[data-poidel]'); if(!d) return;
       const [lat,lng]=String(d.dataset.at||'').split(',').map(Number);
       if(this.removeMyPoi(d.dataset.poidel, lat, lng))
-        this.status('Forgot '+d.dataset.poidel+'. It is off the map and off your account.');
+        this.status('Deleted '+d.dataset.poidel+'.'+(this.syncOn()
+          ? ' It is gone from your account, so it goes from your other devices too.'
+          : ' It is gone from this device.'));
       if(this.map) this.map.closePopup();
     });
     // The one-way pick-up, set on one rental popup and spent on another. See setRentFrom.
@@ -4528,6 +4552,22 @@ class TrailApp {
     return (this.myPois||[]).some(x=>String(x.n)===String(name)
       && abs(+x.y-(+lat))<0.001 && abs(+x.x-(+lng))<0.001);
   }
+  /* Deleting a place, from the row as well as from the pin. Only your own: the State's
+     register and the OSM corridor are not the rider's to delete, and a × on those rows
+     would be offering to do something the app cannot do.
+     Two taps. It is irreversible, it goes straight up to the account and therefore to
+     every other device, and it is a 24px target on a phone next to a button people press
+     often — one accidental tap should not lose a place somebody wrote a note on. */
+  delBtnHtml(p){
+    if(p.asset!=='chris') return '';
+    const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
+    const armed=this._delArm===p.name+'@'+at;
+    return '<button type="button" class="poi-del'+(armed?' arm':'')+'"'
+      +' data-poidel2="'+esc(p.name||'')+'" data-at="'+at+'"'
+      +' title="'+(armed ? 'Tap again to delete '+esc(p.name)+'. It goes from this device'
+        +' and from every other one you sign in on' : 'Delete '+esc(p.name))+'">'
+      +(armed ? 'Delete?' : '×')+'</button>';
+  }
   stopBtnHtml(p){
     const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
     const key=p.mile!=null ? this.poiStopKey(p) : '';
@@ -4595,7 +4635,7 @@ class TrailApp {
         +'<td class="mi">'+esc(fmtMp(p.mile)||'—')+'</td>'
         +'<td class="mi off">'+esc(this.offTxt(p))+'</td>'
         +(me?'<td class="mi'+(back?' poi-back':'')+'">'+esc(from)+'</td>':'')
-        +'<td class="stopcell">'+this.stopBtnHtml(p)+'</td>'
+        +'<td class="stopcell">'+this.stopBtnHtml(p)+this.delBtnHtml(p)+'</td>'
         +'</tr>';
     });
     h+='</tbody></table></div>';
@@ -11245,7 +11285,9 @@ class TrailApp {
         +'<div class="poi-mine">'
         +'<button type="button" class="'+(on?'off':'')+'" data-poistop="'+esc(p.name)+'" data-at="'+at+'">'
           +(on?'Take it off the plan':'Add as a stop')+'</button>'
-        +'<button type="button" class="off" data-poidel="'+esc(p.name)+'" data-at="'+at+'">Forget it</button>'
+        +'<button type="button" class="off" data-poidel="'+esc(p.name)+'" data-at="'+at+'"'
+          +' title="Remove this place. It goes from this device and from every other one'
+          +' you sign in on">Delete</button>'
       +'</div>';
     } else if(p.lat!=null){
       /* The same place can be both a bundled pin and one of yours — two pins, one park.
