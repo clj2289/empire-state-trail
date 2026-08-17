@@ -1283,6 +1283,22 @@
   .poi-item{display:flex;align-items:center;gap:var(--space-2);width:100%;text-align:left;cursor:pointer;color:var(--color-text);
     background:transparent;border:0;border-bottom:1px solid color-mix(in srgb,var(--color-text) 8%,transparent);padding:8px 2px}
   .poi-item:hover{color:var(--color-accent-700)}
+  /* The row as a strip: the name still flies to the pin, the caret opens what is known
+     about the place without leaving the list. */
+  .poi-item-row{display:flex;align-items:center}
+  .poi-item-row .poi-item{flex:1;min-width:0}
+  .poi-exp{flex:none;display:grid;place-items:center;width:30px;height:30px;padding:0;
+    color:var(--color-neutral-500);background:transparent;border:0;cursor:pointer;
+    border-radius:999px}
+  .poi-exp:hover,.poi-exp.on{color:var(--color-accent);background:var(--color-accent-100)}
+  /* What a rider wrote about it, and the two things you can do about it. Indented under
+     the row it belongs to and ruled off, so an open one cannot be mistaken for the next
+     place down. */
+  .poi-detail{margin:0 0 6px;padding:8px 10px 9px;background:var(--color-surface);
+    border-left:2px solid var(--color-accent);border-radius:0 4px 4px 0}
+  .poi-detail-n{font-size:12px;line-height:1.55;color:var(--color-text)}
+  .poi-detail-r{margin-top:4px;font-size:11.5px;color:var(--color-neutral-600)}
+  .poi-detail-b{display:flex;align-items:center;gap:6px;margin-top:9px}
   .poi-nm{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .poi-mi{flex:none;font-size:12px;color:var(--color-accent-700);font-weight:600;font-variant-numeric:tabular-nums}
   .poi-back{color:var(--color-neutral-500);font-weight:400}

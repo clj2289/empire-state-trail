@@ -107,6 +107,12 @@ const HI_Z_OFFSET=100000;
    the dock at 900 — and not against the in-map panes above it. A popup is the only dialog
    this app has, so nothing on the map screen is allowed to sit over one. */
 const POP_PANE_Z='1200';
+/* What a popup costs above its content: the tip, the close button's row and the padding.
+   Subtracted from the visible strip so the cap leaves room for the frame rather than
+   handing all of it to the text and pushing the frame off the edge. */
+const POPUP_CHROME_PX=54;
+// And never cap below this: a popup two lines tall is not worth having.
+const POPUP_MIN_PX=140;
 // The meteogram outlook: a rolling window of this many days (the NWS hourly grid runs
 // ~6.5 days, so four is comfortably inside it), and the mile spacing at which the route
 // is sampled for forecasts — one grid fetch per distinct sample cell.
@@ -480,6 +486,13 @@ function iconInner(spec){
    with '!' is a filled silhouette instead — the whole icon, not a part of it, since an
    icon here is one mark and mixing the two inside it is how you get a drawing that
    reads at one size and turns to mud at another. */
+/* A caret for a row that opens in place. Its own helper because the plan's caretSvg is
+   built inside renderPlan and this list is nowhere near it. */
+function caretDown(open){
+  return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    +' stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"'
+    +(open?'':' style="transform:rotate(180deg)"')+'><path d="M6 15l6-6 6 6"></path></svg>';
+}
 function icon(name, size){
   size = size || 20;
   let spec = P[name]; if(!spec) return '';
@@ -2528,7 +2541,33 @@ class TrailApp {
   fitPopup(pop){
     const m=this.map; if(!m||!pop) return;
     const el=pop.getElement(); if(!el) return;
-    const r=el.getBoundingClientRect(), mr=m.getContainer().getBoundingClientRect();
+    const mr=m.getContainer().getBoundingClientRect();
+    /* Cap it to the strip you can actually see BEFORE deciding where to put it. Panning
+       can only move a popup that fits; one taller than the gap between the top bars and
+       the sheet has nowhere to go, so the code below did the only sensible thing left —
+       kept its head on screen and let its feet run under the sheet — and the rider was
+       left scrolling the map after content that was never going to appear. Capped, it
+       scrolls inside itself instead, which is what the spot dialog has always done. */
+    const c=el.querySelector('.leaflet-popup-content');
+    if(c){
+      let room=mr.height-this.obstructedH()-this.obstructedTop()-POPUP_CHROME_PX;
+      /* With the sheet all the way up there is no strip left to cap to, and a popup
+         floored at its minimum still overflows. Lowering the sheet is the only thing that
+         makes the popup readable, and it is what tapping a row in that sheet already
+         does. Once per opening, and only ever downwards. */
+      if(room<POPUP_MIN_PX && this.panelSnap==='full' && !this._fitDrop){
+        this._fitDrop=true;
+        this.setPanelSnap('half');
+        setTimeout(()=>{ this._fitDrop=false; this.fitPopup(pop); }, 260);
+        return;
+      }
+      c.style.maxHeight=Math.max(POPUP_MIN_PX, Math.round(room))+'px';
+      c.style.overflowY='auto';
+      // Leaflet positions the popup from its own measurement, which the cap has just
+      // invalidated; without this the tip and the box disagree by the height it lost.
+      if(pop.update) pop.update();
+    }
+    const r=el.getBoundingClientRect();
     const bottomLimit=mr.height-this.obstructedH();
     const top=r.top-mr.top, bottom=r.bottom-mr.top;
     let dy=0;
@@ -2908,7 +2947,7 @@ class TrailApp {
       // particularly silly way to answer a tap.
       const el=e.target.closest('[data-lat]');
       if(!el || e.target.closest('a') || e.target.closest('.poi-add')
-        || e.target.closest('.poi-del')) return;
+        || e.target.closest('.poi-del') || e.target.closest('[data-poiexp]')) return;
       this.markReturn(el);
       if(el.closest('#panelList') && this.panelSnap==='full') this.setPanelSnap('half');
       const pi=el.dataset.poi;
@@ -2988,6 +3027,15 @@ class TrailApp {
         u:p.url||'', d:p.note||''});
       this.renderNearby();
       if(this.screen==='plan') this.renderPlan();
+    });
+    /* Opening a place in the browse list, in place. One at a time: the notes riders write
+       run to several lines, and a list with six of them open is a list you have lost your
+       place in. */
+    document.addEventListener('click',e=>{
+      const x=e.target.closest('[data-poiexp]'); if(!x) return;
+      e.stopPropagation();
+      this._poiExp = this._poiExp===x.dataset.poiexp ? null : x.dataset.poiexp;
+      this.renderNearby();
     });
     /* The row's delete button. Arms on the first tap and does it on the second, and any
        other tap anywhere disarms it — an armed button left sitting on a row is a trap. */
@@ -4800,13 +4848,35 @@ class TrailApp {
         // The milepost sits in the middle column, which on-trail rows leave empty —
         // so every row carries one whether or not it has a detour to break down.
         const mp = mpTxt(p.mile);
-        h+='<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'"><span class="poi-nm">'+esc(p.name)+'</span>'
+        /* The row is a strip now rather than one button. Tapping the name still flies to
+           the pin, but a place with a note on it — which every imported one has — had no
+           way to be read without going to the map and opening it, and no way to be put on
+           a day or removed from here at all. The caret opens it in place; the two controls
+           are the same ones the search table carries, so they behave the same way. */
+        const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
+        const ekey=p.name+'@'+at;
+        const eopen=this._poiExp===ekey;
+        const has=!!(p.note || p.addr || p.phone || p.url);
+        h+='<div class="poi-item-row'+(eopen?' open':'')+'">'
+          +'<button class="poi-item" data-poi="'+p.i+'" data-lat="'+p.lat+'" data-lng="'+p.lng+'"><span class="poi-nm">'+esc(p.name)+'</span>'
           // Reported charging, flagged on the row so a lock site with power is findable by
           // eye down the list. The report and its caveat are in the popup.
           +(p.power?'<span class="poi-pw" title="Charging reported here — tap for the detail">power</span>':'')
           +(mp?'<span class="poi-mp">'+mp+'</span>':'')
           +brk
-          +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>';
+          +(dist?'<span class="poi-mi'+(back?' poi-back':'')+'">'+dist+'</span>':'')+'</button>'
+          +(has ? '<button type="button" class="poi-exp'+(eopen?' on':'')+'"'
+            +' data-poiexp="'+esc(ekey)+'" aria-expanded="'+(eopen?'true':'false')+'"'
+            +' title="'+(eopen?'Close':'What is known about '+esc(p.name))+'">'
+            +caretDown(eopen)+'</button>' : '')
+          +'</div>';
+        if(eopen) h+='<div class="poi-detail">'
+          +(p.note?'<div class="poi-detail-n">'+esc(p.note)+'</div>':'')
+          +(p.addr?'<div class="poi-detail-r">'+esc(p.addr)+'</div>':'')
+          +(p.phone?'<div class="poi-detail-r"><a href="tel:'+esc(p.phone)+'">'+esc(p.phone)+'</a></div>':'')
+          +(p.url?'<div class="poi-detail-r"><a href="'+esc(p.url)+'" target="_blank" rel="noopener">Its own page ↗</a></div>':'')
+          +'<div class="poi-detail-b">'+this.stopBtnHtml(p)+this.delBtnHtml(p)+'</div>'
+        +'</div>';
       });
       if(rows.length>CAP) h+='<button type="button" class="poi-more poi-toggle" data-cat="'+esc(cat)+'">'+(open?'Show fewer':'Show all '+rows.length)+'</button>';
       h+='</div>';
