@@ -2947,7 +2947,8 @@ class TrailApp {
       const p=this.POIS.find(q=>q.lat!=null && abs(q.lat-lat)<0.0001 && abs(q.lng-lng)<0.0001
         && (q.name||'')===k.dataset.poikeep);
       this.keepPlace({n:k.dataset.poikeep||'A place', y:lat, x:lng,
-        a:p?p.addr:'', p:p?p.phone:'', u:p?p.url:'', d:p?p.note:''});
+        a:p?p.addr:'', p:p?p.phone:'', u:p?p.url:'', d:p?p.note:''},
+        k.classList.contains('poi-keepb') ? {stop:false} : undefined);
     });
     document.addEventListener('click',e=>{
       const b=e.target.closest('[data-poistop]'); if(!b) return;
@@ -4409,6 +4410,24 @@ class TrailApp {
      day already, addable, or not something a day can reach. The last one stays visible
      and disabled with the reason on its tooltip — a missing button reads as a bug, and
      "why can't I add this" is a fair question with a real answer. */
+  /* Save it, and stop there. Two decisions, so two buttons, one tap each — the row used
+     to offer only "+ Stop", which quietly did both, and offered nothing at all for a place
+     the plan could not take as a stop. A place already yours shows neither: it is saved,
+     and the stop button beside it is the only question left. */
+  keepBtnHtml(p){
+    if(p.asset==='chris') return '';
+    if(this.isKept(p.name, p.lat, p.lng))
+      return '<span class="poi-kept" title="Already one of your places">✓ Saved</span>';
+    const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
+    return '<button type="button" class="poi-add poi-keepb" data-poikeep="'+esc(p.name||'')+'"'
+      +' data-at="'+at+'" title="Keep it in My places. It does not go on a day">+ Place</button>';
+  }
+  // The same place can be a corridor pin AND one of yours — two pins, one park. Asks the
+  // list rather than the pin it happens to be drawn on.
+  isKept(name, lat, lng){
+    return (this.myPois||[]).some(x=>String(x.n)===String(name)
+      && abs(+x.y-(+lat))<0.001 && abs(+x.x-(+lng))<0.001);
+  }
   stopBtnHtml(p){
     const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
     const key=p.mile!=null ? this.poiStopKey(p) : '';
@@ -8985,10 +9004,17 @@ class TrailApp {
     /* The same button the Nearby table carries, so "add this to a day" is one control
        with one set of states wherever the rider meets it — including the disabled state
        that says why a place cannot be a stop. */
-    const hits=this.dedupeHits(this.hitsFor(q));
+    /* Your own places first, and never cut. The list is capped at eight against the nine
+       thousand pins the corridor holds, and nothing preferred the handful you saved
+       yourself — so searching for the diner you added last week answered with somebody
+       else's diners and the one you meant was off the end. */
+    const all=this.dedupeHits(this.hitsFor(q));
+    const own=all.filter(p=>p.asset==='chris');
+    const rest=all.filter(p=>p.asset!=='chris');
+    const hits=own.concat(rest.slice(0, Math.max(0, PLAN_FIND_MAX-own.length)));
     if(hits.length){
       h.push('<div class="pl-find-h">Add a stop</div>'
-        +hits.slice(0,PLAN_FIND_MAX).map(p=>{
+        +hits.map(p=>{
           const what=p.asset==='chris' ? (p.kind||'your pick')
             : (catCfg(poiCat(p)).label||'');
           /* The milepost on the right in tabular figures, the same place the day rows put
@@ -9001,10 +9027,10 @@ class TrailApp {
                 p.mile!=null && this.dayPast(p.mile)>=0 ? 'day '+(this.dayPast(p.mile)+1) : '']
                 .filter(Boolean).join(' · '))+'</em>'
               +'<i>'+esc(p.mile!=null ? mpTxt(p.mile) : 'off route')+'</i></button>'
-            +this.stopBtnHtml(p)+'</div>';
+            +this.keepBtnHtml(p)+this.stopBtnHtml(p)+'</div>';
         }).join(''));
-      if(hits.length>PLAN_FIND_MAX)
-        h.push('<div class="pl-find-n">'+(hits.length-PLAN_FIND_MAX)+' more match on Nearby.</div>');
+      if(all.length>hits.length)
+        h.push('<div class="pl-find-n">'+(all.length-hits.length)+' more match on Nearby.</div>');
     }
 
     this.planGeoWant(q);
@@ -9032,6 +9058,9 @@ class TrailApp {
           /* Keeps it first and then puts it on a day, because a place the app has never
              heard of has no milepost until it is one of yours — the same two steps
              keepPlace does everywhere else, and it says which of them worked. */
+          +'<button type="button" class="poi-add poi-keepb" data-planhold="'+esc(r.name||'')+'"'
+            +' data-at="'+r.lat+','+r.lng+'"'
+            +' title="Keep it in My places. It does not go on a day">+ Place</button>'
           +'<button type="button" class="poi-add" data-planadd="'+esc(r.name||'')+'"'
             +' data-at="'+r.lat+','+r.lng+'"'
             +' title="Save it to your places and put it on the day that rides past it">'
@@ -9134,10 +9163,12 @@ class TrailApp {
     /* A place the geocoder found has no milepost until it is one of yours, so it is kept
        first and then put on a day — keepPlace does both and says which of them worked. */
     el.addEventListener('click',e=>{
-      const b=e.target.closest('[data-planadd]'); if(!b) return;
+      const b=e.target.closest('[data-planadd],[data-planhold]'); if(!b) return;
       e.stopPropagation();
+      const hold=b.dataset.planhold!=null;
       const [lat,lng]=String(b.dataset.at||'').split(',').map(Number);
-      this.keepPlace({n:b.dataset.planadd||'A place', y:lat, x:lng});
+      this.keepPlace({n:(hold?b.dataset.planhold:b.dataset.planadd)||'A place', y:lat, x:lng},
+        hold ? {stop:false} : undefined);
     });
     el.addEventListener('click',e=>{
       const b=e.target.closest('[data-plan]'); if(!b) return;
@@ -10988,8 +11019,8 @@ class TrailApp {
        — "Add as a stop" versus "take it off" — which asks the rider to infer the state
        from the label of the thing that would change it, and a pin they saved last week
        looked exactly like one they had not. */
-    const isMine=(n,lat,lng)=>!!(this.myPois||[]).some(x=>String(x.n)===String(n)
-      && abs(+x.y-lat)<0.001 && abs(+x.x-lng)<0.001);
+    // One rule for "is this already mine", shared with the search rows — see isKept.
+    const isMine=(n,lat,lng)=>this.isKept(n,lat,lng);
     if(p.src==='chris'){
       const key=p.mile!=null ? this.poiStopKey(p) : '';
       const on=!!(key && this.planPicked[key]);
@@ -11176,9 +11207,21 @@ class TrailApp {
   /* Keep it, then say what keeping it bought: a pin, an account record, and — when the
      route rides past it — a stop already on the day that does. Offering the stop as a
      second decision would be asking a question whose answer is why the place was saved. */
-  async keepPlace(o){
+  /* opt.stop===false keeps the place and stops there. Saving somewhere and riding to it
+     on a particular day are two decisions, and the second one is not always yes: a bike
+     shop worth knowing about is worth keeping whether or not you mean to stop at it. */
+  async keepPlace(o, opt){
     const p=await this.addMyPoi(o);
     if(!p){ this.status('Could not save that one — no coordinate on it.'); return null; }
+    if(opt && opt.stop===false){
+      this.status('Saved '+p.name+' to your places'
+        +(p.mile!=null ? ' · '+mpTxt(p.mile)+(p.off>=0.2?' · '+p.off.toFixed(1)+' mi off route':'') : '')
+        +'.'+(this.syncOn() ? '' : ' Signed out, so it is on this device only.'));
+      if(this.map) this.map.closePopup();
+      if(this.screen==='plan') this.renderPlan();
+      this.renderNearby();
+      return p;
+    }
     const r=this.addPoiAsStop(p);
     this.status('Saved '+p.name+' to your places'
       +(r.ok ? ', and put it on day '+(r.d+1)+' · '+this.planDayLabel(r.d).replace(',','')+'.'

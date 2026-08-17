@@ -1340,6 +1340,11 @@
     border:1px solid var(--color-accent);border-radius:999px;white-space:nowrap}
   .poi-add:hover{background:color-mix(in srgb,var(--color-accent) 10%,transparent)}
   .poi-add.on{color:var(--color-bg);background:var(--color-accent);border-color:var(--color-accent)}
+  /* Save it without putting it on a day — quieter than + Stop, because stopping there is
+     the more common answer and should stay the louder button. */
+  .poi-keepb{color:var(--color-neutral-600);border-color:var(--color-divider)}
+  .poi-keepb:hover{background:rgba(32,30,29,.06)}
+  .poi-kept{flex:none;font-size:10.5px;color:#1d6b3f;white-space:nowrap;padding:0 2px}
   .poi-add[disabled]{color:var(--color-neutral-500);border-color:var(--color-neutral-400);
     cursor:default;opacity:.7}
   .poi-add[disabled]:hover{background:transparent}
