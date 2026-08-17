@@ -9805,20 +9805,23 @@ class TrailApp {
     if(from>=days.length)
       return {err:'The trip finished on '+this.planDayLabel(days.length-1)
         +'. Change the start date on the Ride plan tab and the outlook follows it.'};
-    const startMs=t>=0 ? today0 : this.planStartDate().getTime();
-    const ahead=Math.round((startMs-today0)/864e5);
-    if(ahead>WX_FORECAST_DAYS)
-      return {err:'Day 1 is '+this.planDayLabel(0)+', which is '+ahead+' days out. '
-        +'The forecast only reaches about '+WX_FORECAST_DAYS+' days ahead, so there is '
-        +'nothing to show for it yet — this fills in as the trip gets close.'};
-    /* Where the rider will be that morning, not where the whole plan starts: on day six
-       of a trip the outlook is about day six's stretch of trail. */
+    /* Always from today. The forecast is worth having before the trip — it is the same
+       weather, at the place the trip begins — so the graph does not wait for the start
+       date. What waits is the ROUTE: a day before the tour holds position and claims no
+       miles and no towns, because on that day the rider is not riding, and drawing
+       "Buffalo → Lockport, 62 mi" against next Tuesday's forecast when the tour starts in
+       September is the graph asserting something untrue. */
+    const pad=t>=0 ? 0 : Math.min(-t, WX_OUTLOOK_DAYS);
+    const hold={miles:0, start:this.wxRideStart, end:null, zero:true, pad:true};
+    /* Where the rider will be that morning. Before the trip that is wherever it begins;
+       on day six of one it is day six's stretch of trail, not the trip's anchor. */
     const anchor=bounds[from] ? bounds[from].start : this.planStartMile();
-    return {opts:{days:Math.min(WX_OUTLOOK_DAYS, days.length-from), sgn:this.dirSign(),
+    const dayPlan=Array.from({length:pad}, ()=>({...hold})).concat(days.slice(from));
+    return {opts:{days:Math.min(WX_OUTLOOK_DAYS, dayPlan.length), sgn:this.dirSign(),
       speed:this.avgSpeed>0?this.avgSpeed:12, perDay:Math.max(5,this.wxPerDay||60),
-      startMs:startMs, nowMs:Date.now(), totalMi:TOTAL, anchorMile:anchor,
+      startMs:today0, nowMs:Date.now(), totalMi:TOTAL, anchorMile:anchor,
       rideStart:this.wxRideStart, rideEnd:this.wxRideEnd,
-      dayPlan:days.slice(from)}, anchor, dayFrom:from};
+      dayPlan}, anchor, dayFrom:from, pad};
   }
   // The town list the plan reads, in the renderer's shape: short name, milepost, a spot
   // of context, and coordinates for the nearest-sample fetch.
@@ -9829,20 +9832,24 @@ class TrailApp {
   // Fold a built plan + the fetched spatial grids into the {meta,days,towns,hours} the
   // renderer draws. Pure once the grids are in hand, so the ride-window and zero controls
   // re-run it against the cached field without touching the network.
-  wxAssemble(plan, smiles, gridByIndex, opts, anchor, dayFrom){
+  wxAssemble(plan, smiles, gridByIndex, opts, anchor, dayFrom, pad){
     const hours=assembleOutlookHours(plan, smiles, gridByIndex, m=>this.routeBearing(m));
     const towns=outlookTowns(plan, this.wxTownList(), anchor, opts.sgn);
     const days=plan.days.map((d,i)=>{
       const ms=opts.startMs+i*24*36e5, date=localISO(ms).slice(0,10);
-      // Numbered as the PLAN numbers them, so "Day 6" on this screen and "Day 6" on the
-      // Ride plan are the same day rather than two counts that happen to share a word.
-      const no=(dayFrom||0)+i+1;
-      return {date, zero:d.zero, dayNo:no,
-        label:'Day '+no+' · '+new Date(ms).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'}),
+      /* Numbered as the PLAN numbers them, so "Day 6" here and "Day 6" on the Ride plan
+         are the same day rather than two counts that share a word. A day before the tour
+         has no number, because it is not one of the tour's days. */
+      const before=i<(pad||0);
+      const no=before ? null : (dayFrom||0)+i-(pad||0)+1;
+      const when=new Date(ms).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+      return {date, zero:d.zero, dayNo:no, before,
+        label:before ? when+' · before the trip' : 'Day '+no+' · '+when,
         startMile:d.startMile, endMile:d.endMile,
         // the window the timeline actually rode, so the rail cannot draw a different one
         rideStart:d.start, rideEnd:d.end, miles:d.miles,
-        towns:towns.filter(t=>t.arrive.slice(0,10)===date).map(t=>t.name)};
+        // No towns on a day the rider is not riding: nothing is reached on it.
+        towns:before ? [] : towns.filter(t=>t.arrive.slice(0,10)===date).map(t=>t.name)};
     });
     const lastMile=plan.hours[plan.hours.length-1].mile;
     return {meta:{generatedAt:localISO(Date.now()), place:'Empire State Trail',
@@ -9881,7 +9888,7 @@ class TrailApp {
     if(!got){ this.wxData={err:'No answer from api.weather.gov. It’s the US forecast service — it covers the whole trail, but it does go down. Worth another try in a minute.'}; this.renderOutlook(); return; }
     this.wxGrids={smiles, gridByIndex, anchor, sgn:opts.sgn, startMs:opts.startMs,
       min:smiles[0], max:smiles[smiles.length-1]};
-    const data=this.wxAssemble(plan, smiles, gridByIndex, opts, anchor, po.dayFrom);
+    const data=this.wxAssemble(plan, smiles, gridByIndex, opts, anchor, po.dayFrom, po.pad);
     data.at=Date.now(); data.got=got; data.of=smiles.length;
     this.wxData=data;
     // A fresh read is a fresh graph: the hour under the cursor is picked again rather
@@ -9907,7 +9914,7 @@ class TrailApp {
     const lo=this.wxGrids.min-WX_SAMPLE_MI, hi=this.wxGrids.max+WX_SAMPLE_MI;
     if(plan.hours.some(h=>h.mile<lo || h.mile>hi)){ this.buildOutlook(); return; }
     const data=this.wxAssemble(plan, this.wxGrids.smiles, this.wxGrids.gridByIndex,
-      opts, anchor, po.dayFrom);
+      opts, anchor, po.dayFrom, po.pad);
     data.at=this.wxData.at; data.got=this.wxData.got; data.of=this.wxData.of;
     this.wxData=data;
     this.renderOutlook();
