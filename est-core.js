@@ -2985,6 +2985,8 @@ class TrailApp {
     // than a spot you can see. A form, so the phone keyboard's Go key submits it.
     const apf=this.$('apForm');
     if(apf) apf.addEventListener('submit',e=>{ e.preventDefault(); this.submitAddPlace(); });
+    const cmb=this.$('commGo');
+    if(cmb) cmb.addEventListener('click',()=>this.addCommunityPlaces());
     const impb=this.$('impGo');
     if(impb) impb.addEventListener('click',()=>{
       const t=this.$('impText');
@@ -11319,6 +11321,18 @@ class TrailApp {
       url:o.u||'', note:o.d||'', kind:cleanKind(o.k),
       src:'chris', lat, lng, mile:pr.mile, off:pr.off};
   }
+  /* Everything a deferred run of addMyPoi put off, done once. Also the way an edit made
+     straight on a myPois record — a merged note, a changed kind — gets onto the map, into
+     the cache and up to the account. */
+  flushMyPois(){
+    this.POIS=this.POIS.filter(z=>z.asset!=='chris')
+      .concat((this.myPois||[]).map(z=>this.poiRecord(z)));
+    this.POIS.forEach((z,i)=>{ z.i=i; });
+    this._byCat=null; this._bedTowns=null;
+    this.poiCache(this.myPois);
+    this.buildPOILayers();
+    this.pushPois();
+  }
   /* Kept on the device for the same reason the plan is: half this trail has no signal, and
      a place you saved is no use to you only when you are somewhere with bars. */
   poiCache(list){
@@ -11342,7 +11356,12 @@ class TrailApp {
   /* Adding a place is three things at once: the record, the pin, and the row in the
      planner's stop list for whichever day rides past it. Doing fewer than three left the
      rider wondering which of them had actually happened. */
-  async addMyPoi(o){
+  /* opt.defer holds back the three things that cost real time — reindexing POIS,
+     rebuilding every map layer, and writing to disk and the cloud. Adding one place, they
+     are free. Adding forty-three, they are the whole cost: buildPOILayers walks ten
+     thousand pins, and doing that per place turned a one-tap import into three and a half
+     minutes. The caller does them once, at the end, through flushMyPois. */
+  async addMyPoi(o, opt){
     const lat=Number(o.y), lng=Number(o.x);
     // Number.isFinite and not the global: the global says null and '' are finite numbers,
     // and both of those arrive here as 0°,0° — a real coordinate, in the Atlantic.
@@ -11359,9 +11378,11 @@ class TrailApp {
     const rec={n:name, y:lat, x:lng, a:String(o.a||''), p:String(o.p||''),
       u:String(o.u||''), d:String(o.d||''), k:cleanKind(o.k)};
     this.myPois.push(rec);
-    this.poiCache(this.myPois);
     const p=this.poiRecord(rec);
-    this.POIS.push(p); this.POIS.forEach((q,i)=>{ q.i=i; });
+    this.POIS.push(p);
+    if(opt && opt.defer) return p;
+    this.poiCache(this.myPois);
+    this.POIS.forEach((q,i)=>{ q.i=i; });
     this._byCat=null; this._bedTowns=null;
     this.buildPOILayers();
     this.pushPois();
@@ -11787,15 +11808,11 @@ class TrailApp {
       const note=(rough ? 'Pin is on '+r.a+', not the exact spot — check before relying on it. '
         : '')+String(r.d||'');
       const p=await this.addMyPoi({n:r.n, y:lat, x:lng, a:r.a, p:r.p, u:r.u,
-        d:note.slice(0, PLACE_NOTE_MAX), k:r.k});
+        d:note.slice(0, PLACE_NOTE_MAX), k:r.k}, {defer:true});
       if(p){ added.push(p); if(rough) roughly.push(r.n); } else failed.push(r.n);
     }
     if(go) go.disabled=false;
-    if(grew.length){ this.poiCache(this.myPois); this.pushPois();
-      this.POIS=this.POIS.filter(z=>z.asset!=='chris')
-        .concat((this.myPois||[]).map(z=>this.poiRecord(z)));
-      this.POIS.forEach((z,i)=>{ z.i=i; });
-      this._byCat=null; this._bedTowns=null; this.buildPOILayers(); }
+    if(added.length || grew.length) this.flushMyPois();
     this.renderNearby();
     if(this.screen==='plan') this.renderPlan();
     this.impStat('Added '+added.length+' of '+recs.length+'.'
@@ -11815,6 +11832,58 @@ class TrailApp {
       +(this.syncOn() ? ' They are on your account, so every device gets them.'
         : ' Signed out, so they are on this device only — sign in on More and they go up.'),
       !!failed.length);
+  }
+  /* The same places, already looked up, shipped with the app. Everything the paste box
+     does happens here too — the merge, the second reports, the skip of anything already
+     saved — except the geocoding, which was done once against this route and checked
+     rather than being asked of a stranger's server on the day.
+     One tap, and it goes wherever the rider's other places go: signed in, that is their
+     account, which is the whole point. There is no version of this I can do for them —
+     the database only takes writes from a session holding their credentials, and it
+     should stay that way. */
+  async addCommunityPlaces(){
+    const btn=this.$('commGo'); if(btn) btn.disabled=true;
+    this.impStat('Loading the list…');
+    let doc;
+    try{
+      const r=await fetch('data/community_places.json', {cache:'no-store'});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      doc=await r.json();
+    }catch(e){
+      if(btn) btn.disabled=false;
+      this.impStat('Could not load the list — '+this.syncErr(e), true);
+      return;
+    }
+    const list=(doc && doc.places) || [];
+    if(!list.length){ if(btn) btn.disabled=false;
+      this.impStat('The list came back empty.', true); return; }
+    const added=[], grew=[], already=[];
+    for(const r of list){
+      if(!Number.isFinite(+r.y) || !Number.isFinite(+r.x)) continue;
+      const have=(this.myPois||[]).find(z=>normQ(z.n)===normQ(r.n)
+        && abs(+z.y-(+r.y))<0.02 && abs(+z.x-(+r.x))<0.02);
+      if(have){
+        if(r.d && String(have.d||'').indexOf(r.d)<0){
+          have.d=[have.d, r.d].filter(Boolean).join(' // ').slice(0, PLACE_NOTE_MAX);
+          if(!have.k && r.k) have.k=r.k;
+          if(!have.u && r.u) have.u=r.u;
+          grew.push(r.n);
+        } else already.push(r.n);
+        continue;
+      }
+      const p=await this.addMyPoi({n:r.n, y:+r.y, x:+r.x, a:r.a||'', u:r.u||'',
+        d:String(r.d||'').slice(0, PLACE_NOTE_MAX), k:r.k||''}, {defer:true});
+      if(p) added.push(p);
+    }
+    if(added.length || grew.length) this.flushMyPois();
+    if(btn) btn.disabled=false;
+    this.renderNearby();
+    if(this.screen==='plan') this.renderPlan();
+    this.impStat('Added '+added.length+' of '+list.length+'.'
+      +(grew.length ? ' Another account added to '+grew.length+' you already had.' : '')
+      +(already.length ? ' '+already.length+' already saved.' : '')
+      +(this.syncOn() ? ' They are on your account now, so every device gets them.'
+        : ' Signed out, so they are on this device only — sign in on More and they go up.'));
   }
   impStat(msg, bad){
     const el=this.$('impStat'); if(!el) return;

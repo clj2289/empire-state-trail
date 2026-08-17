@@ -1363,6 +1363,10 @@
   .ap-stat{font-size:12px;line-height:1.45;color:var(--color-neutral-700)}
   /* Wide and monospaced: what goes in here is a table, and a table you cannot see the
      columns of is one you cannot check before importing. */
+  .comm-row{display:flex;flex-direction:column;gap:5px;margin-bottom:12px;
+    padding-bottom:12px;border-bottom:1px solid var(--color-divider)}
+  .comm-row .ap-go{align-self:flex-start}
+  .comm-note{font-size:11.5px;line-height:1.5;color:var(--color-neutral-600)}
   .imp-text{width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
     line-height:1.5;padding:8px;color:var(--color-text);background:var(--color-surface);
     border:1px solid var(--color-neutral-400);border-radius:4px;resize:vertical;
@@ -2360,6 +2364,15 @@
               <b>sentiment</b>, <b>bike_storage</b>, <b>source_author</b>,
               <b>source_url</b> and the rest are used where present. Add <b>lat</b> and
               <b>lng</b> columns and nothing is looked up.</div>
+            <!-- The list riders have already posted, shipped with the app and looked up
+                 once against this route. One tap rather than a paste. -->
+            <div class="comm-row">
+              <button id="commGo" type="button" class="ap-go">Add the places riders have posted</button>
+              <span class="comm-note">43 places from the trail groups — hotels, food, and
+                things to know about before you get there. Second-hand and dated: each note
+                says who reported it and when.</span>
+            </div>
+            <div class="ap-hint">Or paste your own table:</div>
             <textarea id="impText" class="imp-text" rows="6" spellcheck="false"
               placeholder="type,name,town,notes&#10;food,Broad Street Bagel Company,Kinderhook NY,Lunch stop"></textarea>
             <button id="impGo" type="button" class="ap-go">Import them</button>
