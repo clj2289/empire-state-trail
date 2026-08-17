@@ -7916,41 +7916,6 @@ class TrailApp {
     });
     return n;
   }
-  /* What changed about one day since the save, in the words the row uses for it. Empty
-     string when nothing did — which is most days, most of the time, which is the point. */
-  /* The part of a day's change that the row cannot rule through: its hours, and whether it
-     is a riding day at all. The town and the mileage are struck out in place instead. */
-  planDayNote(d, was){
-    if(!was) return '';
-    const pd=this.planP()[d], wd=was.days[d], wb=was.bounds[d];
-    if(!pd || !wd || !wb) return wd||wb ? '' : 'new day';
-    if(!!wd.zero!==!!pd.zero) return wd.zero ? 'was a rest day' : 'was a riding day';
-    if(pd.zero) return abs(wb.start-this.planBounds()[d].start)<0.5 ? ''
-      : 'was a rest at '+this.placeNameAt(wb.start);
-    const bits=[];
-    if(Math.round(wd.start)!==Math.round(pd.start)) bits.push('was out at '+this.planClock(wd.start));
-    if((wd.end==null)!==(pd.end==null) || (wd.end!=null && pd.end!=null && Math.round(wd.end)!==Math.round(pd.end)))
-      bits.push(wd.end==null ? 'ended when it ended' : 'was in at '+this.planClock(wd.end));
-    return bits.join(' · ');
-  }
-  planDayChange(d, was){
-    if(!was) return '';
-    const pd=this.planP()[d], b=this.planBounds()[d];
-    const wd=was.days[d], wb=was.bounds[d];
-    if(!pd || !b || !wd || !wb) return wd||wb ? '' : 'new day';
-    if(!!wd.zero!==!!pd.zero) return wd.zero ? 'was a rest day' : 'was a riding day';
-    if(pd.zero) return abs(wb.start-b.start)<0.5 ? '' : 'was a rest at '+this.placeNameAt(wb.start);
-    const bits=[];
-    const wt=planTownAt(this.bedTowns(), wb.end), t=this.planDayTown(d);
-    if((wt?wt.n:'')!==(t?t.n:'')) bits.push('was '+(wt ? wt.n : mpTxt(wb.end)));
-    if(Math.round(wb.miles)!==Math.round(b.miles)) bits.push('was '+Math.round(wb.miles)+' mi');
-    // The hours count too: a day you only moved the start of has still changed, and a
-    // header saying "changes pending" over seven rows that all look untouched is no use.
-    if(Math.round(wd.start)!==Math.round(pd.start)) bits.push('was out at '+this.planClock(wd.start));
-    if((wd.end==null)!==(pd.end==null) || (wd.end!=null && pd.end!=null && Math.round(wd.end)!==Math.round(pd.end)))
-      bits.push(wd.end==null ? 'ended when it ended' : 'was in at '+this.planClock(wd.end));
-    return bits.join(' · ');
-  }
   /* Re-plan the days after this one automatically, leaving everything up to and including
      it alone. The days that get rebuilt lose the bed booked for them, because it was a bed
      in a town this no longer visits — saying so is the notice on the row. */
@@ -8202,17 +8167,15 @@ class TrailApp {
        diff — the old town struck through with the new one beside it, the old mileage the
        same — and the bar carries Apply and Cancel instead of the save controls. */
     const prev=this.planPreview ? this.planViewOf(this.planPreview.after) : null;
-    /* One shape for both kinds of change: the value that is going away ruled through, the
-       one replacing it beside it. Teal for a proposal, amber for work you have not saved —
-       the same two colours the bar at the top uses, so a struck-through town and the bar
-       above it are obviously about the same thing. */
+    /* The value that is going away ruled through, the one replacing it beside it. Only a
+       proposal uses this now: teal, matching the Preview bar, so a struck-through town and
+       the bar above it are obviously about the same thing. */
     const diff=(oldV,newV,cls)=> (oldV!=null && newV!=null && oldV!==newV)
       ? '<s class="pl-del">'+esc(oldV)+'</s><span class="'+cls+'">'+esc(newV)+'</span>'
       : esc(newV==null ? oldV : newV);
     const pvN=prev ? this.planPreviewCount(prev) : 0;
     const pvD=prev ? prev.days.length-days.length : 0;
     const was=this.planWas();
-    const chgN=was ? days.reduce((n,x,i)=>n+(this.planDayChange(i,was)?1:0),0) : 0;
     /* How far the plan falls short of the end of the trail. Named in the header, because
        "7 riding days · 442 mi" over a 582-mile trail is a number that looks like an answer
        and is not one. */
@@ -8434,11 +8397,14 @@ class TrailApp {
          said and puts what it says now beside it; otherwise it is just the day. */
       /* An off-trail day's own words in the title, because "Albion → Albion" is not what
          that day is. What the rider typed is the only thing that day is about. */
+      /* A PROPOSAL rules through what the day says now and puts what it would say beside
+         it, because nothing has happened yet and the pair is the whole question. An EDIT
+         does not: that is the plan reporting back what you just did to it, on the row you
+         did it on, and it is the same running commentary the last-change band used to
+         carry across the top. You moved the day. You know. Undo is in the header. */
       const titleHtml= away ? esc(pd.note || 'Off the trail')
         : (prev && !plain && nb && nd && !nd.zero)
           ? esc(this.placeNameAt(nb.start))+' → '+diff(toN, this.planEndName(nb.end), 'pl-ins')
-        : (!prev && !plain && wasB && wasD && !wasD.zero)
-          ? esc(fromN)+' → '+diff(this.planEndName(wasB.end), toN, 'pl-ins-w')
         : esc(title);
       /* Two halves, because they answer different questions: when you are on the bike,
          and where you get off it. Only the second half carries the bed glyph and its
@@ -8493,8 +8459,7 @@ class TrailApp {
               +(prev
                 ? diff(String(Math.round(b.miles)),
                     nb&&nd&&!nd.zero ? String(Math.round(nb.miles)) : null, 'pl-ins')
-                : diff(wasB&&wasD&&!wasD.zero ? String(Math.round(wasB.miles)) : null,
-                    String(Math.round(b.miles)), 'pl-ins-w'))
+                : String(Math.round(b.miles)))
               +'<i>mi</i></span>')
             /* A two-state control, labelled by what pressing it does rather than by what
                the day currently is — "Riding" sitting there in a box read as a status
@@ -8528,8 +8493,7 @@ class TrailApp {
       // The town and the mileage are ruled through in the row itself now; this line is
       // left with the things that have nowhere to be struck through — hours, and a day
       // that changed between riding and resting.
-      const chg=prev ? '' : this.planDayNote(d, was);
-      if(chg) h.push('<div class="pl-chg"><span class="pl-chg-d"></span>'+esc(chg)+'</div>');
+
       /* The rider's own note, on the row — and where there is none, the offer of one in
          its place. It was only ever a field inside the fold, which is a thing you find by
          opening every day to see what is in it. "Return the car and start riding" belongs
