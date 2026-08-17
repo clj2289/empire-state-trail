@@ -198,6 +198,14 @@ function ymdTxt(s){
    nothing to do with. Every call degrades to a straight great-circle hop when it fails or
    you're offline, so the tool still works with no network, just without the snap. */
 const OSRM_BASE='https://routing.openstreetmap.de/routed-bike';
+/* BRouter, on its 'safety' profile — the one that weights quiet roads over short ones.
+   OSRM's bike profile knows a bike cannot use a motorway and little else after that: it
+   will happily send you a mile down a five-lane arterial because it is the direct way to
+   the door. Safety is the profile a tourer wants for the last half mile into a town.
+   Asked first for the ride out to a stop; OSRM stays as the fallback, and a straight line
+   stays as the fallback to that. Not used for the ruler, which is a measuring tool and
+   should keep answering the question it was asked. */
+const BROUTER='https://brouter.de/brouter';
 const MEASURE_SNAP_M=40;
 /* Bands as a bike feels them, not as a traffic engineer files them: five hundred
    vehicles a day is where a road stops being empty, and fifteen hundred is where
@@ -3412,6 +3420,40 @@ class TrailApp {
       }
     }catch(e){/* fall through to a straight leg */}
     return null;
+  }
+  /* The quiet way there, or the direct one, or the straight line — in that order, and it
+     says which it got so the row and the file can be honest about it. */
+  async routeQuiet(A,B){
+    const key='q:'+A.lat.toFixed(6)+','+A.lng.toFixed(6)+';'+B.lat.toFixed(6)+','+B.lng.toFixed(6);
+    if(this._routeCache.has(key)) return this._routeCache.get(key);
+    try{
+      const u=BROUTER+'?lonlats='+A.lng.toFixed(6)+','+A.lat.toFixed(6)+'|'
+        +B.lng.toFixed(6)+','+B.lat.toFixed(6)
+        +'&profile=safety&alternativeidx=0&format=geojson';
+      const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(), 8000);
+      let j;
+      try{
+        const r=await fetch(u,{signal:ctl.signal});
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        j=await r.json();
+      } finally{ clearTimeout(t); }
+      const f=j && j.features && j.features[0];
+      const c=f && f.geometry && f.geometry.coordinates;
+      if(c && c.length>1){
+        /* track-length is metres, and it is a string on this API. Falling back to the
+           straight line for the DISTANCE while keeping a traced geometry would report a
+           shorter ride than the one drawn, so a missing length fails the whole answer. */
+        const m=+((f.properties||{})['track-length']);
+        if(isFinite(m) && m>0){
+          const res={coords:c.map(q=>[q[1],q[0]]), miles:m/1609.344, quiet:true};
+          this._routeCache.set(key,res);
+          return res;
+        }
+      }
+    }catch(e){/* fall through to OSRM */}
+    const alt=await this.routeSeg(A,B);
+    if(alt) this._routeCache.set(key, alt);
+    return alt;
   }
   // A short-fused GET that gives up rather than hang the redraw when the router is slow.
   async osrm(url){
@@ -11325,7 +11367,7 @@ class TrailApp {
       try{
         const a=await this.snapPoint({lat:rp[0], lng:rp[1]});
         const bb=await this.snapPoint({lat:p.lat, lng:p.lng});
-        if(a.onRoad && bb.onRoad) leg=await this.routeSeg(L.latLng(a.lat,a.lng), L.latLng(bb.lat,bb.lng));
+        if(a.onRoad && bb.onRoad) leg=await this.routeQuiet(L.latLng(a.lat,a.lng), L.latLng(bb.lat,bb.lng));
       }catch(e){
         /* Network failures are expected out here and the straight line is the right
            answer to them. A TypeError is not — it once ate a call to a method that did
@@ -11334,7 +11376,7 @@ class TrailApp {
         if(e instanceof TypeError && !/fetch|network/i.test(e.message||'')) console.error(e);
       }
       this._detour[this.detourKey(p)]=leg
-        ? {miles:leg.miles, coords:leg.coords, road:true}
+        ? {miles:leg.miles, coords:leg.coords, road:true, quiet:!!leg.quiet}
         : {miles:p.off, coords:[[rp[0],rp[1]],[p.lat,p.lng]], road:false};
     }
     this._detourBusy=false;
@@ -11433,10 +11475,43 @@ class TrailApp {
         +'<desc>'+x([w.kind, w.mile!=null?mpTxt(w.mile):'', w.note].filter(Boolean).join(' · '))+'</desc>'
         +'<type>'+x(w.kind)+'</type></wpt>');
     });
+    /* The ride out to a chosen stop goes INSIDE the day's track, as an out-and-back spur
+       spliced in at the milepost you turn off at. Two earlier versions were both wrong:
+       one wrote each detour as its own <trk>, and uploaders turn every <trk> into a
+       separate Route, so a day arrived as three of them; the next dropped them, and then
+       the route simply did not go to the Erie Canal Discovery Center at all. A course is
+       meant to take you to the door and back, and that is one route.
+       Only traced ones. A straight line written into a GPX as though it were a route is
+       the one thing here that could send a rider down a highway. */
+    const spur=[], seen=new Set();
+    (this.POIS||[]).forEach(p=>{
+      if(p.mile==null) return;
+      const key=this.poiStopKey(p);
+      if(!this.planPicked[key] || seen.has(key)) return;
+      if(dayIdx==null ? (p.mile<lo || p.mile>hi) : !this.stopOnDay(key, p.mile, dayIdx)) return;
+      const dt=this.detourOf(p);
+      if(!dt || !dt.road || !dt.coords || dt.coords.length<2) return;
+      seen.add(key);
+      spur.push({mile:p.mile, coords:dt.coords, miles:dt.miles});
+    });
+    let seq=pts.map(r=>({lat:r[0], lng:r[1], mile:r[2]}));
+    if(spur.length){
+      // Spliced from the back forwards, so an insertion never moves an index still to come.
+      spur.map(sp=>{
+        let bi=0, bd=Infinity;
+        seq.forEach((q,i)=>{ const dd=abs(q.mile-sp.mile); if(dd<bd){ bd=dd; bi=i; } });
+        return {i:bi, sp};
+      }).sort((a,c)=>c.i-a.i).forEach(({i,sp})=>{
+        const outward=sp.coords.map(c=>({lat:+c[0], lng:+c[1], mile:null}));
+        // Back the way you came, without repeating the doorstep you just reached.
+        const home=outward.slice(0,-1).reverse();
+        seq.splice(i+1, 0, ...outward, ...home);
+      });
+    }
     L.push('<trk><name>'+x(name)+'</name><trkseg>');
-    pts.forEach(r=>{
-      const e=this.gpxEle(r[2]);
-      L.push('<trkpt lat="'+r[0].toFixed(6)+'" lon="'+r[1].toFixed(6)+'">'
+    seq.forEach(r=>{
+      const e=r.mile==null ? null : this.gpxEle(r.mile);
+      L.push('<trkpt lat="'+(+r.lat).toFixed(6)+'" lon="'+(+r.lng).toFixed(6)+'">'
         +(e!=null?'<ele>'+e+'</ele>':'')+'</trkpt>');
     });
     L.push('</trkseg></trk>');
@@ -11455,8 +11530,8 @@ class TrailApp {
        needs to know at the junction, and it does not cost them a route list full of
        stubs. */
     L.push('</gpx>');
-    return {xml:L.join('\n'), name:name, pts:pts.length,
-      wpts:wpts.length, trks:1, from:lo, to:hi};
+    return {xml:L.join('\n'), name:name, pts:seq.length, routePts:pts.length,
+      wpts:wpts.length, trks:1, spurs:spur.length, from:lo, to:hi};
   }
   /* A Blob and a synthetic click. No server, and nothing leaves the phone. */
   gpxSave(dayIdx){
@@ -11473,7 +11548,9 @@ class TrailApp {
       setTimeout(()=>URL.revokeObjectURL(url), 4000);
     }catch(e){ this.status('Could not write the file out.'); return null; }
     this.status('Saved '+file+' — one route, '+doc.pts+' track points and '+doc.wpts
-      +' waypoint'+(doc.wpts===1?'':'s')+'.');
+      +' waypoint'+(doc.wpts===1?'':'s')
+      +(doc.spurs ? ', riding out to '+doc.spurs+' stop'+(doc.spurs===1?'':'s')+' and back'
+        : '')+'.');
     return doc;
   }
   apStat(msg, bad){
