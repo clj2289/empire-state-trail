@@ -444,20 +444,19 @@ const P = {
   chevR:'M9 6l6 6-6 6',
   chevL:'M15 6l-6 6 6 6',
   layers:'M12 2 22 7 12 12 2 7Z|M2 12l10 5 10-5|M2 17l10 5 10-5',
-  bike:'c5.5 17.5 3.2|c18.5 17.5 3.2|M5.5 17.5l4-8.5h6.5l-3 8.5|M9.5 9l3.5 8.5|M13.5 9h3',
+  bike:'c5.8 16.9 4|c18.2 16.9 4|M5.8 16.9l4.4-8.3h6.6l-3 8.3|M10.2 8.6l3.4 8.3|M14.3 8.6h2.9',
   /* A canal lock, drawn as what it is: a chamber with a gate at each end. Not a padlock —
      these are the Erie's locks, and free camping at them is a real place to sleep. */
   canallock:'M3 4v16|M21 4v16|M3 8.5h18|M3 15.5h18|M12 8.5v7',
   // Side-on, because that is the shape a car is: roofline, beltline, two wheels. A
   // three-quarter view needs detail this size cannot hold.
-  car:'M3 16.4v-3.1l2.2-4.8A2.4 2.4 0 0 1 7.4 7h9.2a2.4 2.4 0 0 1 2.2 1.5l2.2 4.8v3.1|M3 13.3h18|c7.5 16.6 1.9|c16.5 16.6 1.9',
+  car:'M2.4 17.8v-4.2l4.2-5h10.8l4.2 5v4.2|M2.4 13.6h19.2|c7.2 18 2.4|c16.8 18 2.4',
   /* The other three kinds of day, so a run of days can be read down the rail without
      opening any of them. A walking figure for a day off the bike — the one kind of day
      that is defined by what you do instead, and the only human figure at this size that
      survives being a line drawing. A mug for a rest day: not a bed, because a bed on this
      screen already means the hotel, and every day has one of those. */
-  walk:'c12.6 3.6 2|M12.6 6.1 10.8 12.3l3.6 3.1.9 4.8|M10.8 12.3 8.3 14.8l-1 4.5'
-      +'|M13.6 8.1l3.3 1.5|M11.5 8.5 8.2 10.5',
+  camera:'M2.5 9.2a1.6 1.6 0 0 1 1.6-1.6h2.6l1.7-2.6h7.2l1.7 2.6h2.6a1.6 1.6 0 0 1 1.6 1.6v9a1.6 1.6 0 0 1-1.6 1.6H4.1a1.6 1.6 0 0 1-1.6-1.6Z|c12 13.6 3.6',
   mug:'M5 7.5h11v5.6a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z|M16 9.4h1.6a2.6 2.6 0 0 1 0 5.2H16'
      +'|M8.4 2.6v2.2|M12.4 2.6v2.2',
   med:'M10 3h4v5h5v4h-5v5h-4v-5H5V8h5z',
@@ -1260,10 +1259,52 @@ const PLAN_STOP_EITHER_MI=3;
 const PLAN_DAY_KINDS=[
   {k:'ride',    t:'Riding',       ic:'bike'},
   {k:'rest',    t:'Rest',         ic:'mug'},
-  {k:'offbike', t:'Off the bike', ic:'walk'},
+  {k:'offbike', t:'Off the bike', ic:'camera'},
   {k:'drive',   t:'Driving',      ic:'car'}
 ];
 const PLAN_NOTE_MAX=120;
+/* ---- the backup format ----
+   One sheet, one row per thing, with the kind of thing in the first column. Mixing four
+   record types in one file is what keeps a backup to ONE file — a rider restoring a trip
+   should not have to remember that they also needed plan-stops.csv.
+   The last columns are opaque on purpose: `key` is the string a stop or a hotel is filed
+   under inside the app, and writing it down is the difference between loading a plan back
+   exactly and loading back something that looks like it. Everything left of `key` is for
+   the human, and every one of those columns is read back too — change the miles on a day
+   in Numbers, load the file, and that day changes. */
+const CSV_COLS=['row','day','date','kind','miles','from','to','out','in','note','bed',
+  'key','lat','lng'];
+const csvCell = v => {
+  const t = v==null ? '' : String(v);
+  /* A leading =, + or @ is how a spreadsheet is talked into running something when the
+     file is opened. Nothing here is ever a formula, so anything that starts like one is
+     quoted with a leading apostrophe — the convention every spreadsheet reads as "this is
+     text" and strips on the way in. */
+  const s = /^[=+@\t\r]/.test(t) ? "'"+t : t;
+  return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+};
+const csvLine = a => a.map(csvCell).join(',');
+/* RFC 4180, including the part everyone skips: a quoted field may contain the separator,
+   a line break, and doubled quotes standing for one. A note reading "Rest — laundry, and
+   the museum" goes out through the writer above and has to come back as one cell. */
+function csvParse(txt){
+  const t=String(txt||'').replace(/^﻿/,'');
+  const rows=[]; let row=[], cell='', q=false;
+  for(let i=0;i<t.length;i++){
+    const c=t[i];
+    if(q){
+      if(c!=='"') cell+=c;
+      else if(t[i+1]==='"'){ cell+='"'; i++; }
+      else q=false;
+    }
+    else if(c==='"') q=true;
+    else if(c===','){ row.push(cell); cell=''; }
+    else if(c==='\n'){ row.push(cell); rows.push(row); row=[]; cell=''; }
+    else if(c!=='\r') cell+=c;
+  }
+  if(cell!=='' || row.length){ row.push(cell); rows.push(row); }
+  return rows.filter(r=>r.some(x=>String(x).trim()!==''));
+}
 /* Which shape of plan record this build writes. A record with no `v` at all was
    written by a build from before travel days, day notes, a start date and per-day stop
    assignments existed — so its SILENCE about those fields is not the rider saying they
@@ -7588,7 +7629,7 @@ class TrailApp {
     at('EMPIRE STATE TRAIL', M, y, 8, false, 0.45); y-=22;
     at(this.destName()===''?'Itinerary':'Ride plan', M, y, 21, true, 0.05); y-=17;
     const sub=[ridden+(ridden===1?' riding day':' riding days'), Math.round(tot)+' mi']
-      .concat(zs?[zs+' zero']:[]).concat(offN?[offN+' off the trail']:[])
+      .concat(zs?[zs+' zero']:[]).concat(offN?[offN+' driving']:[])
       .concat(days.length?[this.planDayLabel(0).replace(/^\w+, /,'')
         +(days.length>1 ? ' – '+this.planDayLabel(days.length-1).replace(/^\w+, /,'') : '')]:[])
       .concat([this.dir==='B2NYC'?'Buffalo to NYC':'NYC to Buffalo']).join(' · ');
@@ -7608,7 +7649,7 @@ class TrailApp {
       const fin=!pd.zero && !spent && abs(b.end-term)<=1;
       const fromN=this.placeNameAt(b.start);
       const toN=fin ? this.destName() : atT ? atT.n : 'between towns';
-      const title=away ? (pd.note || 'Off the trail')
+      const title=away ? (pd.note || 'Driving')
         : kind==='rest' ? 'Rest day at '+fromN
         : kind==='offbike' ? 'Off the bike at '+fromN
         : spent ? (abs(b.start-term)<=1 ? 'Nothing left to ride' : 'Nothing to ride this day')
@@ -7715,6 +7756,163 @@ class TrailApp {
     this.status('Saved '+file+' — '+doc.days+(doc.days===1?' day':' days')+' on '
       +doc.pages+(doc.pages===1?' page':' pages')+'.');
     return doc;
+  }
+  /* ---------- a copy the rider keeps ----------
+     The plan is in two places already and both of them are the app's: this device, and the
+     account. A backup is the third — a file on the rider's own disk, readable with this app
+     shut and loadable when an account will not sign in.
+     A PDF cannot be that file, much as it is the nice one to have. The itinerary PDF is a
+     page of type; reading a plan back out of one needs a PDF parser and then guesswork
+     about which number was a milepost and which was a date, and it would still be guessing.
+     So the PDF stays the copy you read, and this is the copy that comes back. */
+  planCsv(){
+    const days=this.planP(), bounds=this.planBounds();
+    const rows=[CSV_COLS.slice()];
+    const put=o=>rows.push(CSV_COLS.map(c=>o[c]==null?'':o[c]));
+    const iso=i=>{ const t=this.planDateFor(i);
+      return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'
+        +String(t.getDate()).padStart(2,'0'); };
+    put({row:'trip', date:this.planStart||'', kind:this.dir,
+      miles:Math.round(this.planStartMile()*1000)/1000,
+      from:this.shortTown(this.placeNameAt(this.planStartMile())), to:this.destName(),
+      out:this.avgSpeed, 'in':Math.round(this.wxPerDay||60),
+      note:days.length+(days.length===1?' day':' days')});
+    days.forEach((pd,i)=>{
+      const b=bounds[i]||{start:0,end:0,miles:0};
+      /* The day's OWN miles, not the computed ones. They agree except on a day whose end
+         time was set by hand, and it is this number that goes back in when the file is
+         loaded — a sheet that shows one figure and restores another is a trap. */
+      put({row:'day', day:i+1, date:iso(i),
+        kind:this.dayKindLabel(this.dayKind(pd)),
+        miles:pd.miles==null ? Math.round(b.miles*10)/10 : Math.round(pd.miles*10)/10,
+        from:this.shortTown(this.placeNameAt(b.start)),
+        to:this.shortTown(this.placeNameAt(b.end)),
+        out:pd.start==null?'':pd.start, 'in':pd.end==null?'':pd.end,
+        note:pd.note||'', bed:String(this.planStay[i]||'').split('|')[0],
+        key:this.planStay[i]||''});
+    });
+    /* A stop carries its days only when they are not the ones it would fall on anyway —
+       that is how the app stores it, and writing the natural day down would turn a stop
+       that follows its day around into one pinned to a date. */
+    Object.keys(this.planPicked||{}).forEach(k=>{
+      const on=this.planStopDays[k];
+      put({row:'stop', day:Array.isArray(on) ? on.map(x=>x+1).join(' ') : '',
+        note:String(k).replace(/:-?\d+$/,''), key:k});
+    });
+    (this.myPois||[]).forEach(o=>{
+      put({row:'place', kind:o.k||'', note:o.n||'', from:o.a||'', to:o.u||'',
+        lat:o.y, lng:o.x});
+    });
+    return rows.map(csvLine).join('\r\n')+'\r\n';
+  }
+  csvSave(){
+    let txt;
+    try{ txt=this.planCsv(); }
+    catch(e){ this.status('Could not write the backup out.'); return null; }
+    const file=('empire-state-trail-plan'+(this.planStart?'-'+this.planStart:''))
+      .replace(/[^a-z0-9-]+/gi,'-').replace(/-+/g,'-').toLowerCase()+'.csv';
+    try{
+      const url=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+      const a=document.createElement('a');
+      a.href=url; a.download=file;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+    }catch(e){ this.status('Could not save the file.'); return null; }
+    const n=this.planP().length, pl=(this.myPois||[]).length;
+    this.status('Saved '+file+' — '+n+(n===1?' day':' days')
+      +(pl?' and '+pl+' of your places':'')+'. Load it back with Import.');
+    return txt;
+  }
+  /* Everything the loader will accept, in one place, because a file the rider edited in a
+     spreadsheet is the normal case and not the exception. Unknown row types are ignored
+     rather than refused: a column of their own notes down the side of the sheet should not
+     stop the plan loading. */
+  async csvLoad(txt, name){
+    let rows;
+    try{ rows=csvParse(txt); }
+    catch(e){ rows=null; }
+    if(!rows || rows.length<2){ this.status('Nothing in that file could be read.'); return false; }
+    const head=rows[0].map(x=>String(x).trim().toLowerCase());
+    if(head[0]!=='row'){
+      this.status('That is not a plan file — the first column should be “row”.'); return false; }
+    const col={}; head.forEach((h,i)=>{ if(col[h]==null) col[h]=i; });
+    const at=(r,k)=>col[k]==null ? '' : String(r[col[k]]==null?'':r[col[k]]).trim();
+    const num=v=>{ const n=parseFloat(String(v).replace(/[^0-9.\-]/g,'')); return isFinite(n)?n:null; };
+    const kindOf=w=>{
+      const t=String(w||'').trim().toLowerCase();
+      const f=PLAN_DAY_KINDS.find(x=>x.t.toLowerCase()===t || x.k===t);
+      return f ? f.k : 'ride';
+    };
+    const dayRows=[], stopRows=[], placeRows=[];
+    let trip=null;
+    rows.slice(1).forEach(r=>{
+      const kind=at(r,'row').toLowerCase();
+      if(kind==='trip') trip=trip||r;
+      else if(kind==='day') dayRows.push(r);
+      else if(kind==='stop') stopRows.push(r);
+      else if(kind==='place') placeRows.push(r);
+    });
+    if(!dayRows.length){ this.status('That file has no days in it.'); return false; }
+    if(dayRows.length>PLAN_DAYS_MAX){
+      this.status('That file has '+dayRows.length+' days in it — more than a plan can hold.');
+      return false; }
+    const built=dayRows.map(r=>{
+      const k=kindOf(at(r,'kind'));
+      const mi=num(at(r,'miles')), out=num(at(r,'out')), inn=num(at(r,'in'));
+      /* Kept whatever the kind: a rest day that was 61 miles before it became a rest
+         day gets its 61 back when it becomes a riding day again, and planDayBounds reads
+         no miles off a zero day in the meantime. */
+      return {miles:Math.max(0, mi==null?0:mi),
+        start:out==null ? this.wxRideStart : Math.max(0,Math.min(23,out)),
+        end:inn==null ? null : Math.max(0,Math.min(23,inn)),
+        zero:k!=='ride', off:k==='drive', k:(k==='offbike'?'offbike':''),
+        note:String(at(r,'note')||'').slice(0,PLAN_NOTE_MAX)};
+    });
+    const picked={}, stopDays={};
+    stopRows.forEach(r=>{
+      const key=at(r,'key'); if(!key) return;
+      picked[key]=true;
+      const ds=at(r,'day').split(/[^0-9]+/).map(x=>parseInt(x,10))
+        .filter(x=>isFinite(x) && x>=1 && x<=built.length).map(x=>x-1);
+      if(ds.length) stopDays[key]=ds.filter((x,i,a)=>a.indexOf(x)===i).sort((a,b)=>a-b);
+    });
+    const stay={};
+    dayRows.forEach((r,i)=>{ const k=at(r,'key'); if(k) stay[i]=k; });
+    const was=this.planP().length;
+    this.planEdit('the plan from '+(name||'a file'), ()=>{
+      if(trip){
+        const d=this.cleanDate(at(trip,'date')); if(d) this.planStart=d;
+        const a=num(at(trip,'miles')); if(a!=null) this.planAnchor=Math.max(0,Math.min(TOTAL,a));
+        const v=num(at(trip,'out')); if(v!=null && v>0) this.avgSpeed=Math.max(4,Math.min(25,v));
+        const t=num(at(trip,'in')); if(t!=null && t>0){ this.wxPerDay=Math.max(10,Math.min(200,t)); this.savePrefs(); }
+        const dir=at(trip,'kind');
+        if(dir==='B2NYC' || dir==='NYC2B') this.dir=dir;
+      }
+      this.planDays=built;
+      this.planPicked=picked;
+      this.planStopDays=stopDays;
+      this.planStay=stay;
+    });
+    /* Places are merged, never replaced. This file is one rider's copy of a shared account
+       — loading a three-week-old backup must not delete the four places somebody else added
+       to it yesterday. addMyPoi drops the ones already there by name and position. */
+    let added=0;
+    if(placeRows.length){
+      const before=(this.myPois||[]).length;
+      for(const r of placeRows){
+        await this.addMyPoi({n:at(r,'note'), y:num(at(r,'lat')), x:num(at(r,'lng')),
+          a:at(r,'from'), u:at(r,'to'), k:at(r,'kind')}, {defer:true});
+      }
+      added=(this.myPois||[]).length-before;
+      if(added) this.flushMyPois();
+    }
+    this.renderPlan(); this.drawPlanLayer();
+    if(this.screen==='nearby') this.renderNearby();
+    this.status('Loaded '+built.length+(built.length===1?' day':' days')+' from '
+      +(name||'the file')+(added ? ' — and '+added+' place'+(added===1?'':'s')
+        +' you did not already have' : '')
+      +'. The '+was+'-day plan that was here is one Undo away.');
+    return true;
   }
   /* ---------- draft, save, undo ----------
      A plan is a document, not a running total. Every edit lands in the working copy and is
@@ -8720,7 +8918,7 @@ class TrailApp {
         +'<div class="pl-title-wrap"><div class="pl-title">Ride plan</div>'
         +'<div class="pl-sum">'+ridden+(ridden===1?' riding day · ':' riding days · ')+Math.round(tot)+' mi'
           +(zs?' · '+zs+' zero':'')
-          +(offN?' · '+offN+' off the trail':'')
+          +(offN?' · '+offN+' driving':'')
           /* When it runs, under how long it runs for. Two dates a rider can check against
              a booking without counting rows. */
           +(days.length ? ' · '+esc(this.planDayLabel(0).replace(/^\w+, /,''))
@@ -8845,6 +9043,18 @@ class TrailApp {
         +' value="'+Math.round(this.wxPerDay||60)+'" data-plan="perday"'
         +' title="What Auto-plan aims at, and how many days it thinks the trip takes. It does not move days you have already planned">'
         +'<span class="pl-unit">mi</span></span>'
+        /* A copy the rider keeps, in the fold rather than on the header: exporting is
+           something done once before a trip and once after a change of phone, not a
+           control ridden with. Import is a <label> wrapped round a hidden file input —
+           the one way to open a file picker that needs no script of its own. */
+        +'<span class="pl-field pl-back"><span class="pl-k">Backup</span>'
+        +'<button type="button" class="pl-hb" data-plan="csvexp" title="Save the whole plan'
+          +' — every day, its stops, where you sleep and your own places — to a spreadsheet'
+          +' on this device">Export</button>'
+        +'<label class="pl-hb pl-impb" title="Load a plan back from a file you exported.'
+          +' Your places are merged in; the plan on screen goes into Undo">Import'
+          +'<input id="planCsvIn" type="file" accept=".csv,text/csv,text/plain">'
+        +'</label></span>'
         /* No map button. It was a third way to reach a tab that is already one tap away
            on the dock and one tap away from any day's own row, filed at the end of a row
            about pace and distance where it had nothing to do with either. */
@@ -8878,7 +9088,7 @@ class TrailApp {
       +'<div class="pl-print">'
         +'<div class="pl-print-t">Empire State Trail — '+esc(this.destName()===''?'itinerary':'ride plan')+'</div>'
         +'<div class="pl-print-s">'+ridden+(ridden===1?' riding day · ':' riding days · ')
-          +Math.round(tot)+' mi'+(zs?' · '+zs+' zero':'')+(offN?' · '+offN+' off the trail':'')
+          +Math.round(tot)+' mi'+(zs?' · '+zs+' zero':'')+(offN?' · '+offN+' driving':'')
           +(days.length ? ' · '+esc(this.planDayLabel(0))
             +(days.length>1 ? ' to '+esc(this.planDayLabel(days.length-1)) : '') : '')
           +' · '+esc(this.dir==='B2NYC'?'Buffalo → NYC':'NYC → Buffalo')+'</div>'
@@ -8951,7 +9161,7 @@ class TrailApp {
       const plain=pd.zero || spent;
       /* An off-trail day's own words in the title, because "Albion → Albion" is not what
          that day is. What the rider typed is the only thing that day is about. */
-      const titleHtml=esc(away ? (pd.note || 'Off the trail') : title);
+      const titleHtml=esc(away ? (pd.note || 'Driving') : title);
       /* Two halves, because they answer different questions: when you are on the bike,
          and where you get off it. Only the second half carries the bed glyph and its
          colour. In front of the whole line both of them read as qualifying the hours —
@@ -9000,7 +9210,7 @@ class TrailApp {
               +'<span class="pl-tl">'+(warn?warnSvg:'')
                 +(kind==='ride' ? '' : '<span class="pl-kmark" aria-label="'
                   +esc(this.dayKindLabel(kind))+'" title="'+esc(this.dayKindLabel(kind))+'">'
-                  +this.dayKindIcon(kind,15)+'</span>')
+                  +this.dayKindIcon(kind,17)+'</span>')
                 +'<span class="pl-t"'+(warn?' style="color:#b3261e"':'')+'>'+titleHtml+'</span>'
                 +caretSvg(open)+'</span>'
               /* `away ||` and not just `summary`: a travel day whose note is already the
@@ -9180,7 +9390,7 @@ class TrailApp {
           +PLAN_DAY_KINDS.map(x=>'<button type="button" class="pl-kind'+(x.k===kind?' on':'')+'"'
             +' data-plan="daykind" data-d="'+d+'" data-k="'+x.k+'"'
             +' aria-pressed="'+(x.k===kind?'true':'false')+'"'
-            +' title="'+esc(KTIP[x.k]||'')+'">'+icon(x.ic,13)+esc(x.t)+'</button>').join('')
+            +' title="'+esc(KTIP[x.k]||'')+'">'+icon(x.ic,16)+esc(x.t)+'</button>').join('')
           +'</span>'
           /* Only where the row has no field of its own. Every other day now carries an
              editable note on the row itself, and two boxes holding one sentence — one of
@@ -9756,6 +9966,7 @@ class TrailApp {
       if(act==='auto'){ this.autoPlan(); this.renderPlan(); }
       else if(act==='gpx'){ this.gpxSave(null); }
       else if(act==='pdf'){ this.pdfSave(); }
+      else if(act==='csvexp'){ this.csvSave(); }
       else if(act==='gpxday'){ this.gpxSave(d); }
       /* A day the search found. Opens it as well as scrolling to it — the rider asked
          where something was, and the answer is the day with its stops showing. The search
@@ -9870,6 +10081,17 @@ class TrailApp {
         }); this.renderPlan(); }
     });
     el.addEventListener('change',e=>{
+      /* First, and by id: a file input's value is a filename, and it is the only control
+         on this screen whose change is answered by reading something off the disk. */
+      if(e.target && e.target.id==='planCsvIn'){
+        const f=e.target.files && e.target.files[0];
+        e.target.value='';                 // so the same file can be loaded again
+        if(!f) return;
+        this.status('Reading '+f.name+'…');
+        f.text().then(t=>this.csvLoad(t, f.name))
+          .catch(()=>this.status('Could not read that file.'));
+        return;
+      }
       /* Ahead of the numeric controls below, and matched on its class rather than
          data-plan, because this one's value is a word — every branch under here parses
          its value as a number and would drop it on the floor. */
@@ -10134,7 +10356,7 @@ class TrailApp {
          and neither says which one — and the trip crosses a month, so the day number alone
          is no better. The comma goes because this sits in a legend, not a sentence. */
       const lab=this.planDayLabel(d).replace(',','')+' · '
-        +(pd.off ? (pd.note || 'off the trail')
+        +(pd.off ? (pd.note || 'driving')
           : pd.zero ? 'zero at '+from
           : from+' → '+(t?t.n:Math.round(bounds[d].end)+' mi'));
       return '<span class="plan-key-row"><span class="plan-key-sw" style="background:'

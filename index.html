@@ -703,6 +703,13 @@
      one line the design asks for. */
   .pl-head-2 select{max-width:120px;text-overflow:ellipsis}
   .pl-to{flex:1;min-width:0;font-size:14px}
+  /* Import is a label wearing a button's clothes, because the only control that opens a
+     file picker without script is the input it is wrapped around — which is hidden, since
+     what a browser draws for one is "Choose file / no file chosen" and that is not a
+     sentence this screen would say. */
+  .pl-back{gap:6px}
+  .pl-impb{display:inline-flex;align-items:center;cursor:pointer}
+  .pl-impb input{display:none}
   .pl-day{display:flex;gap:12px;padding:10px 18px 11px;border-bottom:1px solid var(--pl-hair)}
   .pl-day:has(.pl-row){padding:14px 18px 16px}
   .pl-day.pl-zero{background:#eae9e9}
