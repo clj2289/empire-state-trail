@@ -314,6 +314,12 @@
   .poi-kind-s{flex:1;min-width:0;font-family:inherit;font-size:12.5px;padding:4px 6px;
     color:var(--color-text);background:var(--color-surface);
     border:1px solid var(--color-neutral-400);border-radius:4px}
+  /* The hours field wears the same clothes as the kind select above it, because they are
+     the same kind of statement about a place. */
+  .poi-hrs-s{flex:1;min-width:0;font-family:inherit;font-size:12px;padding:3px 6px;
+    color:var(--color-text);background:var(--color-surface);
+    border:1px solid var(--color-divider);border-radius:6px}
+  .poi-hrs-s::placeholder{color:var(--color-neutral-500)}
   .poi-mine{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
   .poi-mine button{flex:1 1 auto;font-family:inherit;font-size:12.5px;font-weight:600;
     cursor:pointer;padding:8px 10px;border-radius:var(--radius-md);
@@ -942,6 +948,22 @@
   .pl-sic{flex:none;margin-top:1px;display:grid;place-items:center}
   .pl-sbody{flex:1;min-width:0}
   .pl-sname{display:block;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* A place you will be standing outside of while it is shut. Red and a hazard triangle,
+     because this is the one thing on the screen that no amount of riding fixes — you can
+     ride a day longer, but you cannot arrive on a Tuesday at a museum that shuts on
+     Tuesdays. It only ever appears where the rider has written the hours down. */
+  .pl-shut{color:#b3261e;font-weight:600}
+  .pl-shut-f{display:inline-flex;vertical-align:-2px;margin-right:4px;color:#b3261e}
+  .pl-shut-f svg{width:13px;height:13px}
+  .pl-picked-n .pl-shut-f,.pl-sname .pl-shut-f{flex:none}
+  /* When it is open, beside what it is. Deliberately the plainest field on the row — it is
+     a line of text off the back of a card, not a schedule builder. */
+  .pl-root .pl-shrs{flex:none;width:94px;min-width:0;font-family:inherit;font-size:11px;
+    color:var(--pl-sec);padding:2px 3px;background:transparent;border:0;
+    border-bottom:1px solid var(--pl-hair);border-radius:0;-webkit-appearance:none;
+    appearance:none}
+  .pl-root .pl-shrs::placeholder{color:var(--pl-faint)}
+  .pl-root .pl-shrs:focus{outline:none;color:var(--pl-ink);border-bottom-color:#0088b0}
   /* What it is and where it is, together on one line under the name — the two facts you
      are weighing against each other, so they must not be at opposite ends of the row. */
   .pl-smeta{display:block;font-size:10.5px;color:var(--pl-mute);margin-top:1px;
@@ -985,6 +1007,15 @@
        does at this width, it strands the field alone against the right edge with the plan
        reading left. */
     .pl-root .pl-right{margin-left:0}
+    /* A stop the rider owns carries a name, what it is, when it is open and three links.
+       Side by side at this width the name got fifty pixels of the row — the one thing on
+       it nobody can do without. So the name takes the first line, and the two fields it
+       owns drop underneath it, indented to the name's own left edge rather than the
+       row's, which is what makes them read as belonging to it. */
+    .pl-root .pl-stoggle{flex:1 1 100%;min-width:100%}
+    .pl-root .pl-skind{margin-left:31px}
+    .pl-root .pl-shrs{flex:1 1 auto;width:auto;min-width:90px}
+    .pl-root .pl-stop .pl-sacts{margin-left:auto}
     /* A stop row becomes a small grid on a narrow screen. As a flex row the name sat
        between two fixed columns and a kind that can read "attraction · 0.7 mi ride out",
        which left it about a hundred pixels: first it was cut to "Erie …", then, once it
@@ -1020,7 +1051,7 @@
     input[type=text],input[type=search],input[type=date],
     input[type=email],input[type=password],input[type=tel],input[type=url],
     textarea,.pl-root .pl-notein,.pl-root .pl-date,.pl-root .pl-num,.pl-find input,
-    .pl-root .pl-daynote,
+    .pl-root .pl-daynote,.pl-root .pl-shrs,
     .pl-root select,.pl-root input[type=number],.map-find input,.poi-search input,
     .poi-band input,.lyr-add-in,.ap-f>input,.gate-in{font-size:16px}
     .pl-root input[type=number]{width:46px}

@@ -1231,7 +1231,7 @@ const poiId=o=>String(o&&o.n||'').trim().toLowerCase()+'@'
    added the same places in a different order are not told they disagree. Every field the
    rider can edit is in it — a renamed kind or a merged note is a change like any other. */
 const poiSig=list=>(list||[]).map(o=>poiId(o)+'|'+(o.k||'')+'|'+(o.d||'')+'|'+(o.a||'')
-  +'|'+(o.p||'')+'|'+(o.u||'')).sort().join('\n');
+  +'|'+(o.p||'')+'|'+(o.u||'')+'|'+(o.h||'')).sort().join('\n');
 const PLAN_STOP_OFF_MI=1.5;
 /* Below this a stop is on the route for all practical purposes, and asking a router to
    trace two hundred yards is a network call to be told what you can already see. */
@@ -1263,6 +1263,95 @@ const PLAN_DAY_KINDS=[
   {k:'drive',   t:'Driving',      ic:'car'}
 ];
 const PLAN_NOTE_MAX=120;
+const POI_HOURS_MAX=60;
+/* ---- when a place is open ----
+   Written by the rider, in whatever they had in front of them: "9-5", "10am–6pm",
+   "Tue-Sun 10-4", "Mon-Fri 7:30-3; Sat 8-1", "closed Mon", "24h". Nobody is going to type
+   an OSM opening_hours expression on a phone, and a field that demands one is a field that
+   stays empty — so this reads what a person would write on the back of a card, and says so
+   plainly when it cannot.
+   The output is a list of windows: which weekdays, and the minutes of the day between
+   which the door is open. An empty list back from a non-empty string means "could not read
+   it", and everything downstream then keeps quiet rather than guessing. */
+const HRS_DAY={su:0,sun:0,sunday:0, mo:1,mon:1,monday:1, tu:2,tue:2,tues:2,tuesday:2,
+  we:3,wed:3,weds:3,wednesday:3, th:4,thu:4,thur:4,thurs:4,thursday:4,
+  fr:5,fri:5,friday:5, sa:6,sat:6,saturday:6};
+const HRS_NAME=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+/* "7" is 7am, "7pm" is 19:00, and a bare "1-5" on a shop is one in the afternoon to five —
+   which is why the closing time is nudged past the opening one rather than read literally.
+   A window that ends before it starts has crossed midnight. */
+function hrsClock(txt, pm){
+  const m=/^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a|p)?$/i.exec(String(txt).trim());
+  if(!m) return null;
+  let h=+m[1]; const min=m[2]?+m[2]:0;
+  if(h>24 || min>59) return null;
+  const tag=(m[3]||pm||'').toLowerCase()[0];
+  if(tag==='p' && h<12) h+=12;
+  if(tag==='a' && h===12) h=0;
+  return h*60+min;
+}
+function parseHours(str){
+  const raw=String(str||'').trim();
+  if(!raw) return {known:false, always:false, wins:[], closed:[]};
+  const low=raw.toLowerCase().replace(/[‐-―−]/g,'-').replace(/\bto\b/g,'-');
+  if(/24\s*\/?\s*7|24h|24 hours|always open|all day|always/.test(low))
+    return {known:true, always:true, wins:[], closed:[]};
+  const wins=[], shut=[];
+  let read=false, failed=false;
+  low.split(/[;\n]|,(?=[^0-9])/).forEach(part=>{
+    const t=part.trim(); if(!t) return;
+    /* Which days this clause is about. "Mon-Fri", "Sat & Sun", "Tue", or nothing at all,
+       which means every day. */
+    const days=[];
+    const range=/\b([a-z]{2,9})\s*-\s*([a-z]{2,9})\b/.exec(t);
+    if(range && HRS_DAY[range[1]]!=null && HRS_DAY[range[2]]!=null){
+      let a=HRS_DAY[range[1]], b=HRS_DAY[range[2]];
+      for(let i=0;i<7;i++){ days.push((a+i)%7); if((a+i)%7===b) break; }
+    } else {
+      (t.match(/\b[a-z]{2,9}\b/g)||[]).forEach(w=>{
+        if(HRS_DAY[w]!=null && days.indexOf(HRS_DAY[w])<0) days.push(HRS_DAY[w]);
+      });
+    }
+    if(/\bclosed?\b/.test(t) && !/\d/.test(t)){
+      if(days.length){ read=true; days.forEach(d=>shut.push(d)); }
+      return;
+    }
+    const hm=/(\d{1,2}(?::\d{2})?\s*(?:am|pm|a|p)?)\s*-\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm|a|p)?)/i.exec(t);
+    if(!hm){ if(/\d/.test(t)) failed=true; return; }
+    /* "9-5" with no meridiem on either end is a working day, not nine hours from nine in
+       the morning to five in the morning: an end earlier than its start rolls forward
+       twelve hours before it is allowed to be an overnight. */
+    let from=hrsClock(hm[1]), to=hrsClock(hm[2]);
+    if(from==null || to==null){ failed=true; return; }
+    const bare=!/am|pm|a\b|p\b/i.test(hm[2]);
+    if(to<=from && bare && to+720>from) to+=720;
+    /* Still not later than it started, so the door shuts tomorrow: "5pm-1am". Carried past
+       midnight here rather than at the point of asking, so every window in the list is a
+       plain from-before-to and only one place has to know about the small hours. */
+    if(to<=from) to+=1440;
+    read=true;
+    wins.push({days:days.length?days:[0,1,2,3,4,5,6], from, to});
+  });
+  if(!read) return {known:false, always:false, wins:[], closed:[], bad:failed||!!raw};
+  return {known:true, always:false, wins, closed:shut};
+}
+/* Open at that moment on that weekday? Null when nothing is known, so a caller can tell
+   "shut" from "no idea". */
+function hoursOpenAt(h, dow, min){
+  if(!h || !h.known) return null;
+  if(h.always) return true;
+  if(h.closed.indexOf(dow)>=0) return false;
+  const day=h.wins.filter(w=>w.days.indexOf(dow)>=0);
+  if(!day.length) return h.wins.length ? false : null;
+  return day.some(w=> w.to>1440
+    ? (min>=w.from || min<=w.to-1440)
+    : (min>=w.from && min<=w.to));
+}
+const hrsTxt=m=>{
+  const h=Math.floor((m%1440)/60), n=m%60;
+  const ap=h<12?'am':'pm', hh=h%12===0?12:h%12;
+  return hh+(n?':'+String(n).padStart(2,'0'):'')+ap;
+};
 /* ---- the backup format ----
    One sheet, one row per thing, with the kind of thing in the first column. Mixing four
    record types in one file is what keeps a backup to ONE file — a rider restoring a trip
@@ -1273,7 +1362,7 @@ const PLAN_NOTE_MAX=120;
    the human, and every one of those columns is read back too — change the miles on a day
    in Numbers, load the file, and that day changes. */
 const CSV_COLS=['row','day','date','kind','miles','from','to','out','in','note','bed',
-  'key','lat','lng'];
+  'key','lat','lng','hours'];
 const csvCell = v => {
   const t = v==null ? '' : String(v);
   /* A leading =, + or @ is how a spreadsheet is talked into running something when the
@@ -3188,6 +3277,21 @@ class TrailApp {
        because a Leaflet popup is outside every screen, and it does not close the popup:
        saying what a place is is a thing you might do twice before you are happy. */
     document.addEventListener('change',e=>{
+      const hr=e.target.closest('[data-poihrs]');
+      if(hr){
+        const [hlat,hlng]=String(hr.dataset.at||'').split(',').map(Number);
+        if(this.setMyPoiHours(hr.dataset.poihrs, hlat, hlng, hr.value)){
+          const v=String(hr.value||'').trim(), pr=parseHours(v);
+          this.status(!v ? 'Hours cleared for '+hr.dataset.poihrs+'.'
+            : pr.known ? 'Saved — '+hr.dataset.poihrs+': '+v+'. Any day you would get there '
+              +'while it is shut is flagged in red on the plan.'
+            : 'Kept “'+v+'”, but it could not be read as hours — try 9-5, 10am-6pm, '
+              +'Tue-Sun 10-4, or closed Mon.');
+          this.renderNearby();
+          if(this.screen==='plan') this.renderPlan();
+        }
+        return;
+      }
       const k=e.target.closest('[data-poikind]'); if(!k) return;
       const [lat,lng]=String(k.dataset.at||'').split(',').map(Number);
       if(!this.setMyPoiKind(k.dataset.poikind, lat, lng, k.value)) return;
@@ -7801,7 +7905,7 @@ class TrailApp {
     });
     (this.myPois||[]).forEach(o=>{
       put({row:'place', kind:o.k||'', note:o.n||'', from:o.a||'', to:o.u||'',
-        lat:o.y, lng:o.x});
+        lat:o.y, lng:o.x, hours:o.h||''});
     });
     return rows.map(csvLine).join('\r\n')+'\r\n';
   }
@@ -7901,7 +8005,7 @@ class TrailApp {
       const before=(this.myPois||[]).length;
       for(const r of placeRows){
         await this.addMyPoi({n:at(r,'note'), y:num(at(r,'lat')), x:num(at(r,'lng')),
-          a:at(r,'from'), u:at(r,'to'), k:at(r,'kind')}, {defer:true});
+          a:at(r,'from'), u:at(r,'to'), k:at(r,'kind'), h:at(r,'hours')}, {defer:true});
       }
       added=(this.myPois||[]).length-before;
       if(added) this.flushMyPois();
@@ -9297,6 +9401,12 @@ class TrailApp {
            a number for somewhere the rider has never been, and the row was inert — the
            only way to see where it actually was ran through opening the day, opening the
            stop picker, and finding it again in a list of fourteen. */
+        /* Worked out once per stop and used twice — on the name, and on the caption
+           under it. */
+        const shutOf={};
+        mine.forEach(x=>{ const w=this.stopShut(x, d); if(w) shutOf[x.key]=w; });
+        const shutMark=x=>shutOf[x.key]
+          ? '<span class="pl-shut-f" title="'+esc(shutOf[x.key].why)+'">'+warnSvg+'</span>' : '';
         if(mine.length) h.push('<ol class="pl-picked">'+mine.map((x,n)=>{
           const into=(x.mile-b.start)*sgn;
           const also=this.stopDaysOf(x.key, x.mile).filter(y=>y!==d);
@@ -9312,7 +9422,7 @@ class TrailApp {
              you know you have arrived at it, which matters once, at the turning. */
           +'<span class="pl-picked-i">'+(pd.zero||away ? '—'
             : (into>=0.05 ? fmtMi(into)+' mi' : 'start'))+'</span>'
-          +'<span class="pl-picked-n">'+esc(x.name)+'</span>'
+          +'<span class="pl-picked-n">'+shutMark(x)+esc(x.name)+'</span>'
           +'<span class="pl-picked-m">'+esc(mpTxt(x.mile))+'</span>'
           +'<span class="pl-picked-k">'+esc(x.kind)
             +(x.poi ? (this.detourTxt(x.poi) ? ' · '+esc(this.detourTxt(x.poi)) : '')
@@ -9320,6 +9430,7 @@ class TrailApp {
             /* On purpose on two days, so it has to say so — the same name under two dates
                with nothing to explain it reads as the app having double-booked. */
             +(also.length ? ' · also day '+also.map(y=>y+1).join(', ') : '')
+            +(shutOf[x.key] ? '<b class="pl-shut"> · '+esc(shutOf[x.key].short)+'</b>' : '')
           +'</span></button></li>';
         }).join('')
         +'</ol>');
@@ -9593,6 +9704,7 @@ class TrailApp {
                corridor's rows keep their caption: those categories come from OpenStreetMap
                and are not the rider's to relabel. */
             const mine=s.asset==='chris';
+            const shut=this.stopShut(s, d);
             const ic=mine ? (KIND_ICON[s.kind]||'target') : cfg.icon;
             /* A row you can look at, not only tick. The toggle stays the whole left-hand
                block so the gesture is unchanged; the links sit outside it, because an
@@ -9616,10 +9728,13 @@ class TrailApp {
                 +'<span class="pl-tick">'+(on?'✓':'')+'</span>'
                 +'<span class="pl-sic" style="color:'+col+'">'+icon(ic,15)+'</span>'
                 +'<span class="pl-sbody">'
-                  +'<span class="pl-sname">'+esc(s.name)+'</span>'
+                  +'<span class="pl-sname">'
+                    +(shut ? '<span class="pl-shut-f" title="'+esc(shut.why)+'">'+warnSvg+'</span>' : '')
+                    +esc(s.name)+'</span>'
                   +'<span class="pl-smeta">'
                     +(mine ? '' : '<b class="pl-scat" style="color:'+col+'">'+esc(s.kind)+'</b> · ')
-                    +esc(mpTxt(s.mile))+esc(off)+'</span>'
+                    +esc(mpTxt(s.mile))+esc(off)
+                    +(shut ? '<b class="pl-shut"> · '+esc(shut.short)+'</b>' : '')+'</span>'
                 +'</span></button>'
               /* Outside the toggle, because a select inside a button is markup a browser
                  is entitled to ignore — the same reason the links below it sit out here. */
@@ -9631,6 +9746,17 @@ class TrailApp {
                   +MY_KINDS.map(k=>'<option value="'+esc(k)+'"'+(k===s.kind?' selected':'')+'>'
                     +esc(k)+'</option>').join('')
                 +'</select>' : '')
+              /* Beside the kind, because they are the two things about a place that are
+                 true of the place and not of the day — and this is the only screen where
+                 a rider is looking at a stop and thinking about what time they reach it. */
+              +(mine ? '<input class="pl-shrs" type="text" maxlength="'+POI_HOURS_MAX+'"'
+                  +' data-hname="'+esc(s.name)+'"'
+                  +' data-at="'+(+s.lat).toFixed(5)+','+(+s.lng).toFixed(5)+'"'
+                  +' value="'+esc((s.poi&&s.poi.hours)||'')+'" placeholder="hours"'
+                  +' aria-label="When '+esc(s.name)+' is open"'
+                  +' title="When it is open — 9-5, 10am–6pm, Tue-Sun 10-4, closed Mon.'
+                  +' The plan works out what time you get there and says so in red if the'
+                  +' door will be shut">' : '')
               +'<span class="pl-sacts">'
                 +'<button type="button" title="Show it on the map" aria-label="Show '+esc(s.name)+' on the map"'
                   +' data-poi="'+s.poi.i+'" data-lat="'+s.lat+'" data-lng="'+s.lng+'" data-z="15">'
@@ -10095,6 +10221,21 @@ class TrailApp {
       /* Ahead of the numeric controls below, and matched on its class rather than
          data-plan, because this one's value is a word — every branch under here parses
          its value as a number and would drop it on the floor. */
+      const hr=e.target.closest('.pl-shrs');
+      if(hr){
+        const [hlat,hlng]=String(hr.dataset.at||'').split(',').map(Number);
+        if(this.setMyPoiHours(hr.dataset.hname, hlat, hlng, hr.value)){
+          const v=String(hr.value||'').trim();
+          const p=parseHours(v);
+          this.status(!v ? 'Hours cleared for '+hr.dataset.hname+'.'
+            : p.known ? 'Saved — '+hr.dataset.hname+': '+v+'. Any day you would get there '
+              +'while it is shut is flagged in red.'
+            : 'Kept “'+v+'”, but it could not be read as hours — try 9-5, 10am-6pm, '
+              +'Tue-Sun 10-4, or closed Mon.');
+          this.renderPlan();
+        }
+        return;
+      }
       const k=e.target.closest('.pl-skind');
       if(k){
         const [lat,lng]=String(k.dataset.at||'').split(',').map(Number);
@@ -11878,6 +12019,15 @@ class TrailApp {
         +MY_KINDS.map(k=>'<option value="'+esc(k)+'"'+(k===(p.kind||'your pick')?' selected':'')
           +'>'+esc(k)+'</option>').join('')
         +'</select></div>'
+        /* And when it is open. Free text on purpose: "Tue-Sun 10-4" off the back of a
+           card is what a rider has, and a field that demanded a schedule builder would
+           be a field left empty. The plan reads it, works out what time the day gets
+           here, and says so in red when the door will be shut. */
+        +'<div class="poi-kind"><label for="ph-'+esc(at)+'">Open</label>'
+        +'<input id="ph-'+esc(at)+'" class="poi-hrs-s" type="text" maxlength="'+POI_HOURS_MAX+'"'
+          +' data-poihrs="'+esc(p.name)+'" data-at="'+at+'" value="'+esc(p.hours||'')+'"'
+          +' placeholder="9-5, Tue-Sun 10-4, closed Mon">'
+        +'</div>'
         +'<div class="poi-mine">'
         +'<button type="button" class="'+(on?'off':'')+'" data-poistop="'+esc(p.name)+'" data-at="'+at+'">'
           +(on?'Take it off the plan':'Add as a stop')+'</button>'
@@ -12008,7 +12158,7 @@ class TrailApp {
   poiRecord(o){
     const lat=+o.y, lng=+o.x, pr=projectRoute(lat,lng);
     return {asset:'chris', name:o.n||'(pick)', sub:'', addr:o.a||'', phone:o.p||'',
-      url:o.u||'', note:o.d||'', kind:cleanKind(o.k),
+      url:o.u||'', note:o.d||'', kind:cleanKind(o.k), hours:String(o.h||''),
       src:'chris', lat, lng, mile:pr.mile, off:pr.off};
   }
   /* Everything a deferred run of addMyPoi put off, done once. Also the way an edit made
@@ -12140,7 +12290,8 @@ class TrailApp {
        always had and an older device reading this account is not handed a field it does
        not understand. */
     const rec={n:name, y:lat, x:lng, a:String(o.a||''), p:String(o.p||''),
-      u:String(o.u||''), d:String(o.d||''), k:cleanKind(o.k)};
+      u:String(o.u||''), d:String(o.d||''), k:cleanKind(o.k),
+      h:String(o.h||'').slice(0,POI_HOURS_MAX)};
     this.myPois.push(rec);
     // Remembered as unsent until a push says otherwise, so a read that lands in between
     // adopts the account's list without dropping this. Cleared by pushPois.
@@ -12671,6 +12822,65 @@ class TrailApp {
      in the picker, the dot on the plan, the line in the GPX — and it goes up with the
      rest of the account. Not an edit to the plan: the stop key is the name and the
      milepost, so a place that is ticked stays ticked through being renamed a bakery. */
+  /* The hours the rider wrote on a place of their own, kept with the place rather than
+     with the day — a museum shuts on Mondays whichever Monday you ride past it. */
+  setMyPoiHours(name, lat, lng, txt){
+    if(!this.myPois) return false;
+    const rec=this.myPois.find(x=>String(x.n)===String(name)
+      && abs(+x.y-(+lat))<0.001 && abs(+x.x-(+lng))<0.001);
+    if(!rec) return false;
+    const v=String(txt||'').trim().slice(0,POI_HOURS_MAX);
+    if((rec.h||'')===v) return false;
+    rec.h=v;
+    const q=this.POIS.find(z=>z.asset==='chris' && z.name===name
+      && abs(z.lat-(+lat))<0.001 && abs(z.lng-(+lng))<0.001);
+    if(q) q.hours=v;
+    this.poiCache(this.myPois);
+    this.pushPois();
+    return true;
+  }
+  /* What time the rider is standing outside it. The plan already turns miles into an hour
+     of the day — that is what "8am–1pm" on every row is — so this asks the same sum for a
+     point partway along: the day's start, plus the miles into the day at the day's pace.
+     The detour counts. A place 2 miles off the route at 12 mph is twenty minutes of riding
+     that happens before you are at the door, and on a place that shuts at one o'clock
+     twenty minutes is the whole question. */
+  stopArrival(x, d){
+    const pd=this.planP()[d]; if(!pd) return null;
+    const b=this.planBounds()[d]; if(!b) return null;
+    const sp=this.avgSpeed>0 ? this.avgSpeed : 12;
+    const into=Math.max(0, (x.mile-b.start)*this.dirSign());
+    const off=(x.poi && x.poi.off!=null && x.poi.off>=0.2) ? x.poi.off
+      : (x.off!=null && x.off>=0.2 ? x.off : 0);
+    const start=(pd.start==null ? this.wxRideStart : pd.start)*60;
+    /* A rest day has no wheels-out and no miles ridden into it: the rider is in the town
+       all day, so the honest answer to "when are you there" is the middle of it. */
+    const min=pd.zero ? 12*60 : start + Math.round((into+off)/sp*60);
+    return {min, dow:this.planDateFor(d).getDay(), guess:!!pd.zero};
+  }
+  /* Red letters and a hazard flag, and only ever on a place that says when it is open.
+     Silence here means "nobody told me", which is the honest state for nine thousand
+     corridor pins and for every place the rider has not filled the field in on. */
+  stopShut(x, d){
+    const txt=(x.poi && x.poi.hours) || x.hours || '';
+    if(!txt) return null;
+    const h=parseHours(txt);
+    if(!h.known) return null;
+    const at=this.stopArrival(x, d);
+    if(!at) return null;
+    if(hoursOpenAt(h, at.dow, at.min)!==false) return null;
+    /* Say which of the two ways it is shut, because they call for different plans: a
+       different hour of the same day is a change to today, a different day is not. */
+    const dayWins=h.always ? [] : h.wins.filter(w=>w.days.indexOf(at.dow)>=0);
+    const closedAllDay=h.closed.indexOf(at.dow)>=0 || !dayWins.length;
+    const when=at.guess ? 'while you are there' : 'you get there at '+hrsTxt(at.min);
+    return {min:at.min, dow:at.dow, closedAllDay,
+      why:closedAllDay
+        ? 'Shut on a '+HRS_NAME[at.dow]+' — open: '+txt
+        : 'Shut when '+when+' — open '+dayWins.map(w=>hrsTxt(w.from)+'–'+hrsTxt(w.to)).join(', '),
+      short:closedAllDay ? HRS_NAME[at.dow].slice(0,3)+': shut'
+        : 'shut at '+hrsTxt(at.min)};
+  }
   setMyPoiKind(name, lat, lng, kind){
     if(MY_KINDS.indexOf(kind)<0 || !this.myPois) return false;
     const rec=this.myPois.find(x=>String(x.n)===String(name)
@@ -13059,5 +13269,8 @@ class TrailApp {
 }
 window.TrailApp = TrailApp;
 window.EST_ICON = icon;
+// Exposed for the headless probes: the hours reader is the one piece of this file
+// with enough cases to be worth testing on its own.
+window.EST_HOURS = {parseHours, hoursOpenAt, hrsTxt};
 
 })();
