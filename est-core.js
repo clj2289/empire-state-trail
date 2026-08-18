@@ -10323,6 +10323,14 @@ class TrailApp {
   }
   planLayerOn(key){ const l=this.lyrByKey[key]; return !!(l && this.map && this.map.hasLayer(l)); }
   planDayVisible(d){ return this.planSolo==null || this.planSolo===d; }
+  /* Does this day put a stroke on the map? The drawing and the key have to agree on the
+     answer, or the key offers a colour you can hunt the whole route for and never find. */
+  planDayRides(d, b){
+    const pd=this.planP()[d];
+    if(!pd || pd.zero) return false;
+    const bb=b || this.planBounds()[d];
+    return !!bb && abs(bb.end-bb.start)>=0.05;
+  }
 
   drawPlanLayer(){
     if(!this.map || !this.planLayer) return;
@@ -10336,7 +10344,7 @@ class TrailApp {
 
     days.forEach((pd,d)=>{
       const b=bounds[d];
-      if(pd.zero || !this.planDayVisible(d) || abs(b.end-b.start)<0.05) return;
+      if(!this.planDayRides(d,b) || !this.planDayVisible(d)) return;
       const col=this.planDayCol(d), line=this.routeSliceLL(b.start,b.end);
       if(line.length<2) return;
       L.polyline(line,{pane, color:'#fff', weight:10, opacity:.85, interactive:false}).addTo(this.planLayer);
@@ -10382,8 +10390,11 @@ class TrailApp {
         if(p.mile==null) return;
         const key=this.poiStopKey(p);
         if(!this.planPicked[key]) return;
-        // Drawn if ANY day it is on is being shown — a stop can be on two of them now.
-        if(!this.stopDaysOf(key, p.mile).some(d=>this.planDayVisible(d))) return;
+        /* Drawn if ANY day it is on is being shown — a stop can be on two of them now.
+           The day has to be a riding day as well: the pin at the end of this spur is only
+           drawn for days that ride, so on a rest day the spur was a red dashed line
+           leaving the towpath for nothing. */
+        if(!this.stopDaysOf(key, p.mile).some(d=>this.planDayRides(d) && this.planDayVisible(d))) return;
         const det=this.detourOf(p);
         if(!det || !det.coords || det.coords.length<2) return;
         L.polyline(det.coords,{pane:npane, color:'#7a1410', weight:3, opacity:.9,
@@ -10487,7 +10498,13 @@ class TrailApp {
   syncPlanKey(){
     const box=document.querySelector('.plan-key'); if(!box) return;
     const days=this.planP(), bounds=this.planBounds();
+    /* Only the days that are drawn. A key is a legend for the map, so a rest day, a day
+       spent off the bike and the drive up from Tallahassee have no business in it: each
+       one carried a colour swatch for a stroke that does not exist, and the two flying
+       days sat at the top of the list as if the trail started in Florida. The dates go
+       straight from one riding day to the next, which is the honest shape of it. */
     box.innerHTML=days.map((pd,d)=>{
+      if(!this.planDayRides(d, bounds[d])) return '';
       const t=this.planDayTown(d);
       /* Both ends of the leg. A colour against one town name says where the day finished
          and leaves you to work out which stroke on the map it is; naming the leg says it
@@ -10497,9 +10514,7 @@ class TrailApp {
          and neither says which one — and the trip crosses a month, so the day number alone
          is no better. The comma goes because this sits in a legend, not a sentence. */
       const lab=this.planDayLabel(d).replace(',','')+' · '
-        +(pd.off ? (pd.note || 'driving')
-          : pd.zero ? 'zero at '+from
-          : from+' → '+(t?t.n:Math.round(bounds[d].end)+' mi'));
+        +from+' → '+(t?t.n:Math.round(bounds[d].end)+' mi');
       return '<span class="plan-key-row"><span class="plan-key-sw" style="background:'
         +this.planDayCol(d)+'"></span><span>'+esc(lab)+'</span></span>';
     }).join('');
