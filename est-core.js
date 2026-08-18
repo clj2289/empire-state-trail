@@ -9531,7 +9531,11 @@ class TrailApp {
                     ? ' title="'+fmtMi(ride.trail)+' mi on the trail and '+fmtMi(ride.extra)
                       +' riding out to your stops and your bed"' : '')
                   +'>'+Math.round(ride.total)+' mi</b>'
-                  +(ride.extra>=0.3 ? '<span class="pl-soff">'+fmtMi(ride.extra)+' off trail</span>' : ''))
+                  /* "of it", because the number in front of it already contains this
+                     one. "3.3 off trail" beside "69 mi" reads as three more miles nobody
+                     counted, which is the opposite of what it says. */
+                  +(ride.extra>=0.3 ? '<span class="pl-soff">'+fmtMi(ride.extra)
+                    +' of it off the trail</span>' : ''))
                 /* The separator travels with the text that follows it rather than sitting
                    between them as a text node of its own: this line is a flex row, a bare
                    " · " becomes an item in it, and an item can be wrapped onto a line by
