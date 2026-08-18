@@ -7454,6 +7454,25 @@ class TrailApp {
       .sort((p,q)=>(at(p.x.key)-at(q.x.key)) || (p.i-q.i))
       .map(o=>o.x);
   }
+  /* The bed you woke in this morning, when there is one — last night's booking, or the
+     one before it across a rest day. Null when the night before ended on the trail.
+     This is what stops a night past the day's end town being read as a backtrack. The
+     campground three miles beyond Lockport is somewhere you ride ON to at the end of the
+     day and ride back from in the morning; the plan had you finishing at Lockport, going
+     out to it, and then starting the next day at Lockport again — three miles ridden
+     twice on the map and never counted once. */
+  wokeAt(d){
+    const days=this.planP();
+    for(let i=d-1; i>=0; i--){
+      const bb=this.planBounds()[i];
+      const stay=bb ? this.planStayFor(i, this.planLodging(this.planDayTown(i), bb.end)) : null;
+      if(stay && stay.poi) return {poi:stay.poi, name:stay.name,
+        mile: stay.poi.mile==null ? bb.end : stay.poi.mile};
+      // A day that rode and booked nothing ended on the trail, and that is where you woke.
+      if(!days[i].zero) return null;
+    }
+    return null;
+  }
   /* The day as one polyline and two numbers. `trail` is towpath miles; `extra` is
      everything ridden off it, counted BOTH ways because a stop half a mile off the trail
      is a mile of riding. `stops` comes back with the miles ridden by the time you get to
@@ -7464,7 +7483,8 @@ class TrailApp {
     const b=this.planBounds()[d];
     if(!b) return null;
     const pd=this.planP()[d]||{};
-    const sig=[d, b.start, b.end, pd.zero?1:0, this.planStay[d]||'', this.dir,
+    /* Every bed, not just this day's: where the day starts is last night's door. */
+    const sig=[d, b.start, b.end, pd.zero?1:0, JSON.stringify(this.planStay), this.dir,
       (this.planStopOrder[d]||[]).join('>'), this._routeV||0].join('|');
     this._dayRt=this._dayRt||{};
     const hit=this._dayRt[d];
@@ -7487,6 +7507,20 @@ class TrailApp {
     const legs=[], stops=[];
     const leg=(c, kind, road)=>{ if(c && c.length>1) legs.push({c, kind, road:road!==false}); };
     let cur=b.start, trail=0, extra=0, road=true;
+    /* Out of last night's door, back to the trail, and on from there. The ride in is
+       counted this morning and drawn last night — it is the same half mile of road, and
+       painting it twice in two colours only argues with itself. */
+    const woke=this.wokeAt(d);
+    if(woke){
+      cur=woke.mile;
+      const din=this.detourOf(woke.poi);
+      if(din && din.coords && din.coords.length>1 && din.miles>=PLAN_DETOUR_MIN_MI){
+        leg(din.coords.slice().reverse(), 'spur', din.road);
+        if(legs.length) legs[legs.length-1].back=true;
+        extra+=din.miles;
+        if(!din.road) road=false;
+      }
+    }
     seq.forEach((w,i)=>{
       const det=w.poi ? this.detourOf(w.poi) : null;
       const spur=(det && det.coords && det.coords.length>1 && det.miles>=PLAN_DETOUR_MIN_MI)
