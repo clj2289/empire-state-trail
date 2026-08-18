@@ -10002,7 +10002,7 @@ class TrailApp {
     /* Asked for after the render, not during it: the rows go up with the straight-line
        figure and are replaced when the router answers, so a slow network delays a number
        rather than the plan. */
-    this.loadDetours();
+    this.askDetours();
     /* renderPlan replaces this screen wholesale, and a <details> the rider opened would
        shut itself on the next tap anywhere. */
     const st=el.querySelector('.pl-set');
@@ -10541,6 +10541,12 @@ class TrailApp {
 
   drawPlanLayer(){
     if(!this.map || !this.planLayer) return;
+    /* The map is a consumer of these routes, so the map asks for them. They were only
+       ever fetched at the end of a plan-tab render — so a phone that opens on the map and
+       stays there drew every ride out to a stop, and every last turning to a hotel door,
+       as a straight line through whatever was in the way, and would go on doing it until
+       the rider happened to open the plan. */
+    this.askDetours();
     const L=window.L, days=this.planP(), bounds=this.planBounds();
     this.planLayer.clearLayers();
     if(this.planNightLayer) this.planNightLayer.clearLayers();
@@ -12562,6 +12568,13 @@ class TrailApp {
      from the route to the place, and keeps the geometry so it can be drawn and written
      into the GPX. One call per off-route stop, cached for the session, and every failure
      degrades to the straight line it replaced. */
+  /* Coalesced: a plan render and a map redraw arrive together, and the map redraws again
+     on every zoom. The scan behind this walks nine thousand pins, so it runs once for the
+     lot of them rather than four times a second. */
+  askDetours(){
+    clearTimeout(this._detourT);
+    this._detourT=setTimeout(()=>this.loadDetours(), 250);
+  }
   detourKey(p){ return this.poiStopKey(p); }
   detourOf(p){ return this._detour ? this._detour[this.detourKey(p)] : null; }
   async loadDetours(){
@@ -12577,13 +12590,29 @@ class TrailApp {
       const stay=this.planStayFor(d, this.planLodging(this.planDayTown(d), b.end));
       if(stay && stay.poi && stay.poi.mile!=null) beds[this.detourKey(stay.poi)]=true;
     });
-    const want=(this.POIS||[]).filter(p=>p.mile!=null
-      && (this.planPicked[this.poiStopKey(p)] || beds[this.detourKey(p)])
-      && p.off!=null && p.off>=PLAN_DETOUR_MIN_MI && this._detour[this.detourKey(p)]===undefined);
+    /* Asked for again if the first answer was the straight line. That fallback is what a
+       dropped call looks like — a phone in a tunnel, a router having a bad minute — and
+       keeping it for the rest of the session means the ride out to a hotel stays a line
+       through the fields because of one bad moment at boot. Twice, then it stands: some
+       places genuinely cannot be routed to, and asking forever is how you get blocked. */
+    this._detourTry=this._detourTry||{};
+    const want=(this.POIS||[]).filter(p=>{
+      if(p.mile==null || p.off==null || p.off<PLAN_DETOUR_MIN_MI) return false;
+      if(!(this.planPicked[this.poiStopKey(p)] || beds[this.detourKey(p)])) return false;
+      const k=this.detourKey(p), rec=this._detour[k];
+      if(rec===undefined) return true;
+      return rec && rec.road===false && (this._detourTry[k]||0)<2;
+    });
     if(!want.length) return;
     this._detourBusy=true;
-    // Marked pending first, so a second render does not queue the same places again.
-    want.forEach(p=>{ this._detour[this.detourKey(p)]=null; });
+    /* Marked pending first, so a second render does not queue the same places again. A
+       place being asked about for the second time keeps the straight line it has in the
+       meantime — the map should not blank the only line it can draw while it waits. The
+       count of attempts lives beside the answers rather than in them, so re-asking cannot
+       reset it and loop. */
+    want.forEach(p=>{ const k=this.detourKey(p);
+      this._detourTry[k]=(this._detourTry[k]||0)+1;
+      if(this._detour[k]===undefined) this._detour[k]=null; });
     for(const p of want){
       const rp=this.routePtAt(p.mile);
       let leg=null;
