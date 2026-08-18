@@ -1012,7 +1012,11 @@ function planDaySpec(o, day){
     zero: day===(o.zeroDay==null?-1:o.zeroDay)};
   const start=pd.start==null ? o.rideStart : pd.start;
   const miles=pd.zero ? 0 : (pd.miles==null ? o.perDay : pd.miles);
-  const end=pd.end!=null ? pd.end : Math.min(22, Math.round((start+miles/sp)*2)/2);
+  /* Miles ridden off the trail lengthen the DAY without moving you along the route, so
+     they belong to the finishing hour and to nothing else. Fold them into `miles` and the
+     forecast has you riding past the town you are sleeping in. */
+  const extra=(pd.zero || !o.extraMi) ? 0 : Math.max(0, +o.extraMi[day]||0);
+  const end=pd.end!=null ? pd.end : Math.min(22, Math.round((start+(miles+extra)/sp)*2)/2);
   return {miles, start, end:Math.max(start+0.5, end), zero:!!pd.zero};
 }
 /* Where the rider is at every clock hour across the horizon. Contiguous calendar hours
@@ -1236,6 +1240,11 @@ const PLAN_STOP_OFF_MI=1.5;
 /* Below this a stop is on the route for all practical purposes, and asking a router to
    trace two hundred yards is a network call to be told what you can already see. */
 const PLAN_DETOUR_MIN_MI=0.2;
+/* The bed, standing in the day's stop list as a stop. It is one: you ride to its door,
+   and on a night three quarters of a mile off the towpath that last turning is a decision
+   like any other — one the list used to leave out entirely. A sentinel rather than the
+   bed's own key, so changing hotel keeps the place you had put it in the order. */
+const PLAN_BED_STOP='~bed';
 const PLAN_STOP_MAX=14;
 /* How far either side of a day a stop can sit and still be offered to it. Consecutive
    days share an endpoint, so anything near that endpoint is genuinely reachable on both —
@@ -1362,7 +1371,7 @@ const hrsTxt=m=>{
    the human, and every one of those columns is read back too — change the miles on a day
    in Numbers, load the file, and that day changes. */
 const CSV_COLS=['row','day','date','kind','miles','from','to','out','in','note','bed',
-  'key','lat','lng','hours'];
+  'key','lat','lng','hours','seq'];
 const csvCell = v => {
   const t = v==null ? '' : String(v);
   /* A leading =, + or @ is how a spreadsheet is talked into running something when the
@@ -1881,6 +1890,11 @@ class TrailApp {
        rides past it — an answer derived from the milepost, so re-planning the trip carries
        the stop along with the days instead of stranding it. See stopDaysOf. */
     this.planStopDays={};
+    /* The order a day's stops are ridden in, when the rider has said. Absent means the
+       order they come up in — which is right until the day you want to drop the bags at
+       the hotel before dinner rather than after it. Keyed by day, values are stop keys
+       (and PLAN_BED_STOP for the bed). See dayWaypoints. */
+    this.planStopOrder={};
     /* Which days have had their bed list opened out past the first few. */
     this.planLodgeAll={};
     /* The undo stack — a snapshot of the whole plan before each edit, with a name for the
@@ -7409,6 +7423,107 @@ class TrailApp {
     const k=this.planStay[d]; if(!k) return null;
     return (lodge||[]).find(p=>this.planStayKey(p.poi)===k) || null;
   }
+  /* ---------- what a day actually rides ----------
+     A day is not a stretch of trail with some pins near it. It is a line: along the
+     towpath, off it and back for each place that was chosen, and off it once more at the
+     end to the door being slept behind. The numbered list on the row, the stroke on the
+     map, the arrival times and the exported track all read this one line, so there is one
+     order and one distance rather than four that drift apart.
+
+     The bed is in it because it IS a stop — you ride to its door, and a night three
+     quarters of a mile off the towpath is a turning like any other. It can be moved out of
+     last place, which is what dropping the bags before dinner looks like; the day then
+     ends by riding back to it. */
+  dayWaypoints(d, b, natural){
+    const bb=b || this.planBounds()[d];
+    if(!bb) return [];
+    const out=this.planWayStops(d, bb.start, bb.end).filter(x=>this.stopHere(x,d));
+    const stay=this.planStayFor(d, this.planLodging(this.planDayTown(d), bb.end));
+    if(stay && stay.poi) out.push({key:PLAN_BED_STOP, name:stay.name, bed:true,
+      kind:stay.kind==='camp' ? 'camp' : 'bed',
+      mile:stay.poi.mile==null ? bb.end : stay.poi.mile,
+      lat:stay.poi.lat, lng:stay.poi.lng, off:stay.poi.off,
+      poi:stay.poi, asset:stay.poi.asset, stay});
+    const ord=natural ? null : this.planStopOrder[d];
+    if(!ord || !ord.length) return out;
+    /* Anything the rider never placed keeps the order it is ridden past, after the ones
+       they did place — a stop ticked this morning turns up at the end of last night's
+       arranging rather than silently in the middle of it. */
+    const at=k=>{ const i=ord.indexOf(k); return i<0 ? ord.length+1 : i; };
+    return out.map((x,i)=>({x,i}))
+      .sort((p,q)=>(at(p.x.key)-at(q.x.key)) || (p.i-q.i))
+      .map(o=>o.x);
+  }
+  /* The day as one polyline and two numbers. `trail` is towpath miles; `extra` is
+     everything ridden off it, counted BOTH ways because a stop half a mile off the trail
+     is a mile of riding. `stops` comes back with the miles ridden by the time you get to
+     each one, which is the number the arrival times are built on.
+     Memoised per day: this walks the route array once per waypoint, and every render asks
+     for it several times over. */
+  dayRoute(d){
+    const b=this.planBounds()[d];
+    if(!b) return null;
+    const pd=this.planP()[d]||{};
+    const sig=[d, b.start, b.end, pd.zero?1:0, this.planStay[d]||'', this.dir,
+      (this.planStopOrder[d]||[]).join('>'), this._routeV||0].join('|');
+    this._dayRt=this._dayRt||{};
+    const hit=this._dayRt[d];
+    if(hit && hit.sig===sig) return hit;
+    const wps=this.dayWaypoints(d, b);
+    /* A day off the bike still has places on it — the museum is exactly what the day is
+       for — but it rides nothing, and a distance invented for it would turn up in the
+       trip total as miles nobody pedals. */
+    if(pd.zero){
+      const flat={sig, stops:wps.map(w=>({...w, ride:0, spur:null})), legs:[], coords:[],
+        trail:0, extra:0, total:0, road:true};
+      this._dayRt[d]=flat; return flat;
+    }
+    const seq=wps.slice(), bed=seq.find(w=>w.bed);
+    if(bed && seq.length && seq[seq.length-1]!==bed) seq.push({...bed, again:true});
+    /* Legs rather than one array of points, because they are not all the same promise: a
+       towpath leg is the route, a traced bend is roads a bike can use, and a bend nobody
+       could route is still the straight line it started as. They are drawn differently
+       and they have to stay told apart. */
+    const legs=[], stops=[];
+    const leg=(c, kind, road)=>{ if(c && c.length>1) legs.push({c, kind, road:road!==false}); };
+    let cur=b.start, trail=0, extra=0, road=true;
+    seq.forEach((w,i)=>{
+      const det=w.poi ? this.detourOf(w.poi) : null;
+      const spur=(det && det.coords && det.coords.length>1 && det.miles>=PLAN_DETOUR_MIN_MI)
+        ? det : null;
+      const to=(w.mile==null ? cur : w.mile);
+      if(abs(to-cur)>0.005){ leg(this.routeSlice(cur, to), 'trail'); trail+=abs(to-cur); }
+      cur=to;
+      if(spur){ leg(spur.coords, 'spur', spur.road); extra+=spur.miles; if(!spur.road) road=false; }
+      if(!w.again) stops.push({...w, ride:trail+extra, spur});
+      // The last thing on the list is the bed: you stop there rather than riding back out.
+      const terminal=(i===seq.length-1) && !!w.bed;
+      if(spur && !terminal){
+        leg(spur.coords.slice().reverse(), 'spur', spur.road); extra+=spur.miles;
+        // Ridden, counted, and not drawn: it is the same line back the other way.
+        if(legs.length) legs[legs.length-1].back=true;
+      }
+      if(terminal) cur=null;
+    });
+    if(cur!=null && abs(b.end-cur)>0.005){
+      leg(this.routeSlice(cur, b.end), 'trail'); trail+=abs(b.end-cur); }
+    // One line for anything that wants the whole day as a track — the GPX, mostly.
+    const coords=[];
+    legs.forEach(g=>g.c.forEach(pt=>{
+      const last=coords[coords.length-1];
+      if(!last || last[0]!==pt[0] || last[1]!==pt[1]) coords.push(pt);
+    }));
+    const out={sig, stops, legs, coords, trail, extra, total:trail+extra, road};
+    this._dayRt[d]=out;
+    return out;
+  }
+  /* What the day is, in miles: the trail, the bends, and the sum a rider judges it by. */
+  dayRide(d){
+    const r=this.dayRoute(d);
+    if(r) return {trail:r.trail, extra:r.extra, total:r.total};
+    const b=this.planBounds()[d];
+    return {trail:b?b.miles:0, extra:0, total:b?b.miles:0};
+  }
   /* The plan itself, built on first ask so an app that has never had one still draws.
      _planAuto marks a plan nobody has touched — it is the licence to rebuild it once the
      facility pins arrive and the towns can finally say which of them have beds. */
@@ -7465,7 +7580,8 @@ class TrailApp {
   planDayEndHour(d){
     const pd=this.planP()[d]; if(!pd) return this.wxRideEnd;
     return planDaySpec({dayPlan:this.planP(), speed:this.avgSpeed>0?this.avgSpeed:12,
-      perDay:Math.max(5,this.wxPerDay||60), rideStart:this.wxRideStart, rideEnd:this.wxRideEnd}, d).end;
+      perDay:Math.max(5,this.wxPerDay||60), rideStart:this.wxRideStart, rideEnd:this.wxRideEnd,
+      extraMi:{[d]:this.dayRide(d).extra}}, d).end;
   }
   /* Change one day without dragging the rest of the trip with it.
 
@@ -7527,6 +7643,13 @@ class TrailApp {
       stay[i>=from ? i+by : i]=this.planStay[k];
     });
     this.planStay=stay;
+    const ord={};
+    Object.keys(this.planStopOrder||{}).forEach(k=>{
+      const i=+k;
+      if(i===drop) return;
+      ord[i>=from ? i+by : i]=this.planStopOrder[k];
+    });
+    this.planStopOrder=ord;
     const sd={};
     Object.keys(this.planStopDays||{}).forEach(k=>{
       const v=(this.planStopDays[k]||[])
@@ -7762,13 +7885,13 @@ class TrailApp {
       const facts=(away ? ['Driving — not on the trail']
         : pd.zero ? ['Rest day']
         : spent ? []
-        : [Math.round(b.miles)+' mi',
+        : [Math.round(this.dayRide(d).total)+' mi',
            this.planTick(pd.start)+'–'+this.planTick(Math.round(this.planDayEndHour(d)))])
         .concat(away||spent ? [] : [fin ? 'the end of the trail'
           : stay ? stay.name
           : (atT&&(atT.hotel||atT.camp)) ? this.bedWord(atT) : 'nowhere booked'])
         .join(' · ');
-      const stops=this.planWayStops(d, b.start, b.end).filter(x=>this.stopHere(x,d));
+      const stops=((this.dayRoute(d)||{}).stops)||[];
       const noteL=(pd.note && !away) ? this.pdfWrap(pd.note, 9, false, COL) : [];
       const titleL=this.pdfWrap(title, 11.5, true, COL);
 
@@ -7786,12 +7909,13 @@ class TrailApp {
       noteL.forEach(l=>{ at(l, X, y, 9, false, 0.42); y-=12; });
       stops.forEach((x,n)=>{
         room(13);
-        const into=(x.mile-b.start)*sgn;
+        const into=x.ride!=null ? x.ride : (x.mile-b.start)*sgn;
         const when=(pd.zero||away) ? '' : (into>=0.05 ? fmtMi(into)+' mi' : 'start');
         at(String(n+1)+'.', X, y, 8.5, false, 0.5);
         at(when, X+16, y, 8.5, false, 0.3);
         const nx=X+58;
-        at(this.pdfWrap(x.name, 9, false, COL-58-64)[0], nx, y, 9, false, 0.05);
+        at(this.pdfWrap(x.name+(x.bed?' — you sleep here':''), 9, false, COL-58-64)[0],
+          nx, y, 9, false, 0.05);
         right(mpTxt(x.mile), W-M, y, 8.5, false, 0.45);
         y-=11;
       });
@@ -7886,7 +8010,10 @@ class TrailApp {
       /* The day's OWN miles, not the computed ones. They agree except on a day whose end
          time was set by hand, and it is this number that goes back in when the file is
          loaded — a sheet that shows one figure and restores another is a trap. */
-      put({row:'day', day:i+1, date:iso(i),
+      /* Where the bed comes in the day's list, and blank when it comes last, which is
+         where it comes unless the rider moved it. */
+      const bedAt=(this.planStopOrder[i]||[]).indexOf(PLAN_BED_STOP)+1;
+      put({row:'day', day:i+1, date:iso(i), seq:bedAt||'',
         kind:this.dayKindLabel(this.dayKind(pd)),
         miles:pd.miles==null ? Math.round(b.miles*10)/10 : Math.round(pd.miles*10)/10,
         from:this.shortTown(this.placeNameAt(b.start)),
@@ -7898,10 +8025,17 @@ class TrailApp {
     /* A stop carries its days only when they are not the ones it would fall on anyway —
        that is how the app stores it, and writing the natural day down would turn a stop
        that follows its day around into one pinned to a date. */
+    /* Where a stop comes in a day's list, as day:position pairs — its own reference to a
+       day rather than the `day` column's, because a stop can be reordered on the day it
+       would fall on anyway, and that day is deliberately not written down. */
+    const seqOf=k=>Object.keys(this.planStopOrder||{})
+      .map(d=>{ const i=this.planStopOrder[d].indexOf(k);
+        return i<0 ? null : (+d+1)+':'+(i+1); })
+      .filter(Boolean).join(' ');
     Object.keys(this.planPicked||{}).forEach(k=>{
       const on=this.planStopDays[k];
       put({row:'stop', day:Array.isArray(on) ? on.map(x=>x+1).join(' ') : '',
-        note:String(k).replace(/:-?\d+$/,''), key:k});
+        note:String(k).replace(/:-?\d+$/,''), key:k, seq:seqOf(k)});
     });
     (this.myPois||[]).forEach(o=>{
       put({row:'place', kind:o.k||'', note:o.n||'', from:o.a||'', to:o.u||'',
@@ -7972,16 +8106,33 @@ class TrailApp {
         zero:k!=='ride', off:k==='drive', k:(k==='offbike'?'offbike':''),
         note:String(at(r,'note')||'').slice(0,PLAN_NOTE_MAX)};
     });
-    const picked={}, stopDays={};
+    const picked={}, stopDays={}, seq={};
+    /* "3:2" — day three, second stop of it. Collected loose and sorted at the end, so a
+       sheet somebody edited by hand, with gaps in the numbering or two things claiming
+       the same place, still comes back as an order rather than as nothing. */
+    const putSeq=(d, pos, key)=>{
+      if(!(d>=0 && d<built.length) || !(pos>0)) return;
+      (seq[d]=seq[d]||[]).push({pos, key});
+    };
     stopRows.forEach(r=>{
       const key=at(r,'key'); if(!key) return;
       picked[key]=true;
       const ds=at(r,'day').split(/[^0-9]+/).map(x=>parseInt(x,10))
         .filter(x=>isFinite(x) && x>=1 && x<=built.length).map(x=>x-1);
       if(ds.length) stopDays[key]=ds.filter((x,i,a)=>a.indexOf(x)===i).sort((a,b)=>a-b);
+      at(r,'seq').split(/\s+/).forEach(pair=>{
+        const m=/^(\d+):(\d+)$/.exec(pair.trim());
+        if(m) putSeq(+m[1]-1, +m[2], key);
+      });
     });
     const stay={};
-    dayRows.forEach((r,i)=>{ const k=at(r,'key'); if(k) stay[i]=k; });
+    dayRows.forEach((r,i)=>{ const k=at(r,'key'); if(k) stay[i]=k;
+      putSeq(i, num(at(r,'seq'))||0, PLAN_BED_STOP); });
+    const order={};
+    Object.keys(seq).forEach(d=>{
+      order[d]=seq[d].sort((a,b)=>a.pos-b.pos).map(x=>x.key)
+        .filter((x,i,a)=>a.indexOf(x)===i);
+    });
     const was=this.planP().length;
     this.planEdit('the plan from '+(name||'a file'), ()=>{
       if(trip){
@@ -7995,6 +8146,7 @@ class TrailApp {
       this.planDays=built;
       this.planPicked=picked;
       this.planStopDays=stopDays;
+      this.planStopOrder=this.cleanStopOrder(order);
       this.planStay=stay;
     });
     /* Places are merged, never replaced. This file is one rider's copy of a shared account
@@ -8026,7 +8178,8 @@ class TrailApp {
      there to compare against — it can say which days an edit dragged along with it. */
   planSnapshot(){
     return JSON.stringify({d:this.planP(), s:this.planStay, p:this.planPicked,
-      sd:this.planStopDays, a:this.planStartMile(), v:this.avgSpeed, t:this.planStart});
+      sd:this.planStopDays, so:this.planStopOrder,
+      a:this.planStartMile(), v:this.avgSpeed, t:this.planStart});
   }
   // A plan nobody has edited yet is not "unsaved work"; this is what says so.
   planBaseline(){ this.planSavedSnap=this.planSnapshot(); }
@@ -8055,6 +8208,7 @@ class TrailApp {
     this.planDays=s.d.slice(); this.planStay=Object.assign({}, s.s);
     this.planPicked=Object.assign({}, s.p);
     this.planStopDays=Object.assign({}, s.sd);
+    this.planStopOrder=this.cleanStopOrder(s.so);
     this.planStart=this.cleanDate(s.t);
     if(isFinite(s.a)) this.planAnchor=s.a;
     if(isFinite(s.v) && s.v>0) this.avgSpeed=s.v;
@@ -8090,6 +8244,7 @@ class TrailApp {
   planRecord(){
     return {days:this.planP(), speed:this.avgSpeed, anchorTM:this.planStartMile(),
       stay:this.planStay, picked:this.planPicked, stopDays:this.planStopDays,
+      stopOrder:this.planStopOrder,
       startDate:this.planStart, v:PLAN_REC_V, savedAt:Date.now()};
   }
   savePlan(opt){
@@ -8456,6 +8611,7 @@ class TrailApp {
     this.planStay=(p.stay && typeof p.stay==='object') ? {...p.stay} : {};
     this.planPicked=(p.picked && typeof p.picked==='object') ? {...p.picked} : {};
     this.planStopDays=old ? this.planStopDays : this.cleanStopDays(p.stopDays);
+    this.planStopOrder=old ? this.planStopOrder : this.cleanStopOrder(p.stopOrder);
     this.planStart=old ? this.planStart : this.cleanDate(p.startDate);
     this.planSnap();
     if(this.planSnapshot()!==before){
@@ -8855,6 +9011,7 @@ class TrailApp {
     if(p.stay && typeof p.stay==='object') this.planStay={...p.stay};
     if(p.picked && typeof p.picked==='object') this.planPicked={...p.picked};
     this.planStopDays=this.cleanStopDays(p.stopDays);
+    this.planStopOrder=this.cleanStopOrder(p.stopOrder);
     this.planStart=this.cleanDate(p.startDate);
     this.planSnap();
     this.planBaseline();
@@ -8879,6 +9036,7 @@ class TrailApp {
       if(saved.stay && typeof saved.stay==='object') this.planStay={...saved.stay};
       if(saved.picked && typeof saved.picked==='object') this.planPicked={...saved.picked};
       this.planStopDays=this.cleanStopDays(saved.stopDays);
+      this.planStopOrder=this.cleanStopOrder(saved.stopOrder);
       this.planStart=this.cleanDate(saved.startDate);
       this.planSnap();
     } else { this.planRebuild(); this._planAuto=true; }
@@ -8912,6 +9070,7 @@ class TrailApp {
      ground the forecast was sampled over. */
   planChanged(){
     this._planKey=null;
+    this._routeV=(this._routeV||0)+1;
     if(this.screen==='plan') this.renderPlan();
     this.drawPlanLayer();
     if(this.wxData && !this.wxData.err && !this.wxData.loading) this.wxReplan();
@@ -8997,7 +9156,10 @@ class TrailApp {
     const el=this.$('planOut'); if(!el) return;
     const days=this.planP(), bounds=this.planBounds(), bedded=this.beddedTowns();
     const sgn=this.dirSign(), speed=this.avgSpeed>0?this.avgSpeed:12;
-    const tot=bounds.reduce((m,b,i)=>m+(days[i].zero?0:b.miles),0);
+    /* The trip totals what is RIDDEN. Every bend out to a stop and every last turning to
+       a hotel door is a mile pedalled, and a total that leaves them out undersells the
+       trip by most of a day's riding over three weeks. */
+    const tot=bounds.reduce((m,b,i)=>m+(days[i].zero?0:this.dayRide(i).total),0);
     /* A rest day and a day you are not on the trail for are both "no miles today" and
        they are not the same day at all — counting them together told a rider planning two
        driving days and one rest that they had booked three rest days. */
@@ -9242,6 +9404,7 @@ class TrailApp {
       const away=!!pd.off;
       const term=sgn<0 ? 0 : TOTAL;
       const spent=!pd.zero && b.miles<0.5;
+      const ride=this.dayRide(d);
       const done=spent && abs(b.start-term)<=1;
       const idle=spent && !done;
       /* The day that arrives. It is not "between towns" and it does not need beds — it is
@@ -9326,7 +9489,15 @@ class TrailApp {
                  date rail, where it read as part of the date. It belongs with the day's
                  other facts, first, because it is the first of them. */
               +'<span class="pl-s">'
-                +(plain ? '' : '<b class="pl-smi">'+Math.round(b.miles)+' mi</b>')
+                /* The distance is what the day is ridden, trail and bends together, with
+                   the part that is off the trail named beside it — "64 mi" against a day
+                   whose towns are 60 apart is a number a rider would otherwise sit and
+                   argue with. */
+                +(plain ? '' : '<b class="pl-smi"'+(ride.extra>=0.3
+                    ? ' title="'+fmtMi(ride.trail)+' mi on the trail and '+fmtMi(ride.extra)
+                      +' riding out to your stops and your bed"' : '')
+                  +'>'+Math.round(ride.total)+' mi</b>'
+                  +(ride.extra>=0.3 ? '<span class="pl-soff">'+fmtMi(ride.extra)+' off trail</span>' : ''))
                 /* The separator travels with the text that follows it rather than sitting
                    between them as a text node of its own: this line is a flex row, a bare
                    " · " becomes an item in it, and an item can be wrapped onto a line by
@@ -9391,7 +9562,12 @@ class TrailApp {
          the museum, and the day that has the time for it was the one day that could not
          hold a stop at all. */
       {
-        const mine=this.planWayStops(d, b.start, b.end).filter(x=>this.stopHere(x,d));
+        /* The day as it is ridden — the stops that were chosen for it AND the bed at the
+           end of it, in the order they are called at. Where you sleep is a stop: it is a
+           place you ride to, often the furthest off the trail of any of them, and leaving
+           it off this list was leaving the last decision of the day off the itinerary. */
+        const rt=this.dayRoute(d);
+        const mine=(rt && rt.stops) || [];
         /* How far into the day it is, which is the number a rider actually rides to. An
            absolute milepost says where a place is on the trail; "8 mi in" says when to
            start looking for it, and on a 42 mi day that is the difference between a
@@ -9408,9 +9584,12 @@ class TrailApp {
         const shutMark=x=>shutOf[x.key]
           ? '<span class="pl-shut-f" title="'+esc(shutOf[x.key].why)+'">'+warnSvg+'</span>' : '';
         if(mine.length) h.push('<ol class="pl-picked">'+mine.map((x,n)=>{
-          const into=(x.mile-b.start)*sgn;
-          const also=this.stopDaysOf(x.key, x.mile).filter(y=>y!==d);
-          return '<li><button type="button" class="pl-picked-b"'
+          /* The miles ridden by the time you get there, not the milepost minus the start:
+             two miles out to a farm shop and two back are four miles of the day, and they
+             are ridden before everything after them. */
+          const into=x.ride!=null ? x.ride : (x.mile-b.start)*sgn;
+          const also=x.bed ? [] : this.stopDaysOf(x.key, x.mile).filter(y=>y!==d);
+          return '<li'+(x.bed?' class="pl-picked-bed"':'')+'><button type="button" class="pl-picked-b"'
             +(x.poi ? ' data-poi="'+x.poi.i+'"' : '')
             +' data-lat="'+x.lat+'" data-lng="'+x.lng+'" data-z="15"'
             +' title="Show '+esc(x.name)+' on the map">'
@@ -9424,14 +9603,28 @@ class TrailApp {
             : (into>=0.05 ? fmtMi(into)+' mi' : 'start'))+'</span>'
           +'<span class="pl-picked-n">'+shutMark(x)+esc(x.name)+'</span>'
           +'<span class="pl-picked-m">'+esc(mpTxt(x.mile))+'</span>'
-          +'<span class="pl-picked-k">'+esc(x.kind)
+          +'<span class="pl-picked-k">'+esc(x.bed ? 'you sleep here' : x.kind)
             +(x.poi ? (this.detourTxt(x.poi) ? ' · '+esc(this.detourTxt(x.poi)) : '')
                     : ((x.off!=null && x.off>=0.2) ? ' · '+x.off.toFixed(1)+' mi off' : ''))
             /* On purpose on two days, so it has to say so — the same name under two dates
                with nothing to explain it reads as the app having double-booked. */
             +(also.length ? ' · also day '+also.map(y=>y+1).join(', ') : '')
             +(shutOf[x.key] ? '<b class="pl-shut"> · '+esc(shutOf[x.key].short)+'</b>' : '')
-          +'</span></button></li>';
+          +'</span></button>'
+          /* Move it up, move it down. The order matters to more than the list: it is the
+             order the day is ridden in and the order the map draws, so dropping the bags
+             at the hotel before dinner is something you can say here rather than something
+             you have to remember. Only shown where there is something to reorder. */
+          +(mine.length>1 && !pd.zero && !away
+            ? '<span class="pl-picked-mv">'
+              +'<button type="button" class="pl-mvb" data-plan="stopup" data-d="'+d+'"'
+                +' data-k="'+esc(x.key)+'"'+(n===0?' disabled':'')
+                +' aria-label="Ride to '+esc(x.name)+' earlier in the day">'+caretSvg(true)+'</button>'
+              +'<button type="button" class="pl-mvb" data-plan="stopdn" data-d="'+d+'"'
+                +' data-k="'+esc(x.key)+'"'+(n===mine.length-1?' disabled':'')
+                +' aria-label="Ride to '+esc(x.name)+' later in the day">'+caretSvg(false)+'</button>'
+            +'</span>' : '')
+          +'</li>';
         }).join('')
         +'</ol>');
       }
@@ -9451,10 +9644,14 @@ class TrailApp {
            used to appear on exactly one line, and only by accident: it was part of that
            place's name. One list cannot be in two formats, and the milepost is the column
            that tells two same-named places apart, so every line carries it. */
+        /* The mileage against each town is the day it would MAKE — the trail to it plus
+           the bends already chosen for today. Choosing "about sixty" off a list that only
+           counted the towpath quietly handed you a sixty-six mile day. */
+        const bend=ride.extra>=0.3 ? ride.extra : 0;
         let opts=ahead.map(t=>{ const on=!!(atT && t.tm===atT.tm && b.miles>0.5); if(on) sel=true;
           return '<option value="'+t.tm+'"'+(on?' selected':'')+'>'
             +esc(this.bedName(t))+' · '+esc(mpTxt(t.tm))
-            +' · '+Math.round(abs(t.tm-b.start))+' mi · '+esc(this.bedWord(t))+'</option>'; }).join('');
+            +' · '+Math.round(abs(t.tm-b.start)+bend)+' mi · '+esc(this.bedWord(t))+'</option>'; }).join('');
         /* The end of the trail, always — it is the one destination that is a destination
            whether or not anything is pinned at it, and the list was leaving it out
            because it is chosen by beds. Skipped only when a place already sits on it. */
@@ -10115,6 +10312,8 @@ class TrailApp {
                over the top of that would be the one lie in the sequence. */
             : this.syncNews || 'Up to date.'); }); }
       else if(act==='open'){ this.planOpenDay=this.planOpenDay===d?null:d; this.renderPlan(); }
+      else if(act==='stopup' || act==='stopdn'){
+        this.moveDayStop(d, b.dataset.k, act==='stopup' ? -1 : 1); }
       /* No "go to the note" action any more: the note on the row IS the field, so tapping
          it puts the caret in it and nothing else happens. */
       /* Two verbs, two buttons. One control that inserted on some days and deleted on
@@ -10314,13 +10513,21 @@ class TrailApp {
      teal and purple and of the weather palette's red / amber / green — a leg must never
      be mistakable for a headwind. A moon at every overnight town, and a weather pin at
      the mile the plan puts you at, so a day you drag longer moves its own forecast. */
-  routeSliceLL(mA, mB){
+  /* Lat, lng and the milepost each point sits at. The milepost is what lets a track
+     written out of this carry elevation, and it is dropped rather than recomputed by the
+     drawing — Leaflet reads a third column as altitude and ignores it. */
+  routeSlice(mA, mB){
     const lo=Math.min(mA,mB), hi=Math.max(mA,mB);
-    const mid=ROUTE.filter(p=>p[2]>=lo && p[2]<=hi).map(p=>[p[0],p[1]]);
+    const mid=ROUTE.filter(p=>p[2]>=lo && p[2]<=hi).map(p=>[p[0],p[1],p[2]]);
     const a=this.routePtAt(lo), b=this.routePtAt(hi);
-    const out=[[a[0],a[1]]].concat(mid, [[b[0],b[1]]]);
-    return out.filter((p,i)=> i===0 || p[0]!==out[i-1][0] || p[1]!==out[i-1][1]);
+    const out=[[a[0],a[1],lo]].concat(mid, [[b[0],b[1],hi]])
+      .filter((p,i,arr)=> i===0 || p[0]!==arr[i-1][0] || p[1]!==arr[i-1][1]);
+    /* In the direction it was asked for. It always came back up-mile, which draws the
+       same stroke either way — but a day is joined leg to leg now, and a leg handed back
+       the wrong way round sends the line to the far end of it and back. */
+    return mA>mB ? out.reverse() : out;
   }
+  routeSliceLL(mA, mB){ return this.routeSlice(mA, mB).map(p=>[p[0],p[1]]); }
   planLayerOn(key){ const l=this.lyrByKey[key]; return !!(l && this.map && this.map.hasLayer(l)); }
   planDayVisible(d){ return this.planSolo==null || this.planSolo===d; }
   /* Does this day put a stroke on the map? The drawing and the key have to agree on the
@@ -10345,11 +10552,24 @@ class TrailApp {
     days.forEach((pd,d)=>{
       const b=bounds[d];
       if(!this.planDayRides(d,b) || !this.planDayVisible(d)) return;
-      const col=this.planDayCol(d), line=this.routeSliceLL(b.start,b.end);
-      if(line.length<2) return;
-      L.polyline(line,{pane, color:'#fff', weight:10, opacity:.85, interactive:false}).addTo(this.planLayer);
-      L.polyline(line,{pane, color:col, weight:6, opacity:.95})
-        .bindPopup(()=>this.planDayCard(d), {maxWidth:280}).addTo(this.planLayer);
+      const col=this.planDayCol(d), rt=this.dayRoute(d);
+      /* The day is drawn as it is ridden: along the trail, off it to each place chosen for
+         the day and back, and off it a last time to the door being slept behind. Thinner
+         off the trail than on it, because the towpath is the spine of the day and a bend
+         out to a brewery should not read as a second one. Dashed while a bend is still the
+         straight line — the router has not answered for it, and pretending otherwise draws
+         a road that may not exist. */
+      const legs=(rt && rt.legs.length) ? rt.legs
+        : [{c:this.routeSlice(b.start,b.end), kind:'trail', road:true}];
+      legs.forEach(g=>{
+        if(g.back || g.c.length<2) return;
+        const spur=g.kind==='spur';
+        L.polyline(g.c,{pane, color:'#fff', weight:spur?7:10, opacity:.85,
+          interactive:false}).addTo(this.planLayer);
+        L.polyline(g.c,{pane, color:col, weight:spur?4:6, opacity:.95,
+          dashArray:g.road?null:'4 5'})
+          .bindPopup(()=>this.planDayCard(d), {maxWidth:280}).addTo(this.planLayer);
+      });
     });
 
     if(this.planNightLayer){
@@ -10378,50 +10598,37 @@ class TrailApp {
           : '<span class="plan-night"><span class="plan-ring">'+moon+'</span><span class="plan-lb">night '+(d+1)+' · '+esc(label)+'</span></span>';
         L.marker([ep[0],ep[1]],{pane:npane, icon:L.divIcon({className:'', iconSize:[130,24], iconAnchor:[11,-12], html})})
           .bindPopup(()=>this.planDayCard(d), {maxWidth:280}).addTo(this.planNightLayer);
-        // the walk from the trail to the bed, so a two-mile detour is visible as one
-        if(stay) L.polyline([[rp[0],rp[1]],[ep[0],ep[1]]],{pane:npane, color:'#3b3a6a',
-          weight:2, opacity:.8, dashArray:'3 4'}).addTo(this.planNightLayer);
+        /* The hop from the trail to the bed, while it is still a straight line. Once the
+           router has answered, the day's own stroke rides out to the door on real roads
+           and drawing this over the top of it would only argue with it. */
+        const bedDet=stay ? this.detourOf(stay.poi) : null;
+        if(stay && !(bedDet && bedDet.road))
+          L.polyline([[rp[0],rp[1]],[ep[0],ep[1]]],{pane:npane, color:'#3b3a6a',
+            weight:2, opacity:.8, dashArray:'3 4'}).addTo(this.planNightLayer);
       });
-      /* The ride out to each stop that isn't on the route, on the roads a bike would
-         actually take. Solid once it is a real traced route and dashed while it is still
-         the straight line, because the difference between the two is the whole point of
-         asking. */
-      (this.POIS||[]).forEach(p=>{
-        if(p.mile==null) return;
-        const key=this.poiStopKey(p);
-        if(!this.planPicked[key]) return;
-        /* Drawn if ANY day it is on is being shown — a stop can be on two of them now.
-           The day has to be a riding day as well: the pin at the end of this spur is only
-           drawn for days that ride, so on a rest day the spur was a red dashed line
-           leaving the towpath for nothing. */
-        if(!this.stopDaysOf(key, p.mile).some(d=>this.planDayRides(d) && this.planDayVisible(d))) return;
-        const det=this.detourOf(p);
-        if(!det || !det.coords || det.coords.length<2) return;
-        L.polyline(det.coords,{pane:npane, color:'#7a1410', weight:3, opacity:.9,
-          dashArray:det.road?null:'3 4'})
-          .bindPopup('<b>'+esc(p.name||'Stop')+'</b><div class="mv-s">'
-            +(det.road ? fmtMi(det.miles)+' mi each way by bike' : 'straight line — no road route found')
-            +' · leaves the route at '+esc(mpTxt(p.mile))+'</div>', {maxWidth:240})
-          .addTo(this.planNightLayer);
-      });
-      /* the waypoints you ticked in the plan tab */
+      /* The places chosen for each day, numbered in the order they are ridden. The ride
+         out to them used to be drawn here, twice over — once in red from this layer and
+         once more as a dashed hop — and it belongs to the day's own line now, in the day's
+         own colour, where the miles it costs are counted. What is left is the pin.
+         The number is on it because the list on the plan tab numbers them, and "stop 3"
+         has to mean the same thing on the screen and on the map. */
       days.forEach((pd,d)=>{
-        const b=bounds[d];
         if(pd.zero || !this.planDayVisible(d)) return;
-        this.planWayStops(d,b.start,b.end).forEach(s=>{
-          if(!this.stopHere(s,d)) return;
+        const rt=this.dayRoute(d);
+        ((rt&&rt.stops)||[]).forEach((s,n)=>{
+          if(s.bed) return;                       // the bed has a moon of its own
           const col=PLAN_STOP_COL[s.kind]||'#605d5d', cfg=catCfg(s.asset);
-          /* How you actually get to it. A stop half a mile off the towpath is a decision
-             you make while still riding, so the spur from the trail to the door is drawn
-             from the milepost you turn off at — same grammar as the walk to a booked bed. */
+          /* While the router has not answered — or could not — the straight hop is still
+             the only thing that can be said about how you get there. */
+          const det=s.poi ? this.detourOf(s.poi) : null;
           const tp=this.routePtAt(s.mile);
-          if(s.off!=null && s.off>=0.15)
+          if(s.off!=null && s.off>=0.15 && !(det && det.road))
             L.polyline([[tp[0],tp[1]],[s.lat,s.lng]],{pane:npane, color:col, weight:2,
               opacity:.85, dashArray:'3 4'}).addTo(this.planNightLayer);
-          L.marker([s.lat,s.lng],{pane:npane, title:s.name,
+          L.marker([s.lat,s.lng],{pane:npane, title:(n+1)+' · '+s.name,
             icon:L.divIcon({className:'', iconSize:[22,22], iconAnchor:[11,11],
               html:'<span class="plan-stop" style="border-color:'+col+';color:'+col+'">'
-                +icon(cfg.icon,12)+'</span>'})})
+                +icon(cfg.icon,12)+'</span><i class="plan-stop-n">'+(n+1)+'</i>'})})
             .bindPopup(()=>this.planStopCard(s,d), {maxWidth:250}).addTo(this.planNightLayer);
         });
       });
@@ -10532,7 +10739,7 @@ class TrailApp {
       +'<div class="plan-card-t">'+esc(pd.zero ? 'Rest day at '+this.placeNameAt(b.start)
         : this.placeNameAt(b.start)+' → '+(t?t.n:'between towns'))+'</div></div></div>'
       +'<div class="plan-card-p">'+(pd.zero ? 'No miles'
-        : Math.round(b.miles)+' mi · '+this.planTick(pd.start)+'–'+this.planTick(Math.round(de))
+        : Math.round(this.dayRide(d).total)+' mi · '+this.planTick(pd.start)+'–'+this.planTick(Math.round(de))
           +' · '+mpTxt(Math.min(b.start,b.end))+'–'+Math.round(Math.max(b.start,b.end)))+'</div>'
       +'<div class="plan-card-b"'+((t&&(t.hotel||t.camp))?'':' style="color:#b3261e"')+'>'
         +(booked ? 'Staying at '+esc(booked.name)
@@ -12360,7 +12567,18 @@ class TrailApp {
   async loadDetours(){
     if(this._detourBusy) return;
     this._detour=this._detour||{};
-    const want=(this.POIS||[]).filter(p=>p.mile!=null && this.planPicked[this.poiStopKey(p)]
+    /* The booked beds are in this list as well as the stops. The hop from the towpath to
+       the hotel door was a straight dashed line drawn through whatever happened to be in
+       the way, and it is the last half mile of the day — the one ridden tired, in the
+       dark, at the end of sixty. */
+    const beds={};
+    this.planP().forEach((pd,d)=>{
+      const b=this.planBounds()[d]; if(!b) return;
+      const stay=this.planStayFor(d, this.planLodging(this.planDayTown(d), b.end));
+      if(stay && stay.poi && stay.poi.mile!=null) beds[this.detourKey(stay.poi)]=true;
+    });
+    const want=(this.POIS||[]).filter(p=>p.mile!=null
+      && (this.planPicked[this.poiStopKey(p)] || beds[this.detourKey(p)])
       && p.off!=null && p.off>=PLAN_DETOUR_MIN_MI && this._detour[this.detourKey(p)]===undefined);
     if(!want.length) return;
     this._detourBusy=true;
@@ -12370,9 +12588,17 @@ class TrailApp {
       const rp=this.routePtAt(p.mile);
       let leg=null;
       try{
-        const a=await this.snapPoint({lat:rp[0], lng:rp[1]});
-        const bb=await this.snapPoint({lat:p.lat, lng:p.lng});
-        if(a.onRoad && bb.onRoad) leg=await this.routeQuiet(L.latLng(a.lat,a.lng), L.latLng(bb.lat,bb.lng));
+        /* Straight at BRouter with the pin's own coordinates. It puts them on its own
+           network itself, and the snap-first-or-give-up rule below was written for OSRM,
+           which does need the help — it was quietly refusing every place set back from the
+           road it is on. A B&B up a drive is 40 metres from the kerb and the whole ride
+           out to it was being drawn as a straight line through the gardens. */
+        leg=await this.routeQuiet(L.latLng(rp[0],rp[1]), L.latLng(p.lat,p.lng));
+        if(!leg){
+          const a=await this.snapPoint({lat:rp[0], lng:rp[1]});
+          const bb=await this.snapPoint({lat:p.lat, lng:p.lng});
+          if(a.onRoad && bb.onRoad) leg=await this.routeSeg(L.latLng(a.lat,a.lng), L.latLng(bb.lat,bb.lng));
+        }
       }catch(e){
         /* Network failures are expected out here and the straight line is the right
            answer to them. A TypeError is not — it once ate a call to a method that did
@@ -12385,6 +12611,7 @@ class TrailApp {
         : {miles:p.off, coords:[[rp[0],rp[1]],[p.lat,p.lng]], road:false};
     }
     this._detourBusy=false;
+    this._routeV=(this._routeV||0)+1;
     if(this.screen==='plan') this.renderPlan();
     this.drawPlanLayer();
   }
@@ -12444,9 +12671,19 @@ class TrailApp {
     this.planBounds().forEach((b,i)=>{
       const t=this.planDayTown(i);
       if(!t || b.end<lo || b.end>hi) return;
-      const n=this.bedName(t);
-      add(n, t.lat!=null?t.lat:null, t.lng!=null?t.lng:null, b.end, 'Night',
-        'End of day '+(i+1)+' · '+this.planDayLabel(i).replace(',',''));
+      /* The night goes on the BED when one is booked, not on the milepost the day stopped
+         pedalling at. A waypoint called "Rochester" in the middle of a canal park is no
+         use at eight in the evening; the door is. */
+      const stay=this.planStayFor(i, this.planLodging(t, b.end));
+      const n=stay ? stay.name : this.bedName(t);
+      const lat=stay ? stay.poi.lat : (t.lat!=null?t.lat:null);
+      const lng=stay ? stay.poi.lng : (t.lng!=null?t.lng:null);
+      const det=stay ? this.detourOf(stay.poi) : null;
+      add(n, lat, lng, b.end, 'Night',
+        ['End of day '+(i+1)+' · '+this.planDayLabel(i).replace(',',''),
+          stay ? (stay.addr||'') : '', stay ? (stay.tel||'') : '',
+          (det && det.road) ? fmtMi(det.miles)+' mi ride out from the trail' : '']
+          .filter(Boolean).join(' · '));
     });
     out.sort((a,b)=>(a.mile-b.mile)*sgn);
     return out;
@@ -12488,31 +12725,34 @@ class TrailApp {
        meant to take you to the door and back, and that is one route.
        Only traced ones. A straight line written into a GPX as though it were a route is
        the one thing here that could send a rider down a highway. */
-    const spur=[], seen=new Set();
-    (this.POIS||[]).forEach(p=>{
-      if(p.mile==null) return;
-      const key=this.poiStopKey(p);
-      if(!this.planPicked[key] || seen.has(key)) return;
-      if(dayIdx==null ? (p.mile<lo || p.mile>hi) : !this.stopOnDay(key, p.mile, dayIdx)) return;
-      const dt=this.detourOf(p);
-      if(!dt || !dt.road || !dt.coords || dt.coords.length<2) return;
-      seen.add(key);
-      spur.push({mile:p.mile, coords:dt.coords, miles:dt.miles});
-    });
-    let seq=pts.map(r=>({lat:r[0], lng:r[1], mile:r[2]}));
-    if(spur.length){
-      // Spliced from the back forwards, so an insertion never moves an index still to come.
-      spur.map(sp=>{
-        let bi=0, bd=Infinity;
-        seq.forEach((q,i)=>{ const dd=abs(q.mile-sp.mile); if(dd<bd){ bd=dd; bi=i; } });
-        return {i:bi, sp};
-      }).sort((a,c)=>c.i-a.i).forEach(({i,sp})=>{
-        const outward=sp.coords.map(c=>({lat:+c[0], lng:+c[1], mile:null}));
-        // Back the way you came, without repeating the doorstep you just reached.
-        const home=outward.slice(0,-1).reverse();
-        seq.splice(i+1, 0, ...outward, ...home);
+    /* The days themselves, each already assembled as the line it is ridden: the towpath,
+       the bend out to every stop chosen for it and back, and the last turning to the door
+       being slept behind — in the order the rider put them in. It used to be built here
+       instead, by splicing detours into the trail at the nearest index, which could only
+       ever produce trail order and had never heard of the bed.
+       Only traced bends go in. A straight line written into a GPX as though it were a
+       route is the one thing here that could send a rider down a highway, so a bend the
+       router could not answer for is left out and the track stays on the trail. */
+    const dayList=dayIdx!=null ? [dayIdx]
+      : this.planP().map((pd,i)=>i).filter(i=>this.planDayRides(i));
+    let seq=[], spurN=0;
+    dayList.forEach(i=>{
+      const rt=this.dayRoute(i);
+      if(!rt || !rt.legs.length) return;
+      rt.legs.forEach(g=>{
+        if(g.kind==='spur' && !g.road) return;
+        if(g.kind==='spur' && !g.back) spurN++;
+        g.c.forEach(c=>{
+          const last=seq[seq.length-1];
+          if(last && last.lat===+c[0] && last.lng===+c[1]) return;
+          seq.push({lat:+c[0], lng:+c[1], mile:c[2]==null?null:c[2]});
+        });
       });
-    }
+    });
+    /* Nothing assembled — a stretch with no riding day over it, or a plan not built yet.
+       The raw slice is still the honest answer to "the route through here". */
+    if(seq.length<2) seq=pts.map(r=>({lat:r[0], lng:r[1], mile:r[2]}));
+
     L.push('<trk><name>'+x(name)+'</name><trkseg>');
     seq.forEach(r=>{
       const e=r.mile==null ? null : this.gpxEle(r.mile);
@@ -12536,7 +12776,7 @@ class TrailApp {
        stubs. */
     L.push('</gpx>');
     return {xml:L.join('\n'), name:name, pts:seq.length, routePts:pts.length,
-      wpts:wpts.length, trks:1, spurs:spur.length, from:lo, to:hi};
+      wpts:wpts.length, trks:1, spurs:spurN, from:lo, to:hi};
   }
   /* A Blob and a synthetic click. No server, and nothing leaves the phone. */
   gpxSave(dayIdx){
@@ -12868,9 +13108,14 @@ class TrailApp {
     const off=(x.poi && x.poi.off!=null && x.poi.off>=0.2) ? x.poi.off
       : (x.off!=null && x.off>=0.2 ? x.off : 0);
     const start=(pd.start==null ? this.wxRideStart : pd.start)*60;
+    /* How far there is to ride to get there. dayRoute has already counted the day as it
+       is actually ridden — every bend out to an earlier stop, in whatever order the rider
+       put them — so a stop that comes off that list carries its own figure. The milepost
+       arithmetic below it is for a place asked about outside a day's own list. */
+    const ridden=(x.ride!=null) ? x.ride : (into+off);
     /* A rest day has no wheels-out and no miles ridden into it: the rider is in the town
        all day, so the honest answer to "when are you there" is the middle of it. */
-    const min=pd.zero ? 12*60 : start + Math.round((into+off)/sp*60);
+    const min=pd.zero ? 12*60 : start + Math.round(ridden/sp*60);
     return {min, dow:this.planDateFor(d).getDay(), guess:!!pd.zero};
   }
   /* Red letters and a hazard flag, and only ever on a place that says when it is open.
@@ -12974,6 +13219,42 @@ class TrailApp {
     });
     return out;
   }
+  /* Move one stop up or down a day's list. The order is the order the day is ridden, so
+     this changes the route on the map and every arrival time after it, not just the list.
+     Stored only when it differs from the order the stops come up in — an override that
+     merely restates the natural order would pin the day to the stops that happen to be on
+     it today, and the next one ticked would land at the end for no reason. */
+  moveDayStop(d, key, by){
+    const wps=this.dayWaypoints(d);
+    const cur=wps.map(w=>w.key), i=cur.indexOf(key), j=i+by;
+    if(i<0 || j<0 || j>=cur.length) return;
+    const next=cur.slice();
+    next.splice(j, 0, next.splice(i, 1)[0]);
+    const nat=this.dayWaypoints(d, null, true).map(w=>w.key).join('>');
+    const name=(wps[i]||{}).name||'that stop';
+    this.planEdit('where '+name+' comes on day '+(d+1), ()=>{
+      if(next.join('>')===nat) delete this.planStopOrder[d];
+      else this.planStopOrder[d]=next;
+    });
+    const at=next.indexOf(key)+1;
+    this.status(name+' is stop '+at+' of '+next.length+' on day '+(d+1)
+      +' — the day’s route and its times follow the list.');
+  }
+  /* Read back off disk, the cloud or a file: day indices that exist, keys that are
+     strings, nothing repeated. An order for a day that is no longer there is dropped. */
+  cleanStopOrder(raw){
+    const out={};
+    if(!raw || typeof raw!=='object') return out;
+    const n=(this.planDays||[]).length || PLAN_DAYS_MAX;
+    Object.keys(raw).forEach(k=>{
+      const d=+k;
+      if(!Number.isInteger(d) || d<0 || d>=n) return;
+      const v=(Array.isArray(raw[k]) ? raw[k] : []).map(String)
+        .filter(x=>x).filter((x,i,a)=>a.indexOf(x)===i).slice(0, PLAN_STOP_MAX+1);
+      if(v.length) out[d]=v;
+    });
+    return out;
+  }
   /* The days this stop IS on — empty when it is not a stop at all. That first line is
      load-bearing: without it this answered "the day that rides past it" for every place
      on the trail, ticked or not, and the picker's own tick read every fresh tap as "it is
@@ -13018,6 +13299,13 @@ class TrailApp {
     if(on && i<0) cur.push(d);
     else if(!on && i>=0) cur.splice(i,1);
     else return;
+    /* Off the day, out of the day's order. A key left behind in there is harmless to read
+       — nothing matches it — but it rides along in every save and every backup, and it
+       comes back to life if the same place is ever put on that day again. */
+    if(!on && this.planStopOrder[d]){
+      const left=this.planStopOrder[d].filter(x=>x!==key);
+      if(left.length>1) this.planStopOrder[d]=left; else delete this.planStopOrder[d];
+    }
     cur.sort((a,b)=>a-b);
     if(!cur.length){ delete this.planPicked[key]; delete this.planStopDays[key]; return; }
     this.planPicked[key]=true;

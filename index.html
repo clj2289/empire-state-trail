@@ -769,7 +769,23 @@
      than as another panel bolted under the row. The milepost leads, because that is the
      column the eye runs down when you are working out how far to the next one. */
   .pl-picked{list-style:none;margin:4px 0 2px;padding:0;counter-reset:none}
-  .pl-picked li{display:block}
+  /* The row is a button and the arrows are two more, so the line is a flex row of three
+     rather than one control. The arrows stay out of the way — grey, hairline, and only
+     where there is more than one stop to reorder. */
+  .pl-picked li{display:flex;align-items:center;gap:2px}
+  .pl-picked-mv{flex:none;display:flex;flex-direction:column;gap:1px}
+  /* The part of the day that is not on the towpath, beside the distance and quieter than
+     it: it explains the number rather than competing with it. */
+  .pl-soff{flex:none;margin-left:-3px;color:var(--pl-mute);font-size:10px;white-space:nowrap}
+  .pl-soff::before{content:'· '}
+  .pl-mvb{display:grid;place-items:center;width:20px;height:13px;padding:0;
+    background:transparent;border:0;border-radius:2px;cursor:pointer;line-height:0}
+  .pl-mvb:hover{background:rgba(32,30,29,.09)}
+  .pl-mvb[disabled]{opacity:.25;cursor:default}
+  .pl-mvb[disabled]:hover{background:transparent}
+  /* Where you sleep, at the end of the day's list. Ruled off above rather than tinted:
+     it is the last stop of the day, not a different kind of row. */
+  .pl-picked-bed{border-top:1px dotted var(--pl-line);margin-top:2px;padding-top:1px}
   /* The row itself is the button — the whole line is the target, which is what a thumb
      needs, and it keeps the four columns lining up down the list. */
   .pl-picked-b{display:flex;align-items:baseline;gap:7px;width:100%;padding:3px 0;
@@ -1022,7 +1038,7 @@
        was allowed to wrap, it broke into a four-line column one word wide. Here the name
        gets the whole middle of the first line with the milepost flush right, and the kind
        drops to a line of its own underneath. */
-    .pl-root .pl-picked-b{display:grid;grid-template-columns:auto auto 1fr auto;
+    .pl-root .pl-picked-b{min-width:0;display:grid;grid-template-columns:auto auto 1fr auto;
       column-gap:7px;row-gap:0;align-items:baseline}
     .pl-root .pl-picked-no{grid-area:1/1;align-self:center}
     .pl-root .pl-picked-i{grid-area:1/2}
@@ -1099,6 +1115,11 @@
      only "something is here", which is the one thing the rider already knew. */
   .plan-stop{display:grid;place-items:center;width:22px;height:22px;border-radius:999px;
     background:#f8f7f5;border:2px solid;box-shadow:0 1px 2px rgba(32,30,29,.3)}
+  /* Which stop of the day this is. Small, dark and off the shoulder of the pin, so it
+     reads as a label on the pin rather than as another pin. */
+  .plan-stop-n{position:absolute;left:15px;top:-7px;min-width:13px;height:13px;padding:0 2px;
+    border-radius:999px;background:#201e1d;color:#f8f7f5;font-style:normal;font-weight:700;
+    font-size:9px;line-height:13px;text-align:center;box-shadow:0 1px 2px rgba(32,30,29,.35)}
   .plan-wx{display:flex;flex-direction:column;width:62px;background:#f8f7f5;border:1.6px solid;
     border-radius:2px;overflow:hidden;font-family:ui-serif,Georgia,serif;font-variant-numeric:tabular-nums}
   .plan-wx-1{display:flex;align-items:baseline;gap:4px;padding:1px 4px}
