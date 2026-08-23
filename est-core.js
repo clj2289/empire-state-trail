@@ -3218,10 +3218,14 @@ class TrailApp {
     document.addEventListener('click',e=>{
       const d=e.target.closest('[data-poidel2]');
       const was=this._delArm;
-      if(!d){ if(was){ this._delArm=null; this.renderNearby(); } return; }
+      /* Repainted wherever the button lives. It only ever redrew Nearby, so the same
+         button on the plan's search list armed silently and looked like a dead tap. */
+      const repaint=()=>{ this.renderNearby();
+        if(this.screen==='plan') this.renderPlanFind(); };
+      if(!d){ if(was){ this._delArm=null; repaint(); } return; }
       e.stopPropagation();
       const key=d.dataset.poidel2+'@'+d.dataset.at;
-      if(was!==key){ this._delArm=key; this.renderNearby(); return; }
+      if(was!==key){ this._delArm=key; repaint(); return; }
       this._delArm=null;
       const [lat,lng]=String(d.dataset.at||'').split(',').map(Number);
       if(this.removeMyPoi(d.dataset.poidel2, lat, lng))
@@ -4783,7 +4787,11 @@ class TrailApp {
      the plan could not take as a stop. A place already yours shows neither: it is saved,
      and the stop button beside it is the only question left. */
   keepBtnHtml(p){
-    if(p.asset==='chris') return '';
+    /* A place you added, you can take away. This slot held "+ Place" for everything else
+       and nothing at all for your own, so the one kind of pin the app CAN delete was the
+       one with no way to do it — a Rita's saved off the wrong end of the state sat there
+       ticked onto a day with no control on the row that could undo it. */
+    if(p.asset==='chris') return this.delBtnHtml(p, true);
     if(this.isKept(p.name, p.lat, p.lng))
       return '<span class="poi-kept" title="Already one of your places">✓ Saved</span>';
     const at=(+p.lat).toFixed(5)+','+(+p.lng).toFixed(5);
@@ -6430,7 +6438,48 @@ class TrailApp {
       g.addLayer(mi%step===0 && !this.hitsTownLb(this.mileBox(p)) ?
         this.mileLabel(mi,p) : this.mileTick(mi,p));
     }
+    /* And the same again up every ride out to a stop or a bed. A spur is where the
+       question "how much further" is asked hardest — three miles up a county road in the
+       dark at the end of sixty — and it was the one stretch of the day with nothing to
+       answer it. Measured from the trail, and labelled with a unit, so "3 mi" up CR 7 can
+       never be read as trail mile 3.
+       On the Mileposts layer, because that is what they are: turn the scale off and the
+       whole scale goes. */
+    if(step<=2) this.spurMileMarks(g, b);
     this.applyLyrOrder();
+  }
+  spurMileMarks(g, b){
+    const L=window.L;
+    this.planP().forEach((pd,d)=>{
+      if(pd.zero || !this.planDayVisible(d)) return;
+      const rt=this.dayRoute(d);
+      if(!rt) return;
+      const col=this.planDayCol(d);
+      rt.legs.forEach(sp=>{
+        if(sp.kind!=='spur' || sp.back || sp.c.length<2) return;
+        let run=0, next=1;
+        for(let i=1; i<sp.c.length; i++){
+          const a=L.latLng(sp.c[i-1][0], sp.c[i-1][1]);
+          const z=L.latLng(sp.c[i][0], sp.c[i][1]);
+          const seg=this.map.distance(a,z)/1609.344;
+          while(seg>0 && run+seg>=next){
+            const f=(next-run)/seg;
+            const at=L.latLng(a.lat+(z.lat-a.lat)*f, a.lng+(z.lng-a.lng)*f);
+            if(b.contains(at)) g.addLayer(this.spurMark(next, at, col));
+            next++;
+          }
+          run+=seg;
+        }
+      });
+    });
+  }
+  spurMark(mi, p, col){
+    const html='<div class="mp-lb" style="color:'+col+'">'
+      +'<span class="mp-n mp-spur" style="border-color:'+col+'">'+mi+' mi</span>'
+      +'<i class="mp-dot"></i></div>';
+    return L.marker(p,{pane:this.lyrPane('miles'), keyboard:false, zIndexOffset:-500,
+      interactive:false,
+      icon:L.divIcon({className:'mp-ic', html, iconSize:[46,26], iconAnchor:[23,26]})});
   }
   // The chip a number would draw into, in container pixels — matching the divIcon's own
   // 46x26 box anchored at its foot, so the test is against what actually gets drawn.
@@ -7515,10 +7564,19 @@ class TrailApp {
       cur=woke.mile;
       const din=this.detourOf(woke.poi);
       if(din && din.coords && din.coords.length>1 && din.miles>=PLAN_DETOUR_MIN_MI){
+        /* Counted, and not drawn twice: it is the same road as last night's line, and a
+           second stroke over it in another colour would only double every mile marker
+           along it. It is named in the list instead — see below. */
         leg(din.coords.slice().reverse(), 'spur', din.road);
         if(legs.length) legs[legs.length-1].back=true;
         extra+=din.miles;
         if(!din.road) road=false;
+        /* And it is the first thing on the day's list, for the same reason: three miles
+           turning up in the day's total with nothing in the list to account for them is
+           the number looking like a mistake. */
+        stops.push({key:'~woke', name:woke.name, woke:true, kind:'bed',
+          mile:woke.mile, lat:woke.poi.lat, lng:woke.poi.lng, off:woke.poi.off,
+          poi:woke.poi, asset:woke.poi.asset, ride:0, spur:din});
       }
     }
     seq.forEach((w,i)=>{
@@ -9105,6 +9163,8 @@ class TrailApp {
   planChanged(){
     this._planKey=null;
     this._routeV=(this._routeV||0)+1;
+    // The mileposts layer carries the marks up each ride out, so it is stale now too.
+    this.mileSig='';
     if(this.screen==='plan') this.renderPlan();
     this.drawPlanLayer();
     if(this.wxData && !this.wxData.err && !this.wxData.loading) this.wxReplan();
@@ -9626,7 +9686,7 @@ class TrailApp {
              two miles out to a farm shop and two back are four miles of the day, and they
              are ridden before everything after them. */
           const into=x.ride!=null ? x.ride : (x.mile-b.start)*sgn;
-          const also=x.bed ? [] : this.stopDaysOf(x.key, x.mile).filter(y=>y!==d);
+          const also=(x.bed||x.woke) ? [] : this.stopDaysOf(x.key, x.mile).filter(y=>y!==d);
           return '<li'+(x.bed?' class="pl-picked-bed"':'')+'><button type="button" class="pl-picked-b"'
             +(x.poi ? ' data-poi="'+x.poi.i+'"' : '')
             +' data-lat="'+x.lat+'" data-lng="'+x.lng+'" data-z="15"'
@@ -9641,8 +9701,14 @@ class TrailApp {
             : (into>=0.05 ? fmtMi(into)+' mi' : 'start'))+'</span>'
           +'<span class="pl-picked-n">'+shutMark(x)+esc(x.name)+'</span>'
           +'<span class="pl-picked-m">'+esc(mpTxt(x.mile))+'</span>'
-          +'<span class="pl-picked-k">'+esc(x.bed ? 'you sleep here' : x.kind)
-            +(x.poi ? (this.detourTxt(x.poi) ? ' · '+esc(this.detourTxt(x.poi)) : '')
+          +'<span class="pl-picked-k">'
+            +esc(x.woke ? 'you slept here' : x.bed ? 'you sleep here' : x.kind)
+            /* The morning's ride back down to the trail. Those miles are in the day's
+               total, and a total with nothing in the list to account for it reads as an
+               arithmetic mistake. */
+            +(x.woke
+              ? (x.spur ? ' · '+fmtMi(x.spur.miles)+' mi back to the trail' : '')
+              : x.poi ? (this.detourTxt(x.poi) ? ' · '+esc(this.detourTxt(x.poi)) : '')
                     : ((x.off!=null && x.off>=0.2) ? ' · '+x.off.toFixed(1)+' mi off' : ''))
             /* On purpose on two days, so it has to say so — the same name under two dates
                with nothing to explain it reads as the app having double-booked. */
@@ -9653,7 +9719,7 @@ class TrailApp {
              order the day is ridden in and the order the map draws, so dropping the bags
              at the hotel before dinner is something you can say here rather than something
              you have to remember. Only shown where there is something to reorder. */
-          +(mine.length>1 && !pd.zero && !away
+          +(mine.length>1 && !pd.zero && !away && !x.woke
             ? '<span class="pl-picked-mv">'
               +'<button type="button" class="pl-mvb" data-plan="stopup" data-d="'+d+'"'
                 +' data-k="'+esc(x.key)+'"'+(n===0?' disabled':'')
@@ -10660,7 +10726,7 @@ class TrailApp {
         if(pd.zero || !this.planDayVisible(d)) return;
         const rt=this.dayRoute(d);
         ((rt&&rt.stops)||[]).forEach((s,n)=>{
-          if(s.bed) return;                       // the bed has a moon of its own
+          if(s.bed || s.woke) return;             // the bed has a moon of its own
           const col=PLAN_STOP_COL[s.kind]||'#605d5d', cfg=catCfg(s.asset);
           /* While the router has not answered — or could not — the straight hop is still
              the only thing that can be said about how you get there. */
@@ -12679,6 +12745,8 @@ class TrailApp {
     }
     this._detourBusy=false;
     this._routeV=(this._routeV||0)+1;
+    this.mileSig='';
+    this.renderMileposts();
     if(this.screen==='plan') this.renderPlan();
     this.drawPlanLayer();
   }
