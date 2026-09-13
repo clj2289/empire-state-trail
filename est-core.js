@@ -12003,7 +12003,7 @@ class TrailApp {
     this.planWxLayer=L.layerGroup();
     this.planLayer=L.layerGroup().addTo(map);
     this.regLayer('plannight', this.planNightLayer, 'Overnight stops');
-    this.regLayer('planwx', this.planWxLayer, 'Weather along the plan');
+    this.regLayer('planwx', this.planWxLayer, 'Weather');
     this.regLayer('plan', this.planLayer, 'Ride plan<div class="plan-key"></div>');
     this.routeLayer=L.layerGroup(this.embLines).addTo(map);
     this.regLayer('route', this.routeLayer,
@@ -12119,7 +12119,7 @@ class TrailApp {
     // Off until asked for: it costs a dozen requests to a public service, so switching
     // it on is the fetch trigger rather than something that happens behind your back.
     this.wxLayer=L.layerGroup();
-    this.regLayer('wx', this.wxLayer,'Weather');
+    this.regLayer('wx', this.wxLayer,'Wind &amp; weather');
     map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
     map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.wxAt0=null; this.renderMapSheet(); } });
     /* A plain click used to open the "This spot" dialog on every tap, which fought you
