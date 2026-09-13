@@ -12119,7 +12119,7 @@ class TrailApp {
     // Off until asked for: it costs a dozen requests to a public service, so switching
     // it on is the fetch trigger rather than something that happens behind your back.
     this.wxLayer=L.layerGroup();
-    this.regLayer('wx', this.wxLayer,'Wind &amp; weather');
+    this.regLayer('wx', this.wxLayer,'Weather');
     map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
     map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.wxAt0=null; this.renderMapSheet(); } });
     /* A plain click used to open the "This spot" dialog on every tap, which fought you
