@@ -2212,6 +2212,17 @@ class TrailApp {
     // back over it and leave every other row where it was dragged to.
     const ri=this.lyrOrder.indexOf('route'), mi=this.lyrOrder.indexOf('miles');
     if(ri>=0 && mi>ri){ this.lyrOrder.splice(mi,1); this.lyrOrder.splice(ri,0,'miles'); }
+    // And the same for the weather cards, which used to be registered last and so sat
+    // under every line on the map: the trail drawn across the hour, the plan's legs
+    // across the wind. Lift a stored order's weather row above the topmost line row it
+    // is currently under, and leave everything else where it was dragged to.
+    const wi=this.lyrOrder.indexOf('wx');
+    if(wi>=0){
+      const lines=['plan','route','aadt','cypath','cylane']
+        .map(k=>this.lyrOrder.indexOf(k)).filter(i=>i>=0);
+      const top=lines.length ? Math.min.apply(null,lines) : -1;
+      if(top>=0 && wi>top){ this.lyrOrder.splice(wi,1); this.lyrOrder.splice(top,0,'wx'); }
+    }
     // Only trust a stored hidden-set from after the switches were coupled. The older
     // one recorded list visibility alone, and replaying it now would switch every map
     // layer on at once — 700-odd pins on the first load after upgrading.
@@ -12004,6 +12015,18 @@ class TrailApp {
     this.planLayer=L.layerGroup().addTo(map);
     this.regLayer('plannight', this.planNightLayer, 'Overnight stops');
     this.regLayer('planwx', this.planWxLayer, 'Weather');
+    /* The weather cards are registered here too, above the lines, rather than at the
+       bottom of the control where they used to arrive. Registration order is draw
+       order: the row registered last gets the lowest pane, so the trail, the plan's
+       own legs and the traffic counts were every one of them drawn straight through
+       the cards — a 6px stroke across the hour and the wind word, on the two things
+       the card exists to say. The card wins, for the same reason the mileposts beat
+       the route: the line is continuous and loses nothing by passing behind a box
+       two centimetres wide, and a reading the map draws over isn't a reading.
+       Still off until asked for — the group is empty and the fetch hangs off
+       overlayadd, wired below with the rest of the layer traffic. */
+    this.wxLayer=L.layerGroup();
+    this.regLayer('wx', this.wxLayer,'Wind &amp; weather');
     this.regLayer('plan', this.planLayer, 'Ride plan<div class="plan-key"></div>');
     this.routeLayer=L.layerGroup(this.embLines).addTo(map);
     this.regLayer('route', this.routeLayer,
@@ -12118,8 +12141,7 @@ class TrailApp {
     map.on('overlayremove', e=>{ if(e.layer===this.aadtLayer) this.aadtLayer.clearLayers(); });
     // Off until asked for: it costs a dozen requests to a public service, so switching
     // it on is the fetch trigger rather than something that happens behind your back.
-    this.wxLayer=L.layerGroup();
-    this.regLayer('wx', this.wxLayer,'Wind &amp; weather');
+    // The row itself is registered up with the plan's, so the cards draw over the lines.
     map.on('overlayadd', e=>{ if(e.layer===this.wxLayer) this.loadWeather(); });
     map.on('overlayremove', e=>{ if(e.layer===this.wxLayer){ this.wxNow=null; this.wxAt0=null; this.renderMapSheet(); } });
     /* A plain click used to open the "This spot" dialog on every tap, which fought you
