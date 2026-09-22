@@ -1859,6 +1859,13 @@ class TrailApp {
     // moving the rider re-sorts Nearby, the itinerary, and every distance on screen.
     // On by default so nothing changes for anyone who hasn't gone looking for it.
     this.tapToSet=true;
+    /* This is a trail app: where you are is the frame every distance on screen is drawn
+       in, so it asks the device for a fix on the way in rather than sitting on a
+       whole-state view until somebody taps Locate. Off hands that back to the button.
+       _geoWatch is the single live watcher (see watchMe), and _mapTouched records that
+       the rider has moved the map themselves — the automatic fix does not fight them
+       for it. */
+    this.autoLocate=true; this._geoWatch=null; this._mapTouched=false;
     this.showTrip=false; this.screen='map'; this.panelSnap='shut';
     // Times out the one transient line the grab bar ever shows — see setBarHint.
     this.hintTimer=null;
@@ -2157,6 +2164,10 @@ class TrailApp {
     // map to ask — and the restore at the end of wireElev is the first thing that asks.
     this.wireElev();
     this.renderAll();
+    // Last, with the map built and the screen up: where you are is the app's default
+    // frame, so it is asked for on the way in rather than waiting for a Locate tap.
+    this._booted=true;
+    this.autoLocateNow();
     // Shut is measured off the laid-out grab bar, so it can only be set once it exists.
     requestAnimationFrame(()=>this.setPanelSnap(this.panelSnap));
   }
@@ -2171,6 +2182,7 @@ class TrailApp {
     if(p.dir==='B2NYC'||p.dir==='NYC2B') this.dir=p.dir;
     this.showPassed=!!p.showPassed;
     if('tapToSet' in p) this.tapToSet=!!p.tapToSet;
+    if('autoLocate' in p) this.autoLocate=!!p.autoLocate;
     this.showTrip=!!p.showTrip;
     // 'peek' — the stats-only resting height — is gone; anything stored from that
     // era comes back as the bare bar rather than as an unknown state.
@@ -2234,6 +2246,7 @@ class TrailApp {
     if(Array.isArray(p.searches)) this.searches=p.searches.filter(s=>s&&isFinite(s.lat)&&isFinite(s.lng)).slice(0,60);
     this.renderDirLabels();
     const tp=this.$('tapToSet'); if(tp) tp.checked=this.tapToSet;
+    const al=this.$('autoLocate'); if(al) al.checked=this.autoLocate;
     const tr=this.$('showTrip'); if(tr) tr.checked=this.showTrip;
     const spd=this.$('avgSpeed'); if(spd) spd.value=this.avgSpeed;
     const sw=this.$('showWx'); if(sw) sw.checked=this.showWx;
@@ -2257,7 +2270,7 @@ class TrailApp {
     this.syncSortUi(); this.syncFilterState();
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxScale:this.wxScale,wxReadOpen:this.wxReadOpen,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,autoLocate:this.autoLocate,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxScale:this.wxScale,wxReadOpen:this.wxReadOpen,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,aadtLb:this.aadtLb,cyLb:this.cyLb,
       elevOn:this.elevOn,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
@@ -3103,12 +3116,23 @@ class TrailApp {
       if(this.svOpenNow()) this.svClose(); else if(this.svArmed) this.svArm(false);
     });
     this.wirePoiHover();
-    const zi=this.$('zoomInBtn'); if(zi) zi.addEventListener('click',()=>{ if(this.map) this.map.zoomIn(); });
-    const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ if(this.map) this.map.zoomOut(); });
+    const zi=this.$('zoomInBtn'); if(zi) zi.addEventListener('click',()=>{ this._mapTouched=true; if(this.map) this.map.zoomIn(); });
+    const zo=this.$('zoomOutBtn'); if(zo) zo.addEventListener('click',()=>{ this._mapTouched=true; if(this.map) this.map.zoomOut(); });
     const tp=this.$('tapToSet'); if(tp) tp.addEventListener('change',e=>{ this.tapToSet=e.target.checked; this.savePrefs();
       this.status(this.tapToSet?'The map spot dialog (long-press or right-click) can offer to move you there.':'The map spot dialog no longer moves you — use Locate or a simulated spot.'); });
+    /* Switching it on is itself the tap that asks for the fix — nobody turns this on and
+       expects to have to reload. Switching it off stops the live watch with it, or the
+       next tick would go on moving a rider who just said stop. */
+    const alc=this.$('autoLocate'); if(alc) alc.addEventListener('change',e=>{
+      this.autoLocate=e.target.checked; this.savePrefs();
+      if(this.autoLocate){ this._autoLocDone=true; this.startLocate(false); }
+      else { this.stopWatch(); this.status('The app no longer opens on your location — tap Locate, or pick a simulated spot.'); } });
     const dest=this.$('destSel'); if(dest) dest.addEventListener('change',()=>{ this.destIdx=dest.value===''?-1:+dest.value; this.renderNext(); });
-    const sim=this.$('simSel'); if(sim) sim.addEventListener('change',()=>{ if(sim.value==='')return; const t=TOWNS[+sim.value]; this.setMyLocation(t.lat+0.03,t.lng+0.02); this.status('Simulating near '+t.n+'.'); });
+    const sim=this.$('simSel'); if(sim) sim.addEventListener('change',()=>{ if(sim.value==='')return; const t=TOWNS[+sim.value];
+      // A simulated spot outranks the device: stand the watch down, or its next tick
+      // drags you back to where you really are a few seconds after you chose otherwise.
+      this.stopWatch();
+      this.setMyLocation(t.lat+0.03,t.lng+0.02); this.status('Simulating near '+t.n+'.'); });
     // delegated: a Find-nearby chip both opens Google Maps (its own href) and drops a
     // marker here, so the spot you were checking is still on the map when you come back.
     document.addEventListener('click',e=>{
@@ -3568,16 +3592,77 @@ class TrailApp {
     this.savePrefs();
     this.renderAll();
   }
-  locate(){
-    if(!('geolocation' in navigator)){ this.status('No geolocation — pick a simulated spot in Settings, or tap the map.'); return; }
-    this.status('Locating…');
+  locate(){ this.startLocate(false); }
+  /* One body, two callers. The Locate button asks out loud: it says what it is doing,
+     it recentres, and it explains a refusal. The start-up default (auto) is the quiet
+     one — a rider who never asked for it must not be shouted at, so it says nothing
+     until there is a fix, it leaves a map alone once the rider has moved it, and a
+     refusal switches the default off instead of re-asking on every open. */
+  startLocate(auto){
+    if(!('geolocation' in navigator)){
+      if(!auto) this.status('No geolocation — pick a simulated spot in Settings, or tap the map.');
+      return; }
+    // Already following a live fix: the automatic pass has nothing to add, while the
+    // button is a deliberate "where am I now" and still gets its own reading.
+    if(auto && this._geoWatch!=null) return;
+    if(!auto) this.status('Locating…');
     navigator.geolocation.getCurrentPosition(
-      // The first fix earns a recentre because you asked for it by tapping Locate.
-      // The watch that follows does not: it fires while you are reading the map.
-      p=>{ this.setMyLocation(p.coords.latitude,p.coords.longitude,true); this.status('Location on — updates as you move.');
-        navigator.geolocation.watchPosition(q=>this.setMyLocation(q.coords.latitude,q.coords.longitude),()=>{},{enableHighAccuracy:true,maximumAge:15000}); },
-      e=>{ this.status('Couldn’t locate ('+e.message+'). Pick a simulated spot, or tap the map.'); },
-      {enableHighAccuracy:true,timeout:12000});
+      // The first fix earns a recentre because you asked for it by tapping Locate — or,
+      // automatically, because the map is still sitting where it opened. The watch that
+      // follows never does: it fires while you are reading the map.
+      p=>{ this.setMyLocation(p.coords.latitude,p.coords.longitude, !auto || !this._mapTouched);
+        this.status('Location on — updates as you move.');
+        this.watchMe(); },
+      e=>{
+        if(!auto){ this.status('Couldn’t locate ('+e.message+'). Pick a simulated spot, or tap the map.'); return; }
+        /* Denied is an answer. Asking again on every open is how an app earns a prompt
+           the browser blocks for good, so the default stands down and the button — a
+           tap the rider chose — is the only thing that asks after this. */
+        if(e.code===e.PERMISSION_DENIED){
+          this.autoLocate=false; this.savePrefs();
+          const al=this.$('autoLocate'); if(al) al.checked=false;
+          this.status('Location is off for this site, so distances are planned from '+this.anchorName()+'. Allow it and tap Locate to use where you actually are.');
+          return; }
+        // A fix that has not arrived yet is not a refusal — leave the standing message
+        // (last known position, or the anchor) rather than replacing it with an alarm.
+        if(this.myMile==null && this.offTrail===0) this.status('Couldn’t get a fix yet — tap Locate to try again.');
+      },
+      // Cold GPS in a field takes longer than a rider who tapped a button will wait,
+      // and nobody is waiting on the automatic one.
+      {enableHighAccuracy:true,timeout:auto?20000:12000});
+  }
+  /* One watcher, not one per Locate tap. The old code registered a fresh watchPosition
+     on every press, so three taps left three watchers re-writing the same position for
+     the rest of the session. */
+  watchMe(){
+    if(this._geoWatch!=null || !('geolocation' in navigator)) return;
+    this._geoWatch=navigator.geolocation.watchPosition(
+      q=>this.setMyLocation(q.coords.latitude,q.coords.longitude),
+      ()=>{}, {enableHighAccuracy:true,maximumAge:15000});
+  }
+  // Anything that places the rider deliberately — a simulated town, a test row, a map
+  // tap — outranks the device, and the watch has to stand down or it will undo them.
+  stopWatch(){
+    if(this._geoWatch==null) return;
+    try{ navigator.geolocation.clearWatch(this._geoWatch); }catch(e){}
+    this._geoWatch=null;
+  }
+  /* The start-up fix. Held behind two things: the gate, because a permission prompt on
+     top of a sign-in screen is a question nobody can answer, and the end of init, so the
+     map is there to recentre. Both call back in once they are out of the way. It is the
+     boot flag rather than this.map, because a browser that failed to load Leaflet still
+     has the lists, and every distance in them is measured from here. */
+  autoLocateNow(){
+    if(!this.autoLocate || this._autoLocDone) return;
+    if(this.gateNeeded() || !this._booted) return;
+    this._autoLocDone=true;
+    const ask=()=>this.startLocate(true);
+    if(!navigator.permissions || !navigator.permissions.query){ ask(); return; }
+    /* Where the browser already knows the answer, use it: 'denied' means the call can
+       only fail, and 'granted' means the fix costs the rider nothing. Not every engine
+       accepts the geolocation name, so a throw or a rejection just asks. */
+    try{ navigator.permissions.query({name:'geolocation'}).then(st=>{ if(st.state!=='denied') ask(); }, ask); }
+    catch(e){ ask(); }
   }
   recenter(){
     if(this.myLL && this.map){ this.showTab('map'); this.map.setView([this.myLL.lat,this.myLL.lng],13); }
@@ -4211,6 +4296,8 @@ class TrailApp {
     if(!ll || !isFinite(ll.lat) || !isFinite(ll.lng)) return;
     this.pendingLL=null;
     this.map.closePopup();
+    // You have just said where you are; the device does not get to argue a tick later.
+    this.stopWatch();
     this.setMyLocation(ll.lat,ll.lng);
     this.status('Location set from your map tap.');
   }
@@ -4403,7 +4490,7 @@ class TrailApp {
       const b=document.createElement('button');
       b.className='test-row'; b.type='button';
       b.innerHTML='<span class="test-nm">'+esc(p.n)+'</span><span class="test-co">'+p.lat.toFixed(3)+', '+p.lng.toFixed(3)+'</span>';
-      b.addEventListener('click',()=>{ this.setMyLocation(p.lat,p.lng); this.status('Simulating: '+p.n+'.'); this.showTab('map'); });
+      b.addEventListener('click',()=>{ this.stopWatch(); this.setMyLocation(p.lat,p.lng); this.status('Simulating: '+p.n+'.'); this.showTab('map'); });
       wrap.appendChild(b);
     });
   }
@@ -8765,6 +8852,8 @@ class TrailApp {
     const el=this.$('gate'); if(!el) return;
     if(!this.gateNeeded()){
       if(!el.hidden){ el.hidden=true; el.innerHTML=''; document.body.style.overflow=''; }
+      // The gate was the only thing holding the start-up fix back — ask now it is down.
+      this.autoLocateNow();
       return;
     }
     el.hidden=false;
@@ -11768,6 +11857,13 @@ class TrailApp {
     const st=this.anchorTown(), home=st?[st.lat,st.lng]:[42.9,-76.0];
     const map=L.map(el,{scrollWheelZoom:false,zoomControl:false,attributionControl:true}).setView(home, st?11:7);
     this.map=map;
+    /* A recentre that fights the rider is worse than no recentre. Once they have moved
+       the map themselves, the automatic first fix stops moving it for them — the Locate
+       button, which they pressed, still does. Only rider-driven gestures count, so this
+       is dragstart and the wheel rather than zoomstart, which our own setView fires. */
+    const touched=()=>{ this._mapTouched=true; };
+    map.on('dragstart',touched);
+    if(el.addEventListener){ el.addEventListener('wheel',touched,{passive:true}); el.addEventListener('dblclick',touched); }
     /* Above the marker pane (600) and below the popup pane (700), so where you are
        is never underneath anything you have switched on. */
     if(map.createPane){ map.createPane(ME_PANE); const pn=map.getPane(ME_PANE); if(pn) pn.style.zIndex=655; }
@@ -12134,7 +12230,10 @@ class TrailApp {
     setTimeout(()=>{ map.invalidateSize(); this.renderTownLabels(); this.renderMileposts(); },120);
     if(this.myLL){ // restored from a previous session — place the marker and zoom in
       this.setMyLocation(this.myLL.lat,this.myLL.lng);
-      this.status('Showing your last known position — tap Locate to update it.');
+      // With the start-up fix on, this is the stand-in for the few seconds until the
+      // real one lands, so don't send the rider to a button that is already pressed.
+      this.status(this.autoLocate ? 'Showing your last known position while the device gets a fresh fix…'
+        : 'Showing your last known position — tap Locate to update it.');
     }
     // Pins you dropped from a "Find nearby" search, back where you left them.
     this.restoreSearches();
