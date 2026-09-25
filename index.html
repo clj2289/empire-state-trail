@@ -455,7 +455,11 @@
   .ok-zoom:nth-of-type(2){font-size:15px}
   .ok-zoom:disabled{color:#bab6b6;cursor:default}
   /* The graph proper: a gutter that never scrolls and a strip that only scrolls sideways. */
-  .ok-graph{position:relative;display:flex;align-items:flex-start;background:#fff;touch-action:pan-x}
+  /* pan-x alone also took the PAGE's vertical scroll away from every pixel of the
+     graph — a tall screen you could not scroll off. Both axes: the strip takes the
+     sideways drag, the screen takes the up-and-down one. */
+  .ok-graph{position:relative;display:flex;align-items:flex-start;background:#fff;
+    touch-action:pan-x pan-y}
   .ok-gutwrap{flex:none}
   .ok-gut{display:block;background:#fff;border-right:1px solid #000}
   .ok-strip{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
@@ -468,6 +472,39 @@
   .ok-chip{font-family:Helvetica,Arial,sans-serif;font-size:9px;font-weight:700;color:#fff;
     padding:2px 5px;line-height:1.1;white-space:nowrap}
   .ok-root svg text{font-family:Helvetica,Arial,sans-serif}
+  /* ── the day view ──
+     A stack of cards, one per day, and nothing in it scrolls sideways. Same ink and the
+     same serif as the meteogram, because they are two readings of one forecast. */
+  .ok-switch{display:flex;gap:6px;padding:10px 16px 8px;background:var(--ok-bg)}
+  .ok-seg{flex:1;font-family:inherit;font-size:13px;padding:8px 10px;min-height:40px;
+    border:1px solid rgba(32,30,29,.35);border-radius:999px;background:transparent;
+    color:var(--ok-sec);cursor:pointer}
+  .ok-seg.is-on{background:#201e1d;border-color:#201e1d;color:#f8f4f4;font-weight:600}
+  .ok-dhead{padding:2px 16px 10px;border-bottom:1px solid #201e1d}
+  .ok-dplace{font-size:16px;font-weight:600}
+  .ok-dsub{font-size:12px;line-height:1.5;color:var(--ok-sec);margin-top:2px}
+  .ok-dpick{display:flex;align-items:center;gap:6px;margin-top:8px}
+  .ok-dpick .ok-k{margin-right:1px}
+  .ok-dpick-u{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ok-mute)}
+  .ok-pill{font-family:inherit;font-size:13.5px;min-width:40px;min-height:34px;padding:4px 10px;
+    border:1px solid rgba(32,30,29,.35);border-radius:999px;background:transparent;
+    color:var(--ok-ink);cursor:pointer}
+  .ok-pill.is-on{background:#201e1d;border-color:#201e1d;color:#f8f4f4;font-weight:600}
+  .ok-dlist{padding:9px 16px 0;display:grid;gap:7px}
+  .ok-dc{background:#fff;border:1px solid var(--ok-hair);padding:8px 12px 9px}
+  .ok-dc-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+  .ok-dc-d{font-size:15.5px;font-weight:600}
+  .ok-dc-dt{font-weight:400;color:var(--ok-mute);font-size:13px}
+  .ok-dc-t{font-size:19px;white-space:nowrap;color:#c00000}
+  .ok-dc-lo{color:var(--ok-sec);font-size:15px}
+  .ok-dc-s{font-size:13.5px;color:var(--ok-sec);margin-top:1px}
+  .ok-dc-sm{font-size:11.5px;color:var(--ok-mute)}
+  /* The rain chance, twice: as a number you read and as a length you don't have to. */
+  .ok-dc-bar{height:5px;background:rgba(32,30,29,.09);margin:8px 0 7px;overflow:hidden}
+  .ok-dc-bar>span{display:block;height:100%;background:#0a8f2f}
+  .ok-dc-g{display:grid;grid-template-columns:1fr 1.35fr;gap:4px 12px}
+  .ok-ref{font-family:inherit;font-size:inherit;background:transparent;border:0;padding:0;
+    color:var(--ok-link);text-decoration:underline;cursor:pointer;min-height:26px}
   .ok-loading{padding:4px 16px 0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#0088b0}
   .ok-foot{padding:10px 16px 0;font-size:12px;line-height:1.55;color:var(--ok-faint)}
 
@@ -2653,12 +2690,13 @@
         <p class="poi-band-note" style="margin-top:2px">Long-press the map (or right-click on the web) to open a spot with its trail mile, Google Maps, Street View and a Find-nearby row. A plain tap just reads the map. This switch only controls whether that dialog can also move your location.</p>
         <label class="switch"><input type="checkbox" id="showTrip"> Show the Trip tab</label>
         <label class="switch"><input type="checkbox" id="showWx" checked> Show the Outlook tab</label>
+        <p class="poi-band-note" style="margin-top:2px">Two readings of the same forecast, switched at the top of the tab. <b>Next few days</b> is a plain list — a card a day, three to seven of them, for where you are, with the high and low and the day’s rain and wind averaged over the daylight hours; it takes nothing from the ride plan. <b>Hour by hour</b> is the meteogram, which draws the plan’s days along the route the plan puts you on.</p>
         <div class="feat-list-lbl">Average riding speed</div>
         <div class="poi-band">
           <label>Speed <input id="avgSpeed" type="number" min="4" max="30" step="1" inputmode="numeric" placeholder="12"> mph</label>
           <label>Miles a day <input id="wxPerDay" type="number" min="10" max="200" step="10" inputmode="numeric" placeholder="60"></label>
         </div>
-        <p class="poi-band-note">An <b>overall</b> average, wheels-out to wheels-in, with the stops already inside it — not the moving average a bike computer shows. Lunch, locks, photographs and a puncture all come out of it, so it sits well below your road speed: 10 to 13 is honest for a loaded touring bike, and 12 on the road is more like 9 all-in. It decides where you’d be at each forecast hour, so the weather layer and the Outlook both hang off it — and it is also on the <b>Ride plan</b> tab, which is where it matters most. <b>Miles a day</b> is only the target <b>Auto-plan</b> aims at; once a plan exists, each day’s distance is that day’s own. Speed is currently <b id="wxSpeedEcho">12</b> mph.</p>
+        <p class="poi-band-note">An <b>overall</b> average, wheels-out to wheels-in, with the stops already inside it — not the moving average a bike computer shows. Lunch, locks, photographs and a puncture all come out of it, so it sits well below your road speed: 10 to 13 is honest for a loaded touring bike, and 12 on the road is more like 9 all-in. It decides where you’d be at each forecast hour, so the weather layer and the Outlook’s <b>hour by hour</b> view both hang off it (its <b>next few days</b> view doesn’t — that one is just the weather where you are) — and it is also on the <b>Ride plan</b> tab, which is where it matters most. <b>Miles a day</b> is only the target <b>Auto-plan</b> aims at; once a plan exists, each day’s distance is that day’s own. Speed is currently <b id="wxSpeedEcho">12</b> mph.</p>
         <div class="set-lbl">Direction of travel</div>
         <button type="button" class="dir-toggle" title="Flip direction of travel"><span data-ic="flip"></span><span class="dir-lbl">Buffalo → NYC</span></button>
         <div class="set-lbl"><label for="simSel">Simulate a location</label></div>

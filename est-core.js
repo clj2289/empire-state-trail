@@ -123,6 +123,10 @@ const WX_OUTLOOK_DAYS=4;
    today's midnight and simply laid the plan's first day on top of it. */
 const WX_FORECAST_DAYS=6;
 const WX_SAMPLE_MI=12;
+/* The day view's window and its choices. Daylight rather than the ride plan's window on
+   purpose: this screen is the one that asks nothing of the plan, so it cannot start by
+   reading a setting off it. */
+const WX_DAY_FROM=7, WX_DAY_TO=19, WX_DAY_CHOICES=[3,5,7];
 /* The spot forecast. The Outlook stops where a forecast stops, but an arrival time costs
    nothing to work out, so a tapped spot's own timeline runs far enough to date any point
    on the trail — three weeks covers the whole 750 miles even at a gentle 40 a day. */
@@ -898,11 +902,26 @@ const LOCK_POWER={
    north is a headwind, not a tailwind. */
 const COMPASS={N:0,NNE:22.5,NE:45,ENE:67.5,E:90,ESE:112.5,SE:135,SSE:157.5,
   S:180,SSW:202.5,SW:225,WSW:247.5,W:270,WNW:292.5,NW:315,NNW:337.5};
+const COMPASS_PTS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+// Degrees back to the sixteen-point name the wind is described by.
+function compassName(deg){
+  if(deg==null || !isFinite(deg)) return '';
+  return COMPASS_PTS[Math.round((((deg%360)+360)%360)/22.5)%16];
+}
 // "10 mph" and "5 to 10 mph" both come back; a range's mean is the sustained wind.
 function windMph(s){
   const n=String(s||'').match(/\d+/g);
   if(!n||!n.length) return null;
   return n.reduce((a,b)=>a+ +b,0)/n.length;
+}
+/* The top of the hour's range. NWS writes an hourly wind as "8 to 14 mph", and windMph
+   above takes the middle of that, which is the number to ride by. This is the other end
+   of it — what the hour can throw at you — and it is NOT a gust: the hourly forecast
+   does not carry gusts, and calling it one would be inventing a number. */
+function windTopMph(s){
+  const n=String(s||'').match(/\d+/g);
+  if(!n||!n.length) return null;
+  return Math.max.apply(null, n.map(Number));
 }
 // Initial great-circle bearing, degrees clockwise from north.
 // Great-circle miles. projectRoute's flat-earth is fine inside one 300 m leg;
@@ -1624,6 +1643,65 @@ function assembleOutlookHours(plan, smiles, gridByIndex, headingAt){
       headMph:w?w.headMph:null, crossMph:w?w.crossMph:null, kind:w?w.kind:'cross'};
   });
 }
+/* ---------- the plain day summary ----------
+   The meteogram answers "what will it be doing at four on Thursday, at the milepost the
+   plan puts me on". This answers the question asked before any of that exists: roughly,
+   what are the next few days like. One point's hourly periods, folded a day at a time —
+   the high and low over the whole day, and rain, wind and sky over the daylight hours,
+   because a calm night should not talk a windy afternoon down. Pure, so it can be
+   checked without the network. */
+function foldWxDays(periods, from, to){
+  const by=new Map(), order=[];
+  (periods||[]).forEach(p=>{
+    const ms=Date.parse(p.startTime);
+    if(!isFinite(ms)) return;
+    const d=new Date(ms), key=localISO(ms).slice(0,10);
+    let rec=by.get(key);
+    if(!rec){ rec={date:key, ms:new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime(),
+      hi:null, lo:null, hours:0, day:[]}; by.set(key,rec); order.push(rec); }
+    const temp=isFinite(p.temperature) ? p.temperature : null;
+    if(temp!=null){ rec.hi=rec.hi==null?temp:Math.max(rec.hi,temp);
+      rec.lo=rec.lo==null?temp:Math.min(rec.lo,temp); }
+    rec.hours++;
+    const hr=d.getHours();
+    if(hr<from || hr>to) return;
+    const pv=p.probabilityOfPrecipitation;
+    rec.day.push({hr, temp,
+      pop:(pv && isFinite(pv.value)) ? pv.value : null,
+      mph:windMph(p.windSpeed), top:windTopMph(p.windSpeed),
+      deg:COMPASS[String(p.windDirection||'').toUpperCase()],
+      short:String(p.shortForecast||'').trim()});
+  });
+  const mean=a=>a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
+  return order.map(rec=>{
+    const hrs=rec.day;
+    const num=k=>hrs.map(h=>h[k]).filter(v=>v!=null && isFinite(v));
+    const pops=num('pop'), mphs=num('mph'), tops=num('top');
+    /* A mean of directions has to go round the compass rather than through it: north
+       averaged the arithmetic way comes out due south. Weighted by speed, so the hours
+       that will actually push you around count for more than a calm dawn. */
+    let vx=0, vy=0, vn=0;
+    hrs.forEach(h=>{ if(h.deg==null || h.mph==null) return;
+      const rad=h.deg*Math.PI/180; vx+=Math.sin(rad)*h.mph; vy+=Math.cos(rad)*h.mph; vn++; });
+    const fromDeg = vn ? ((Math.atan2(vx,vy)*180/Math.PI)+360)%360 : null;
+    /* The sky word is a vote, not a mean — "Mostly Sunny" and "Chance Showers" have no
+       midpoint. A tie goes to the middle of the day, which is what a glance at a
+       forecast is really asking about. */
+    const votes=new Map();
+    hrs.forEach(h=>{ if(h.short) votes.set(h.short,(votes.get(h.short)||0)+1); });
+    const mid=hrs.length ? hrs[Math.floor(hrs.length/2)].short : '';
+    let short='', best=-1;
+    votes.forEach((n,k)=>{ if(n>best || (n===best && k===mid)){ best=n; short=k; } });
+    return {date:rec.date, ms:rec.ms, hi:rec.hi, lo:rec.lo,
+      /* A day the forecast only catches the end of — today, opened after lunch — says so
+         rather than reporting an evening as though it were the whole day. */
+      partial:rec.hours<20, lit:hrs.length,
+      popMax:pops.length?Math.max.apply(null,pops):null, popMean:mean(pops),
+      wetHours:hrs.filter(h=>h.pop!=null && h.pop>=30).length,
+      windMean:mean(mphs), windTop:tops.length?Math.max.apply(null,tops):null,
+      fromDeg, short};
+  });
+}
 /* Each town the rider reaches inside the horizon, turned into an arrival by reading the
    plan hour where its milepost is crossed and interpolating the minute. `start` marks the
    single town being departed — nearest at or just behind the anchor — so the strip opens
@@ -1941,6 +2019,11 @@ class TrailApp {
        town, the mile, the temperature, the rain and the wind verdict — the full block is
        for when you want the rest, and the caret remembers which you asked for. */
     this.wxSel=null; this.wxHours=48; this.wxReadOpen=false; this.wxViewDay=0; this.wxGrowing=false;
+    /* Which of the two Outlook screens you get. 'days' is a plain list of the next few
+       days at one place and is the default, because "what is the weather doing this
+       week" is the question people actually open a forecast with; 'hours' is the
+       meteogram, which answers a much narrower one and costs a plan to read. */
+    this.wxView='days'; this.wxDays=5; this.wxDaily=null;
     /* How big the graph is drawn. The strip is built in one fixed coordinate system and
        then scaled on the way out, so this magnifies type, lines and spacing together —
        the same thing pinching would do, except it survives a redraw and it is saved. */
@@ -2206,6 +2289,8 @@ class TrailApp {
     if(isFinite(p.wxPerDay)&&p.wxPerDay>0) this.wxPerDay=p.wxPerDay;
     // Clamp a stored ride window to sane bounds and keep start before end.
     if(typeof p.wxReadOpen==='boolean') this.wxReadOpen=p.wxReadOpen;
+    if(p.wxView==='days'||p.wxView==='hours') this.wxView=p.wxView;
+    if(WX_DAY_CHOICES.indexOf(p.wxDays)>=0) this.wxDays=p.wxDays;
     if(isFinite(p.wxScale)) this.wxScale=Math.max(WX_SCALES[0],Math.min(WX_SCALES[WX_SCALES.length-1],p.wxScale));
     if(isFinite(p.wxRideStart)) this.wxRideStart=Math.max(0,Math.min(21,p.wxRideStart|0));
     if(isFinite(p.wxRideEnd)) this.wxRideEnd=Math.max(this.wxRideStart+1,Math.min(23,p.wxRideEnd|0));
@@ -2270,7 +2355,7 @@ class TrailApp {
     this.syncSortUi(); this.syncFilterState();
   }
   savePrefs(){
-    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,autoLocate:this.autoLocate,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxScale:this.wxScale,wxReadOpen:this.wxReadOpen,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
+    try{ localStorage.setItem(PREFS, JSON.stringify({dir:this.dir,showPassed:this.showPassed,tapToSet:this.tapToSet,autoLocate:this.autoLocate,showTrip:this.showTrip,panelSnap:this.panelSnap,myLL:this.myLL,avgSpeed:this.avgSpeed,showWx:this.showWx,wxPerDay:this.wxPerDay,wxScale:this.wxScale,wxReadOpen:this.wxReadOpen,wxView:this.wxView,wxDays:this.wxDays,wxRideStart:this.wxRideStart,wxRideEnd:this.wxRideEnd,
       miMin:this.miMin,miMax:this.miMax,mpFrom:this.mpFrom,mpTo:this.mpTo,followMap:this.followMap,aadtLb:this.aadtLb,cyLb:this.cyLb,
       elevOn:this.elevOn,
       catOrder:this.catOrder,catHidden:[...this.catHidden],catCoupled:true,lyrOrder:this.lyrOrder,
@@ -3076,7 +3161,11 @@ class TrailApp {
     if(name==='plan'){ this.renderPlan();
       // And ask whether the other phone has been busy. Rate-limited inside checkSync.
       if(this.syncOn()) this.checkSync(); }
-    if(name==='wx') this.renderOutlook();
+    /* The day view asks for its one forecast on the way in. It is a single request to
+       api.weather.gov, cached half an hour, so opening the tab and being told the
+       weather beats opening the tab and being offered a button that tells it. The
+       meteogram still waits to be asked: it costs a request per sample point. */
+    if(name==='wx'){ this.renderOutlook(); if(this.wxView!=='hours') this.buildDays(); }
     // Who you are and when the plan last went up — both move while you are elsewhere.
     if(name==='settings') this.renderAccount();
     // Only resize. Recentring here threw away wherever you had panned to the moment
@@ -3503,7 +3592,17 @@ class TrailApp {
        rebuilt inside the render — delegated rather than bound to a node that a redraw
        throws away. */
     const wo=this.$('wxOut');
-    if(wo) wo.addEventListener('click',e=>{ if(e.target.closest('[data-wxgo]')) this.buildOutlook(); });
+    if(wo) wo.addEventListener('click',e=>{
+      if(e.target.closest('[data-wxgo]')){ this.buildOutlook(); return; }
+      if(e.target.closest('[data-wxrefresh]')){ this.buildDays(true); return; }
+      const v=e.target.closest('[data-wxview]');
+      if(v){ this.wxView=v.dataset.wxview; this.savePrefs(); this.renderOutlook();
+        if(this.wxView!=='hours') this.buildDays();
+        return; }
+      const dz=e.target.closest('[data-wxdays]');
+      // Only ever fewer or more of the days already in hand — the fetch covers the whole
+      // horizon in one go, so this is a redraw, not a request.
+      if(dz){ this.wxDays=+dz.dataset.wxdays; this.savePrefs(); this.renderOutlook(); } });
     const rd=id=>{ const el=this.$(id); if(!el) return;
       el.addEventListener('input',()=>{ const n=+el.value; if(isFinite(n)&&n>0){ this.wxPerDay=n; this.savePrefs();
         // Miles a day is the target Auto-plan aims at; it does not move a plan already
@@ -11118,6 +11217,126 @@ class TrailApp {
     this.renderOutlook();
   }
 
+  /* ---------- the plain day view ----------
+     Everything below answers one question — roughly, what are the next few days like —
+     and takes nothing from the ride plan to answer it. One place, one request, one card
+     per day, stacked down the screen: there is nothing here to scroll sideways. */
+  /* Where the forecast is read. Wherever you are, which since the app locates itself on
+     the way in is almost always a real answer; failing that, the end of the trail the
+     trip starts from. Naming it matters — an unlabelled forecast is a forecast for
+     somewhere. */
+  wxDayPoint(){
+    if(this.myLL && isFinite(this.myLL.lat) && isFinite(this.myLL.lng)){
+      const near=this.myMile==null ? null : (this.nearestTown(this.myMile)||{}).t;
+      return {lat:this.myLL.lat, lng:this.myLL.lng,
+        name:near ? 'Where you are, near '+this.shortTown(near.n) : 'Where you are'};
+    }
+    const t=this.anchorTown();
+    if(t) return {lat:t.lat, lng:t.lng, name:this.shortTown(t.n)+', where the trip starts'};
+    return null;
+  }
+  /* One request, and the same half-hour cache the map layer fills, so flipping between
+     the two screens costs nothing. `force` is the Refresh button — it still goes through
+     nwsHourly's cache, which is the point: a forecast is reissued hourly, and hammering
+     the service for a number that has not changed is how an app gets itself blocked. */
+  async buildDays(force){
+    const pt=this.wxDayPoint();
+    if(!pt){ this.wxDaily={err:'Set where you are — tap Locate on the map, or pick a simulated spot in More — and the forecast follows you.'}; this.renderOutlook(); return; }
+    const key=pt.lat.toFixed(2)+','+pt.lng.toFixed(2);
+    const had=this.wxDaily;
+    if(!force && had && had.days && had.key===key && Date.now()-had.at<18e5) return;
+    if(this._dayBusy) return;
+    this._dayBusy=true;
+    // Keep the days already on screen while a refresh is in flight: blanking the screen
+    // to say "loading" throws away a perfectly good answer to ask the same question.
+    this.wxDaily=(had && had.days) ? {...had, busy:true} : {loading:true};
+    this.renderOutlook();
+    let out;
+    try{
+      const days=foldWxDays(await this.nwsHourly(pt.lat,pt.lng), WX_DAY_FROM, WX_DAY_TO);
+      out = days.length ? {days, at:Date.now(), key, place:pt.name, lat:pt.lat, lng:pt.lng}
+        : {err:'The forecast came back empty for '+pt.name+'.'};
+    }catch(e){
+      out={err:'No answer from api.weather.gov. It\u2019s the US forecast service — it covers '
+        +'the whole trail, but it does go down. Worth another try in a minute.'};
+    }
+    this._dayBusy=false;
+    this.wxDaily=out;
+    this.renderOutlook();
+  }
+  // Never more days than came back: the hourly forecast runs about a week, and the last
+  // day of it is usually a stub of a few hours rather than a day.
+  wxDayList(){
+    const d=this.wxDaily;
+    if(!d || !d.days) return [];
+    return d.days.filter(x=>x.lit>=3).slice(0, this.wxDays);
+  }
+  wxDayName(x, i){
+    const now=new Date(), t0=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
+    const n=Math.round((x.ms-t0)/864e5);
+    if(n===0) return 'Today';
+    if(n===1) return 'Tomorrow';
+    return new Date(x.ms).toLocaleDateString([], {weekday:'long'});
+  }
+  // The two-button switch both screens carry. Whichever you are on is the pressed one.
+  wxSwitchHtml(){
+    const b=(v,lbl)=>'<button type="button" class="ok-seg'+(this.wxView===v?' is-on':'')
+      +'" data-wxview="'+v+'" aria-pressed="'+(this.wxView===v)+'">'+lbl+'</button>';
+    return '<div class="ok-switch">'+b('days','Next few days')+b('hours','Hour by hour')+'</div>';
+  }
+  renderDays(){
+    const el=this.$('wxOut'); if(!el) return;
+    el.className='ok-root';
+    const d=this.wxDaily, sw=this.wxSwitchHtml();
+    if(!d || d.loading){ el.innerHTML=sw+'<div class="ok-blank"><p>Reading the next few days from the US National Weather Service\u2026</p></div>'; return; }
+    if(d.err){ el.innerHTML=sw+'<div class="ok-blank"><p>'+esc(d.err)+'</p>'
+      +'<button type="button" class="ok-go" data-wxrefresh>Try again</button></div>'; return; }
+    const list=this.wxDayList();
+    const pick=WX_DAY_CHOICES.map(k=>'<button type="button" class="ok-pill'+(k===this.wxDays?' is-on':'')
+      +'" data-wxdays="'+k+'"'+(k===this.wxDays?' aria-pressed="true"':'')+'>'+k+'</button>').join('');
+    const cards=list.map((x,i)=>{
+      const nm=this.wxDayName(x,i);
+      const date=new Date(x.ms).toLocaleDateString([], {month:'short', day:'numeric'});
+      const temp=x.hi==null ? '&mdash;'
+        : '<b>'+Math.round(x.hi)+'&deg;</b> <span class="ok-dc-lo">'+Math.round(x.lo)+'&deg;</span>';
+      const pop=x.popMax==null ? null : Math.round(x.popMax);
+      // The bar is the chance, and it is the same number written beside it — a second
+      // channel for a glance, not a second reading.
+      const bar='<div class="ok-dc-bar"><span style="width:'+(pop==null?0:pop)+'%"></span></div>';
+      const rain = pop==null ? '&mdash;'
+        : pop+'%'+(x.wetHours>=2 ? ' <span class="ok-dc-sm">'+x.wetHours+' wet hours</span>' : '');
+      const wind = x.windMean==null ? '&mdash;'
+        : Math.round(x.windMean)+' mph'+(x.fromDeg==null?'':' '+compassName(x.fromDeg))
+          +(x.windTop!=null && x.windTop>=x.windMean+5
+            ? ' <span class="ok-dc-sm">up to '+Math.round(x.windTop)+'</span>' : '');
+      return '<article class="ok-dc">'
+        +'<div class="ok-dc-h"><span class="ok-dc-d">'+esc(nm)+' <span class="ok-dc-dt">'+esc(date)+'</span></span>'
+          +'<span class="ok-dc-t">'+temp+'</span></div>'
+        +'<div class="ok-dc-s">'+esc(x.short||'No sky reading')
+          +(x.partial?' <span class="ok-dc-sm">(part of the day)</span>':'')+'</div>'
+        +bar
+        +'<div class="ok-dc-g">'
+          +'<div><div class="ok-k">Rain</div><div class="ok-v4 ok-rain">'+rain+'</div></div>'
+          +'<div><div class="ok-k">Wind</div><div class="ok-v4">'+wind+'</div></div>'
+        +'</div></article>';
+    }).join('');
+    const read=new Date(d.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    el.innerHTML=sw
+      +'<div class="ok-dhead">'
+        +'<div class="ok-dplace">'+esc(d.place)+(d.busy?' <span class="ok-dc-sm">refreshing\u2026</span>':'')+'</div>'
+        +'<div class="ok-dsub">The high and low across the whole day, with rain, wind and sky '
+          +'averaged over the daylight hours ('+((WX_DAY_FROM%12)||12)+'am to '+((WX_DAY_TO%12)||12)+'pm). '
+          +'Nothing here follows the ride plan or its stops.</div>'
+        +'<div class="ok-dpick"><span class="ok-k">Show</span>'+pick+'<span class="ok-dpick-u">days</span></div>'
+      +'</div>'
+      +'<div class="ok-dlist">'+(cards||'<div class="ok-blank"><p>The forecast has no full days left in it.</p></div>')+'</div>'
+      +'<div class="ok-foot">api.weather.gov, read at '+esc(read)+'. '
+        +'The forecast runs about a week out; past that nobody has one. '
+        +'Move your location, or long-press a spot on the map, to read somewhere else.'
+        +' <button type="button" class="ok-ref" data-wxrefresh>Refresh</button> '
+        +'<a href="'+esc(nwsLink(d.lat,d.lng))+'" target="_blank" rel="noopener">weather.gov \u2197</a></div>';
+  }
+
   /* ---------- the spot forecast ----------
      The map layer answers "what am I riding into today" and the Outlook answers "what do
      the next four days hold", both anchored to the rider. This answers a question about a
@@ -11245,9 +11464,12 @@ class TrailApp {
      which is what makes a town appear on a weather graph at all. */
   renderOutlook(){
     const el=this.$('wxOut'); if(!el) return;
+    /* Two screens, one tab. The day list is the default and needs nothing but a place;
+       the meteogram below is the hour-by-hour one, and it is a different question. */
+    if(this.wxView!=='hours') return this.renderDays();
     const app=this, data=this.wxData;
     el.className='ok-root';
-    const blank=(msg, btn)=>{ el.innerHTML='<div class="ok-blank"><p>'+msg+'</p>'
+    const blank=(msg, btn)=>{ el.innerHTML=this.wxSwitchHtml()+'<div class="ok-blank"><p>'+msg+'</p>'
       +(btn?'<button type="button" class="ok-go" data-wxgo>'+btn+'</button>':'')+'</div>'; };
     if(!data){ return blank('The days your ride plan covers, hour by hour, along the route '
       +'the plan puts you on — from the US National Weather Service. It only asks when you ask.',
@@ -11613,6 +11835,13 @@ class TrailApp {
 
     el.innerHTML='';
     const root=el;
+    /* Outside the sticky wrapper: the switch is how you leave this screen, so it stays
+       at the top of it rather than riding over the graph. */
+    const swBox=EL('div','ok-switch'); root.appendChild(swBox);
+    [['days','Next few days'],['hours','Hour by hour']].forEach(([v,lbl])=>{
+      const b=EL('button','ok-seg'+(this.wxView===v?' is-on':''),lbl);
+      b.type='button'; b.dataset.wxview=v; b.setAttribute('aria-pressed', String(this.wxView===v));
+      swBox.appendChild(b); });
     const sticky=EL('div','ok-sticky'); root.appendChild(sticky);
     const read=EL('div','ok-read'); sticky.appendChild(read);
     const r1=EL('div','ok-read-1'); read.appendChild(r1);
@@ -11718,12 +11947,23 @@ class TrailApp {
       app.wxSel=i; app.renderOutlook(); };
     const scrub=ev=>{ const box=scroller.getBoundingClientRect();
       setSel(Math.round((ev.clientX-box.left+scroller.scrollLeft)/(PPH*S))); };
+    /* A finger dragging across the strip is trying to scroll it, not to pick an hour.
+       It used to do both: every touchmove scrubbed, scrubbing re-renders the whole
+       screen, and a re-render replaces the element the browser was mid-scroll on — so
+       the strip simply would not move sideways on a phone. Touch picks on a tap now,
+       and the drag is left to the scroller. The mouse keeps its drag: a cursor has a
+       scrollbar and a wheel for the other job. */
+    let dx=0, dy=0, dragged=false;
     graph.addEventListener('pointerdown',ev=>{ if(ev.target.closest('a')) return;
-      app._wxDrag=true; scrub(ev); });
-    graph.addEventListener('pointermove',ev=>{ if(!app._wxDrag) return;
-      if(ev.buttons || ev.pointerType==='touch') scrub(ev); });
-    const endDrag=()=>{ app._wxDrag=false; };
-    graph.addEventListener('pointerup',endDrag); graph.addEventListener('pointercancel',endDrag);
+      dx=ev.clientX; dy=ev.clientY; dragged=false;
+      if(ev.pointerType==='mouse'){ app._wxDrag=true; scrub(ev); } });
+    graph.addEventListener('pointermove',ev=>{
+      if(abs(ev.clientX-dx)>8 || abs(ev.clientY-dy)>8) dragged=true;
+      if(app._wxDrag && ev.buttons) scrub(ev); });
+    graph.addEventListener('pointerup',ev=>{
+      if(!app._wxDrag && !dragged && !ev.target.closest('a')) scrub(ev);
+      app._wxDrag=false; });
+    graph.addEventListener('pointercancel',()=>{ app._wxDrag=false; });
     graph.addEventListener('dblclick',()=>{ const near=nearestTownTo(H[app.wxSel].mile);
       window.open(nwsFor(near.lat,near.lng,app.wxSel), '_blank', 'noopener'); });
 
