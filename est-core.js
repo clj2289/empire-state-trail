@@ -1959,6 +1959,8 @@ class TrailApp {
        date on the screen counts from. See planStartDate. */
     this.planStart=null;
     this.wxData=null; this.wxGrids=null; this.wxGridCache={};
+    // Keyed exactly like wxCache: what the forecast service says each point is.
+    this.wxPlaces={};
     /* The ride plan — see the PLAN_KEY block up top. planDays is the per-day record the
        Outlook, the plan tab and the map all read; planAnchor is the trail mile day one
        leaves from, null until a position or a restored plan supplies one. Loaded in
@@ -3595,6 +3597,7 @@ class TrailApp {
     if(wo) wo.addEventListener('click',e=>{
       if(e.target.closest('[data-wxgo]')){ this.buildOutlook(); return; }
       if(e.target.closest('[data-wxrefresh]')){ this.buildDays(true); return; }
+      if(e.target.closest('[data-wxmap]')){ this.wxShowPoint(); return; }
       const v=e.target.closest('[data-wxview]');
       if(v){ this.wxView=v.dataset.wxview; this.savePrefs(); this.renderOutlook();
         if(this.wxView!=='hours') this.buildDays();
@@ -7159,13 +7162,30 @@ class TrailApp {
     if(hit && Date.now()-hit.t < 18e5) return hit.v;
     const pr=await fetch('https://api.weather.gov/points/'+lat.toFixed(4)+','+lng.toFixed(4));
     if(!pr.ok) throw new Error('points '+pr.status);
-    const url=((await pr.json()).properties||{}).forecastHourly;
+    const pp=(await pr.json()).properties||{};
+    /* The points call already says which place and which grid cell this forecast IS —
+       the town NWS measures the offset from, the office, and the cell — and it was being
+       thrown away with the rest of the response. A forecast that will not say where it
+       is from is a forecast you cannot check, so it is kept and shown. */
+    this.wxPlaces[key]=this.nwsPlace(pp);
+    const url=pp.forecastHourly;
     if(!url) throw new Error('no hourly grid here');
     const fr=await fetch(url);
     if(!fr.ok) throw new Error('forecast '+fr.status);
     const periods=((await fr.json()).properties||{}).periods||[];
     this.wxCache[key]={t:Date.now(), v:periods};
     return periods;
+  }
+  /* What api.weather.gov says the point is: its own nearest-place reading, and the
+     office and grid cell the numbers come out of. Every field is optional — this is one
+     service's idea of where you are, not a promise — so anything missing simply drops. */
+  nwsPlace(props){
+    const rl=(props && props.relativeLocation && props.relativeLocation.properties)||{};
+    const city=rl.city||'', state=rl.state||'';
+    const d=rl.distance && isFinite(rl.distance.value) ? rl.distance.value/1609.344 : null;
+    return {city, state, town:city ? (city+(state?', '+state:'')) : '',
+      miles: d==null ? null : Math.round(d*10)/10,
+      grid:(props && props.gridId) ? props.gridId+' '+props.gridX+','+props.gridY : ''};
   }
   /* The raw gridpoints data, in two hops like nwsHourly. Where forecastHourly gives a
      ready-made per-hour list of the headline fields, this is the underlying grid: every
@@ -11227,12 +11247,15 @@ class TrailApp {
      somewhere. */
   wxDayPoint(){
     if(this.myLL && isFinite(this.myLL.lat) && isFinite(this.myLL.lng)){
-      const near=this.myMile==null ? null : (this.nearestTown(this.myMile)||{}).t;
-      return {lat:this.myLL.lat, lng:this.myLL.lng,
-        name:near ? 'Where you are, near '+this.shortTown(near.n) : 'Where you are'};
+      const near=this.nearestTown(this.myMile==null ? projectRoute(this.myLL.lat,this.myLL.lng).mile : this.myMile);
+      return {lat:this.myLL.lat, lng:this.myLL.lng, mile:this.myMile,
+        name:'Where you are', near:near?near.t:null,
+        why:'Your own position \u2014 the one the map\u2019s blue dot is on.'};
     }
     const t=this.anchorTown();
-    if(t) return {lat:t.lat, lng:t.lng, name:this.shortTown(t.n)+', where the trip starts'};
+    if(t) return {lat:t.lat, lng:t.lng, mile:t.mi, name:this.shortTown(t.n), near:t,
+      why:'No position set, so this is the end of the trail your trip starts from. '
+        +'Tap Locate on the map and the forecast follows you.'};
     return null;
   }
   /* One request, and the same half-hour cache the map layer fills, so flipping between
@@ -11254,7 +11277,8 @@ class TrailApp {
     let out;
     try{
       const days=foldWxDays(await this.nwsHourly(pt.lat,pt.lng), WX_DAY_FROM, WX_DAY_TO);
-      out = days.length ? {days, at:Date.now(), key, place:pt.name, lat:pt.lat, lng:pt.lng}
+      out = days.length ? {days, at:Date.now(), key, pt, place:this.wxPlaces[key]||null,
+        lat:pt.lat, lng:pt.lng}
         : {err:'The forecast came back empty for '+pt.name+'.'};
     }catch(e){
       out={err:'No answer from api.weather.gov. It\u2019s the US forecast service — it covers '
@@ -11263,6 +11287,27 @@ class TrailApp {
     this._dayBusy=false;
     this.wxDaily=out;
     this.renderOutlook();
+  }
+  /* "Show me on the map" — the one answer a coordinate cannot give. Drops a ring where
+     the forecast is read, which is a different thing from the blue dot even when they
+     are a few yards apart: the service answers for a grid cell a couple of kilometres
+     across, and this is the point inside it that was asked for. */
+  wxShowPoint(){
+    const d=this.wxDaily;
+    if(!d || !d.days || !isFinite(d.lat)) return;
+    if(!this.map){ this.status('No map on this device — the forecast is read at '+d.lat.toFixed(4)+', '+d.lng.toFixed(4)+'.'); return; }
+    this.showTab('map');
+    const ll=[d.lat,d.lng];
+    if(this._wxPtMk){ this.map.removeLayer(this._wxPtMk); this._wxPtMk=null; }
+    const pl=d.place||{};
+    this._wxPtMk=L.circleMarker(ll,{radius:10,weight:3,color:'#006786',fillColor:'#fff',fillOpacity:.85})
+      .addTo(this.map)
+      .bindPopup('<b>The next-few-days forecast is read here</b><br>'+esc(d.lat.toFixed(4)+', '+d.lng.toFixed(4))
+        +(pl.town?'<br>'+esc(pl.miles!=null ? pl.miles.toFixed(1)+' mi from '+pl.town : pl.town):'')
+        +(pl.grid?'<br>NWS grid '+esc(pl.grid):''));
+    // Late enough that the map has its size back after the tab switch.
+    setTimeout(()=>{ if(!this._wxPtMk) return;
+      this.map.setView(ll, Math.max(this.map.getZoom(),11)); this._wxPtMk.openPopup(); }, 120);
   }
   // Never more days than came back: the hourly forecast runs about a week, and the last
   // day of it is usually a stub of a few hours rather than a day.
@@ -11321,18 +11366,38 @@ class TrailApp {
         +'</div></article>';
     }).join('');
     const read=new Date(d.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    /* Where these numbers are from, in the three ways it can be asked: the name of the
+       place, the coordinates the service was actually asked about, and the thing on the
+       map you can go and look at. A forecast whose location you cannot check is one you
+       cannot trust, and this screen deliberately has only the one location. */
+    const pt=d.pt||{}, pl=d.place||{};
+    const near=pt.near ? this.shortTown(pt.near.n) : '';
+    /* The place leads, because that is the question — "where is this forecast for" is
+       answered by a town, not by a role. The line under it says whose point it is and
+       how far off the named town it sits, and never repeats the name. */
+    const title=pl.town || (near ? 'Near '+near : (pt.name||'Your position'));
+    const where=[pt.name==='Where you are' ? 'Where you are' : 'The start of the trip'];
+    if(pl.town && pl.miles!=null) where.push(pl.miles.toFixed(1)+' mi away');
+    if(pt.mile!=null) where.push('trail mile '+Math.round(pt.mile));
+    else if(this.offTrail) where.push('about '+this.offTrail+' mi off the trail');
+    const coords=d.lat.toFixed(4)+', '+d.lng.toFixed(4);
     el.innerHTML=sw
       +'<div class="ok-dhead">'
-        +'<div class="ok-dplace">'+esc(d.place)+(d.busy?' <span class="ok-dc-sm">refreshing\u2026</span>':'')+'</div>'
-        +'<div class="ok-dsub">The high and low across the whole day, with rain, wind and sky '
-          +'averaged over the daylight hours ('+((WX_DAY_FROM%12)||12)+'am to '+((WX_DAY_TO%12)||12)+'pm). '
-          +'Nothing here follows the ride plan or its stops.</div>'
+        +'<div class="ok-k">The forecast is read here</div>'
+        +'<div class="ok-dplace">'+esc(title)+(d.busy?' <span class="ok-dc-sm">refreshing\u2026</span>':'')+'</div>'
+        +'<div class="ok-dwhere">'+esc(where.join(' \u00b7 '))+'</div>'
+        +'<div class="ok-dwhere ok-dc-sm">'+esc(coords)+(pl.grid?' \u00b7 NWS grid '+esc(pl.grid):'')
+          +' <button type="button" class="ok-ref" data-wxmap>Show me on the map</button></div>'
+        +'<div class="ok-dsub">'+esc(pt.why||'')+' The high and low are across the whole day; rain, '
+          +'wind and sky are averaged over the daylight hours ('+((WX_DAY_FROM%12)||12)+'am to '
+          +((WX_DAY_TO%12)||12)+'pm). Nothing here follows the ride plan or its stops.</div>'
         +'<div class="ok-dpick"><span class="ok-k">Show</span>'+pick+'<span class="ok-dpick-u">days</span></div>'
       +'</div>'
       +'<div class="ok-dlist">'+(cards||'<div class="ok-blank"><p>The forecast has no full days left in it.</p></div>')+'</div>'
       +'<div class="ok-foot">api.weather.gov, read at '+esc(read)+'. '
         +'The forecast runs about a week out; past that nobody has one. '
-        +'Move your location, or long-press a spot on the map, to read somewhere else.'
+        +'It covers one place — the trail is 582 miles long, so Buffalo and Manhattan are '
+        +'different weather. Move your location to read somewhere else.'
         +' <button type="button" class="ok-ref" data-wxrefresh>Refresh</button> '
         +'<a href="'+esc(nwsLink(d.lat,d.lng))+'" target="_blank" rel="noopener">weather.gov \u2197</a></div>';
   }
@@ -11935,10 +12000,17 @@ class TrailApp {
     loadNote.hidden=true; root.appendChild(loadNote);
 
     const foot=EL('div','ok-foot');
-    const gotNote=data.got<data.of ? ' · '+data.got+' of '+data.of+' points answered' : '';
+    const gotNote=data.got<data.of ? ' · '+data.got+' of '+data.of+' answered' : '';
+    /* Where, not just when. This screen reads a different point for every hour — the one
+       under the trail mile the plan puts you at — so naming the stretch and the spacing
+       is the only honest way to say where its numbers come from. */
+    const endT=this.nearestTown(META.endMile);
     foot.textContent='api.weather.gov, read at '
       +new Date(data.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})
-      +' · '+META.avgSpeed+' mph along the ride plan'+gotNote
+      +'. Each hour is read at the trail mile under it, from points every '+WX_SAMPLE_MI
+      +' miles along the route — '+META.startTown+' (TM '+Math.round(META.startMile)+') to '
+      +(endT?this.shortTown(endT.t.n):'the end')+' (TM '+Math.round(META.endMile)+')'+gotNote
+      +' · '+META.avgSpeed+' mph along the ride plan'
       +'. Night is shaded; grey wind is time off the bike, when a head or a tail means nothing.';
     root.appendChild(foot);
 
